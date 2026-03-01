@@ -349,8 +349,11 @@ app.delete('/api/data/:characterId', async (req, res) => {
         await memory.wipeIndex(id);
 
         // Reset core emotional stats, wallet, AND diary lock state
+        const char = db.getCharacter(id);
+        const resetAffinity = char?.initial_affinity ?? 50;
+
         db.updateCharacter(id, {
-            affinity: 50,
+            affinity: resetAffinity,
             pressure_level: 0,
             is_blocked: 0,
             is_diary_unlocked: 0,

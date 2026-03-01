@@ -30,6 +30,7 @@ function initDb() {
             interval_min INTEGER DEFAULT 10,
             interval_max INTEGER DEFAULT 120,
             affinity INTEGER DEFAULT 50,
+            initial_affinity INTEGER DEFAULT 50,
             status TEXT DEFAULT 'active',
             pressure_level INTEGER DEFAULT 0,
             last_user_msg_time INTEGER DEFAULT 0,
@@ -202,6 +203,12 @@ function initDb() {
         db.prepare('ALTER TABLE user_profile ADD COLUMN banner TEXT').run();
     } catch (e) { }
 
+    // Add initial_affinity for existing DBs (migration for the chat wipe bug)
+    try {
+        db.prepare('ALTER TABLE characters ADD COLUMN initial_affinity INTEGER').run();
+        db.prepare('UPDATE characters SET initial_affinity = affinity WHERE initial_affinity IS NULL').run();
+    } catch (e) { }
+
     // Add max_tokens for existing DBs
     try {
         db.prepare('ALTER TABLE characters ADD COLUMN max_tokens INTEGER DEFAULT 800').run();
@@ -326,7 +333,7 @@ function getCharacter(id) {
 const characterColumns = [
     'id', 'name', 'avatar', 'persona', 'world_info', 'api_endpoint',
     'api_key', 'model_name', 'memory_api_endpoint', 'memory_api_key',
-    'memory_model_name', 'interval_min', 'interval_max', 'affinity',
+    'memory_model_name', 'interval_min', 'interval_max', 'affinity', 'initial_affinity',
     'status', 'pressure_level', 'last_user_msg_time', 'is_blocked', 'system_prompt', 'max_tokens',
     'sys_proactive', 'sys_timer', 'sys_pressure', 'sys_jealousy', 'is_diary_unlocked', 'diary_password', 'wallet'
 ];
@@ -352,6 +359,14 @@ function updateCharacter(id, data) {
             fields.push('diary_password');
             values.push(pw);
         }
+
+        // Snapshot initial affinity on creation
+        if (!fields.includes('initial_affinity')) {
+            const startAffinity = fields.includes('affinity') ? data.affinity : 50;
+            fields.push('initial_affinity');
+            values.push(startAffinity);
+        }
+
         const placeholders = fields.map(() => '?').join(', ');
         db.prepare(`INSERT INTO characters (id, ${fields.join(', ')}) VALUES (?, ${placeholders})`)
             .run(id, ...values);
