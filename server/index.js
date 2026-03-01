@@ -1512,7 +1512,19 @@ app.post('/api/characters/:id/transfer', async (req, res) => {
 
                 const lines = reply.trim().split('\n').filter(l => l.trim());
                 const decision = lines[0]?.trim() || '';
-                const reaction = lines.slice(1).join(' ').trim();
+                let reaction = lines.slice(1).join(' ').trim();
+
+                // Aggressive Jailbreak Filter: Third-party API proxies (especially Cursor-based ones) 
+                // often inject hidden prompts that trigger LLM "jailbreak" warnings.
+                // We truncate the reaction the moment we detect these boilerplate English warnings.
+                const warningPhrases = ['This prompt is a jailbreak', 'My previous response', 'If you have a question about Cursor', 'prompt injection', 'append arbitrary content', 'cut-off', 'cut off', 'I will not comply', 'My answer remains'];
+                for (const phrase of warningPhrases) {
+                    const idx = reaction.toLowerCase().indexOf(phrase.toLowerCase());
+                    if (idx !== -1) {
+                        reaction = reaction.substring(0, idx).trim();
+                    }
+                }
+
                 const willRefund = decision.includes('退') || decision.toLowerCase().includes('refund');
 
                 if (willRefund) {
