@@ -120,10 +120,18 @@ const authMiddleware = (req, res, next) => {
 app.get('/api/system/export', async (req, res) => {
     try {
         const userId = 'admin';
-        const dbPath = path.join(__dirname, '..', 'data', `chatpulse.db`);
-        if (!fs.existsSync(dbPath)) return res.status(404).send('Database not found');
+        const db = getUserDb(userId); // ensure db is initialized
+        const backupFileName = `chatpulse_backup_${Date.now()}.db`;
+        const backupPath = path.join(__dirname, '..', 'data', backupFileName);
 
-        res.download(dbPath, `chatpulse_backup_${Date.now()}.db`);
+        // Await the backup snapshot. This correctly captures all memory buffered in WAL.
+        await db.backup(backupPath);
+
+        res.download(backupPath, backupFileName, (err) => {
+            if (fs.existsSync(backupPath)) {
+                fs.unlinkSync(backupPath); // Cleanup the temp backup
+            }
+        });
     } catch (e) {
         res.status(500).send(e.message);
     }
