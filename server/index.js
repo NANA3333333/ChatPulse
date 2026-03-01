@@ -120,11 +120,10 @@ const authMiddleware = (req, res, next) => {
 app.get('/api/system/export', async (req, res) => {
     try {
         const userId = 'admin';
-        getUserDb(userId); // ensure db is initialized
-        const dbPath = path.join(__dirname, '..', 'data', `chatpulse_user_${userId}.db`);
+        const dbPath = path.join(__dirname, '..', 'data', `chatpulse.db`);
         if (!fs.existsSync(dbPath)) return res.status(404).send('Database not found');
 
-        res.download(dbPath, `chatpulse_backup_${userId}_${Date.now()}.db`);
+        res.download(dbPath, `chatpulse_backup_${Date.now()}.db`);
     } catch (e) {
         res.status(500).send(e.message);
     }

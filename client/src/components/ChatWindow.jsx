@@ -14,7 +14,7 @@ function parseHideCommand(text) {
     const hideSingleMatch = text.match(/^\/hide\s+(\d+)\s*$/i);
     if (hideSingleMatch) return { cmd: 'hide', start: 0, end: parseInt(hideSingleMatch[1]) };
 
-    const unhideMatch = text.match(/^\/unhide\s*$/i);
+    const unhideMatch = text.match(/^\/unhide\b/i);
     if (unhideMatch) return { cmd: 'unhide' };
 
     return null;
