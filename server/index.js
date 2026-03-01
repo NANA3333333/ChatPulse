@@ -1220,7 +1220,7 @@ function triggerGroupAIChain(groupId, wsClients, mentionedIds = [], isAtAll = fa
                         secretContextStr = `\n\n====== [CRITICAL: ABSOLUTELY SECRET PRIVATE CONTEXT] ======`;
                         if (hiddenState) secretContextStr += `\n[YOUR HIDDEN MOOD/SECRET THOUGHT]: ${hiddenState}`;
                         if (pmLines) secretContextStr += `\n[RECENT PRIVATE CHAT INBOX (For Context ONLY)]:\n${pmLines}`;
-                        secretContextStr += `\n\n[GOD COMMAND]: The above is your ABSOLUTELY PRIVATE memory and hidden mood. You MUST use this to subtly color your tone, act jealous, or make passing hints. HOWEVER, YOU ARE STRICTLY FORBIDDEN from directly quoting or fully exposing these private chats in the public group. Play it cool and use subtext.\n==========================================================`;
+                        secretContextStr += `\n\n[CRITICAL PRIVATE CONTEXT]: The above is your private memory and hidden mood with the User. You can choose whether to keep this a secret, casually mention it, or directly reveal it in the public group, depending entirely on your persona and the conversation flow.\n==========================================================`;
                     }
 
                     const systemPrompt = `你是${char.name}，正在一个叫"${group.name}"的【群聊】中聊天。
