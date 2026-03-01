@@ -26,7 +26,7 @@ function RedPacketModal({ group, apiUrl, onClose, userWallet }) {
                 : { type, count: cnt, total_amount: totalCost, note: note.trim() };
 
             await fetch(`${apiUrl}/groups/${group.id}/redpackets`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
             onClose();
@@ -94,7 +94,7 @@ function RedPacketCard({ packetId, apiUrl, groupId, isUser, resolveSender }) {
     const [showDetail, setShowDetail] = useState(false);
 
     const loadPkt = useCallback(async () => {
-        try { const r = await fetch(`${apiUrl}/groups/${groupId}/redpackets/${packetId}`); setPkt(await r.json()); } catch (e) { console.error(e); }
+        try { const r = await fetch(`${apiUrl}/groups/${groupId}/redpackets/${packetId}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } }); setPkt(await r.json()); } catch (e) { console.error(e); }
     }, [apiUrl, groupId, packetId]);
     useEffect(() => { if (packetId) loadPkt(); }, [packetId, loadPkt]);
 
@@ -102,7 +102,7 @@ function RedPacketCard({ packetId, apiUrl, groupId, isUser, resolveSender }) {
         try {
             await fetch(`${apiUrl}/groups/${groupId}/redpackets/${packetId}/claim`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ claimer_id: 'user' })
             });
             loadPkt();
@@ -166,17 +166,17 @@ function GroupManageDrawer({ group, apiUrl, resolveSender, onClose, lang }) {
 
     useEffect(() => {
         if (!group) return;
-        fetch(`${apiUrl}/groups/${group.id}/no-chain`).then(r => r.json()).then(d => setNoChain(!!d.no_chain)).catch(() => { });
+        fetch(`${apiUrl}/groups/${group.id}/no-chain`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } }).then(r => r.json()).then(d => setNoChain(!!d.no_chain)).catch(() => { });
     }, [group, apiUrl]);
 
 
     const toggleNoChain = async () => {
         const v = !noChain; setNoChain(v);
-        fetch(`${apiUrl}/groups/${group.id}/no-chain`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ no_chain: v }) });
+        fetch(`${apiUrl}/groups/${group.id}/no-chain`, { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ no_chain: v }) });
     };
-    const clearMessages = () => { if (window.confirm(lang === 'en' ? 'Clear all messages?' : '清空所有消息？')) fetch(`${apiUrl}/groups/${group.id}/messages`, { method: 'DELETE' }).then(() => window.location.reload()); };
-    const dissolveGroup = () => { if (window.confirm(lang === 'en' ? 'Dissolve this group?' : '解散此群？')) fetch(`${apiUrl}/groups/${group.id}`, { method: 'DELETE' }).then(() => window.location.reload()); };
-    const kickMember = (mid) => { if (window.confirm(lang === 'en' ? 'Remove this member?' : '移除此成员？')) fetch(`${apiUrl}/groups/${group.id}/members/${mid}`, { method: 'DELETE' }).then(() => window.location.reload()); };
+    const clearMessages = () => { if (window.confirm(lang === 'en' ? 'Clear all messages?' : '清空所有消息？')) fetch(`${apiUrl}/groups/${group.id}/messages`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } }).then(() => window.location.reload()); };
+    const dissolveGroup = () => { if (window.confirm(lang === 'en' ? 'Dissolve this group?' : '解散此群？')) fetch(`${apiUrl}/groups/${group.id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } }).then(() => window.location.reload()); };
+    const kickMember = (mid) => { if (window.confirm(lang === 'en' ? 'Remove this member?' : '移除此成员？')) fetch(`${apiUrl}/groups/${group.id}/members/${mid}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } }).then(() => window.location.reload()); };
 
 
     return (
@@ -263,7 +263,7 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, newGroupMess
     useEffect(() => {
         if (!group?.id) return;
         setMessages([]); setShowManageDrawer(false);
-        fetch(`${apiUrl}/groups/${group.id}/messages`).then(r => r.json()).then(setMessages).catch(console.error);
+        fetch(`${apiUrl}/groups/${group.id}/messages`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } }).then(r => r.json()).then(setMessages).catch(console.error);
     }, [group?.id, apiUrl]);
 
     useEffect(() => {
@@ -281,7 +281,7 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, newGroupMess
     const handleSend = async () => {
         if (!input.trim() || !group) return;
         const text = input.trim(); setInput('');
-        try { await fetch(`${apiUrl}/groups/${group.id}/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: text }) }); } catch (e) { console.error(e); }
+        try { await fetch(`${apiUrl}/groups/${group.id}/messages`, { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: text }) }); } catch (e) { console.error(e); }
     };
 
     const handleFileChange = (e) => {
@@ -321,7 +321,7 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, newGroupMess
         const cursor = e.target.selectionStart;
         const textBeforeCursor = val.substring(0, cursor);
         const lastAtIndex = textBeforeCursor.lastIndexOf('@');
-        if (lastAtIndex !== -1 && (lastAtIndex === 0 || /[\\s\\n]/.test(textBeforeCursor[lastAtIndex - 1]))) {
+        if (lastAtIndex !== -1 && (lastAtIndex === 0 || /[^\\w]/.test(textBeforeCursor[lastAtIndex - 1]))) {
             const query = textBeforeCursor.substring(lastAtIndex + 1);
             if (!/\\s/.test(query)) {
                 setMentionFilter(query);
@@ -507,10 +507,10 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, newGroupMess
                         <button
                             onClick={async () => {
                                 // Instantly interrupt AIs
-                                await fetch(`${apiUrl}/groups/${group.id}/ai-pause`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused: true }) });
+                                await fetch(`${apiUrl}/groups/${group.id}/ai-pause`, { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ paused: true }) });
                                 // Automatically unpause after 10 seconds or when user sends a message
                                 setTimeout(() => {
-                                    fetch(`${apiUrl}/groups/${group.id}/ai-pause`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused: false }) });
+                                    fetch(`${apiUrl}/groups/${group.id}/ai-pause`, { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ paused: false }) });
                                 }, 10000);
                             }}
                             title={lang === 'en' ? 'Interrupt AIs and stop them from chaining texts' : '打断 AI 的连续发言'}

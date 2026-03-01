@@ -9,12 +9,9 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const { WebSocketServer } = require('ws');
-const { getUserDb } = require('./db');
-const authDb = require('./authDb');
-const jwt = require('jsonwebtoken');
-const JWT_SECRET = process.env.JWT_SECRET || 'chatpulse_super_secret_key';
-const { getEngine } = require('./engine');
-const { getMemory } = require('./memory');
+const db = require('./db');
+const engine = require('./engine');
+const memory = require('./memory');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -45,50 +42,21 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 // Initialize the Database schemas
-
+db.initDb();
 
 // Setup Server and WebSockets
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-const userWsClients = new Map();
-
-function getWsClients(userId) {
-    if (!userWsClients.has(userId)) {
-        userWsClients.set(userId, new Set());
-    }
-    return userWsClients.get(userId);
-}
+const wsClients = new Set();
 
 wss.on('connection', (ws) => {
     console.log('[WS] Frontend client connected.');
-
-    ws.on('message', (message) => {
-        try {
-            const data = JSON.parse(message);
-            if (data.type === 'auth') {
-                const decoded = jwt.verify(data.token, JWT_SECRET);
-                ws.userId = decoded.id;
-                const clients = getWsClients(decoded.id);
-                clients.add(ws);
-
-                // Spin up user-specific engine on first connect
-                const engine = getEngine(decoded.id);
-                engine.setGroupChainCallback(triggerGroupAIChain);
-                engine.startEngine(clients);
-                engine.startGroupProactiveTimers(clients);
-                console.log(`[WS] Authenticated & Engine Started for user: ${decoded.username}`);
-            }
-        } catch (e) {
-            console.error('[WS] Auth or Engine Start Error:', e.message);
-        }
-    });
+    wsClients.add(ws);
 
     ws.on('close', () => {
         console.log('[WS] Frontend client disconnected.');
-        if (ws.userId) {
-            getWsClients(ws.userId).delete(ws);
-        }
+        wsClients.delete(ws);
     });
 });
 
@@ -108,193 +76,11 @@ app.post('/api/upload', upload.any(), (req, res) => {
     }
 });
 
-// ─── AUTHENTICATION MIDDLEWARE ──────────────────────────────────────────
-authDb.initAuthDb();
-
-const authMiddleware = (req, res, next) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'Unauthorized' });
-    }
-    const token = authHeader.split(' ')[1];
-    try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        req.user = decoded;
-        req.db = getUserDb(req.user.id);
-        req.engine = getEngine(req.user.id);
-        req.memory = getMemory(req.user.id);
-        next();
-    } catch (e) {
-        return res.status(401).json({ error: 'Invalid token' });
-    }
-};
-
-// ─── AUTH ROUTES ────────────────────────────────────────────────────────
-app.post('/api/auth/register', (req, res) => {
-    try {
-        const { username, password, inviteCode } = req.body;
-        if (!username || !password) return res.status(400).json({ error: 'Missing username or password' });
-        const result = authDb.createUser(username, password, inviteCode);
-        if (!result.success) return res.status(400).json({ error: result.error });
-        const token = jwt.sign({ id: result.user.id, username: result.user.username }, JWT_SECRET, { expiresIn: '30d' });
-        getUserDb(result.user.id);
-        res.json({ success: true, token, user: result.user });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/auth/login', (req, res) => {
-    try {
-        const { username, password } = req.body;
-        const result = authDb.verifyUser(username, password);
-        if (!result.success) return res.status(401).json({ error: result.error });
-        const token = jwt.sign({ id: result.user.id, username: result.user.username }, JWT_SECRET, { expiresIn: '30d' });
-        getUserDb(result.user.id);
-        res.json({ success: true, token, user: result.user });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/auth/me', authMiddleware, (req, res) => {
-    res.json({ success: true, user: req.user });
-});
-
-// ─── SYSTEM ROUTES ────────────────────────────────────────────────────────
-app.get('/api/system/export', async (req, res) => {
-    try {
-        const token = req.query.token;
-        if (!token) return res.status(401).send('Unauthorized');
-        const decoded = jwt.verify(token, JWT_SECRET);
-        const userId = decoded.id;
-
-        getUserDb(userId); // ensure db is initialized
-        const dbPath = path.join(__dirname, '..', 'data', `chatpulse_user_${userId}.db`);
-        if (!fs.existsSync(dbPath)) return res.status(404).send('Database not found');
-
-        res.download(dbPath, `chatpulse_backup_${userId}_${Date.now()}.db`);
-    } catch (e) {
-        res.status(500).send(e.message);
-    }
-});
-
-app.delete('/api/system/wipe', authMiddleware, async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const memory = getMemory(userId);
-
-        const characters = req.db.getCharacters();
-        for (const c of characters) {
-            await memory.wipeIndex(c.id);
-        }
-
-        req.db.close();
-        const dbPath = req.db.getDbPath();
-        if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
-
-        const { userDbCache } = require('./db');
-        userDbCache.delete(userId);
-
-        res.json({ success: true });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/system/import', authMiddleware, upload.single('db_file'), async (req, res) => {
-    try {
-        if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-
-        // Validate SQLite Header
-        const buffer = fs.readFileSync(req.file.path);
-        if (buffer.length < 100 || buffer.toString('utf8', 0, 15) !== 'SQLite format 3') {
-            fs.unlinkSync(req.file.path);
-            return res.status(400).json({ error: 'Uploaded file is not a valid SQLite Database. Did you upload an HTML file by mistake?' });
-        }
-
-        const userId = req.user.id;
-        const memory = getMemory(userId);
-
-        const characters = req.db.getCharacters();
-        for (const c of characters) {
-            await memory.wipeIndex(c.id);
-        }
-
-        req.db.close();
-        const dbPath = req.db.getDbPath();
-        fs.copyFileSync(req.file.path, dbPath);
-        fs.unlinkSync(req.file.path);
-
-        const { userDbCache } = require('./db');
-        userDbCache.delete(userId);
-
-        res.json({ success: true });
-    } catch (e) {
-        console.error(e);
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// ─── ADMIN ROUTES ───────────────────────────────────────────────────────
-const adminMiddleware = (req, res, next) => {
-    if (!req.user || req.user.username !== 'Nana') {
-        return res.status(403).json({ error: 'Forbidden. Admin level restricted.' });
-    }
-    next();
-};
-
-app.get('/api/admin/invites', authMiddleware, adminMiddleware, (req, res) => {
-    try {
-        const code = authDb.generateInviteCode();
-        res.json({ success: true, code });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/admin/users', authMiddleware, adminMiddleware, (req, res) => {
-    try {
-        const users = authDb.getAllUsers();
-        res.json({ success: true, users });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
 // REST API ROUTES
 // ─────────────────────────────────────────────────────────────
 
-// 0.5 Get User Profile
-app.get('/api/user', authMiddleware, (req, res) => {
-    const db = req.db;
-    try {
-        const profile = typeof db.getUserProfile === 'function' ? db.getUserProfile() : null;
-        res.json({ ...(profile || { name: req.user.username }), username: req.user.username });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// 0.6 Save User Profile
-app.post('/api/user', authMiddleware, (req, res) => {
-    const db = req.db;
-    try {
-        if (typeof db.saveUserProfile === 'function') {
-            db.saveUserProfile(req.body);
-        }
-        res.json({ success: true });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
 // 1. Get all characters (Contacts list)
-app.get('/api/characters', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/characters', (req, res) => {
     try {
         const characters = db.getCharacters();
         // Attach unread_count so the frontend can initialise badges correctly on load/refresh
@@ -309,11 +95,7 @@ app.get('/api/characters', authMiddleware, (req, res) => {
 });
 
 // 2. Add or Update Character
-app.post('/api/characters', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/characters', (req, res) => {
     try {
         const data = req.body;
         if (!data.id || !data.name) return res.status(400).json({ error: 'Missing ID or Name' });
@@ -355,11 +137,7 @@ app.get('/api/models', async (req, res) => {
 });
 
 // 3. Get messages for a character (supports ?limit=N and ?before=msgId for pagination)
-app.get('/api/messages/:characterId', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/messages/:characterId', (req, res) => {
     try {
         const charId = req.params.characterId;
         const limit = parseInt(req.query.limit) || 100;
@@ -380,11 +158,7 @@ app.get('/api/messages/:characterId', authMiddleware, (req, res) => {
 });
 
 // 4. Send a message to a character (User initiates)
-app.post('/api/messages', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/messages', (req, res) => {
     try {
         const { characterId, content } = req.body;
         if (!characterId || !content) return res.status(400).json({ error: 'Missing characterId or content' });
@@ -427,11 +201,7 @@ app.post('/api/messages', authMiddleware, (req, res) => {
 });
 
 // 4.2 Retry a failed AI response (User initiates on an error bubble)
-app.post('/api/messages/:characterId/retry', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/messages/:characterId/retry', (req, res) => {
     try {
         const { characterId } = req.params;
         const { failedMessageId } = req.body;
@@ -451,11 +221,7 @@ app.post('/api/messages/:characterId/retry', authMiddleware, (req, res) => {
 });
 
 // 4.5 Send a transfer to a character (Unblock mechanic)
-app.post('/api/transfer', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/transfer', (req, res) => {
     try {
         const { characterId, amount, note } = req.body;
         if (!characterId) return res.status(400).json({ error: 'Missing characterId' });
@@ -506,11 +272,7 @@ app.post('/api/transfer', authMiddleware, (req, res) => {
 });
 
 // 4.55 Generate Character via LLM
-app.post('/api/characters/generate', authMiddleware, async (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/characters/generate', async (req, res) => {
     try {
         const { query, api_endpoint, api_key, model_name } = req.body;
         if (!query || !api_endpoint || !api_key || !model_name) {
@@ -581,11 +343,7 @@ The JSON MUST have the EXACT following keys:
 });
 
 // 4.6 Clear messages for a character (Legacy Soft Clear)
-app.delete('/api/messages/:characterId', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.delete('/api/messages/:characterId', (req, res) => {
     try {
         db.clearMessages(req.params.characterId);
         res.json({ success: true });
@@ -595,11 +353,7 @@ app.delete('/api/messages/:characterId', authMiddleware, (req, res) => {
 });
 
 // 4.7 DEEP WIPE: Clear all messages, sql memories, moments, diaries, and vectors
-app.delete('/api/data/:characterId', authMiddleware, async (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.delete('/api/data/:characterId', async (req, res) => {
     try {
         const id = req.params.characterId;
 
@@ -644,11 +398,7 @@ app.delete('/api/data/:characterId', authMiddleware, async (req, res) => {
 });
 
 // 4.8 EXPORT: Export character data (settings, messages, memories, moments)
-app.get('/api/data/:characterId/export', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/data/:characterId/export', (req, res) => {
     try {
         const data = db.exportCharacterData(req.params.characterId);
         if (!data) return res.status(404).json({ error: 'Character not found' });
@@ -663,11 +413,7 @@ app.get('/api/data/:characterId/export', authMiddleware, (req, res) => {
 });
 
 // 5. Get Memories for Character
-app.get('/api/memories/:characterId', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/memories/:characterId', (req, res) => {
     try {
         const mems = db.getMemories(req.params.characterId);
         res.json(mems);
@@ -677,11 +423,7 @@ app.get('/api/memories/:characterId', authMiddleware, (req, res) => {
 });
 
 // 5.5 Trigger Manual Memory Extraction
-app.post('/api/memories/:characterId/extract', authMiddleware, async (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/memories/:characterId/extract', async (req, res) => {
     try {
         const charObj = db.getCharacter(req.params.characterId);
         if (!charObj) return res.status(404).json({ error: 'Character not found' });
@@ -709,11 +451,7 @@ app.post('/api/memories/:characterId/extract', authMiddleware, async (req, res) 
 });
 
 // 6. Delete a Memory manually
-app.delete('/api/memories/:id', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.delete('/api/memories/:id', (req, res) => {
     try {
         db.deleteMemory(req.params.id);
         res.json({ success: true });
@@ -723,11 +461,7 @@ app.delete('/api/memories/:id', authMiddleware, (req, res) => {
 });
 
 // 7. Get All Moments
-app.get('/api/moments', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/moments', (req, res) => {
     try {
         const allMoments = db.getMoments();
         const characters = db.getCharacters();
@@ -748,11 +482,7 @@ app.get('/api/moments', authMiddleware, (req, res) => {
 });
 
 // User posts a Moment
-app.post('/api/moments', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/moments', (req, res) => {
     try {
         const { content, image_url } = req.body;
         if (!content) return res.status(400).json({ error: 'content required' });
@@ -764,11 +494,7 @@ app.post('/api/moments', authMiddleware, (req, res) => {
 });
 
 // 7.5 Delete a Moment (user only)
-app.delete('/api/moments/:id', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.delete('/api/moments/:id', (req, res) => {
     try {
         db.deleteMoment(req.params.id);
         res.json({ success: true });
@@ -778,11 +504,7 @@ app.delete('/api/moments/:id', authMiddleware, (req, res) => {
 });
 
 // 8. Get Moments for a specific character
-app.get('/api/moments/:characterId', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/moments/:characterId', (req, res) => {
     try {
         const char = db.getCharacter(req.params.characterId);
         if (char && char.is_blocked) return res.json([]);
@@ -794,11 +516,7 @@ app.get('/api/moments/:characterId', authMiddleware, (req, res) => {
 });
 
 // 8.5 Toggle Like on a Moment
-app.post('/api/moments/:id/like', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/moments/:id/like', (req, res) => {
     try {
         const { liker_id } = req.body;  // 'user' or character id
         const liked = db.toggleLike(req.params.id, liker_id || 'user');
@@ -810,11 +528,7 @@ app.post('/api/moments/:id/like', authMiddleware, (req, res) => {
 });
 
 // 8.6 Add a Comment on a Moment
-app.post('/api/moments/:id/comment', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/moments/:id/comment', (req, res) => {
     try {
         const { author_id, content } = req.body;
         if (!content) return res.status(400).json({ error: 'content required' });
@@ -826,11 +540,7 @@ app.post('/api/moments/:id/comment', authMiddleware, (req, res) => {
 });
 
 // 9. Get Diaries for a Character
-app.get('/api/diaries/:characterId', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/diaries/:characterId', (req, res) => {
     try {
         const char = db.getCharacter(req.params.characterId);
         const diaries = db.getDiaries(req.params.characterId);
@@ -844,11 +554,7 @@ app.get('/api/diaries/:characterId', authMiddleware, (req, res) => {
 });
 
 // 10. Unlock Diaries for a Character (Password-lock mechanic)
-app.post('/api/diaries/:characterId/unlock', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/diaries/:characterId/unlock', (req, res) => {
     try {
         const { password } = req.body;
         if (!password) return res.status(400).json({ success: false, reason: 'No password provided.' });
@@ -865,11 +571,7 @@ app.post('/api/diaries/:characterId/unlock', authMiddleware, (req, res) => {
 
 // 10.5 Hide a range of messages for a character (context hide mechanic)
 // Body: { startIdx: 0, endIdx: 10 } — 0-based indices from oldest message
-app.post('/api/messages/:characterId/hide', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/messages/:characterId/hide', (req, res) => {
     try {
         const { startIdx, endIdx } = req.body;
         if (startIdx === undefined || endIdx === undefined) {
@@ -883,11 +585,7 @@ app.post('/api/messages/:characterId/hide', authMiddleware, (req, res) => {
 });
 
 // 10.6 Unhide all messages for a character
-app.post('/api/messages/:characterId/unhide', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/messages/:characterId/unhide', (req, res) => {
     try {
         const count = db.unhideMessages(req.params.characterId);
         res.json({ success: true, unhidden: count });
@@ -897,11 +595,7 @@ app.post('/api/messages/:characterId/unhide', authMiddleware, (req, res) => {
 });
 
 // 11. User Profile
-app.get('/api/user', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/user', (req, res) => {
     try {
         const profile = db.getUserProfile();
         res.json(profile);
@@ -910,11 +604,7 @@ app.get('/api/user', authMiddleware, (req, res) => {
     }
 });
 
-app.put('/api/user', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.put('/api/user', (req, res) => {
     try {
         db.updateUserProfile(req.body);
         // If group proactive settings changed, restart all group timers immediately
@@ -929,11 +619,7 @@ app.put('/api/user', authMiddleware, (req, res) => {
 });
 
 // 11.5 Theme Generation Helper
-app.get('/api/theme-guide', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/theme-guide', (req, res) => {
     try {
         const guideText = `ChatPulse Theme Generation Guide
 
@@ -970,11 +656,7 @@ Only output the raw valid JSON object, without markdown formatting or surroundin
 });
 
 // 11.6 AI Theme Generation
-app.post('/api/theme/generate', authMiddleware, async (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/theme/generate', async (req, res) => {
     try {
         const { query, api_endpoint, api_key, model_name } = req.body;
         if (!query || !api_endpoint || !api_key || !model_name) {
@@ -1036,11 +718,7 @@ The JSON MUST have the EXACT following keys with valid 6-hex-digit HTML color co
 });
 
 // 12. Delete Character
-app.delete('/api/characters/:id', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.delete('/api/characters/:id', (req, res) => {
     try {
         engine.stopTimer(req.params.id);
         db.deleteCharacter(req.params.id);
@@ -1051,11 +729,7 @@ app.delete('/api/characters/:id', authMiddleware, (req, res) => {
 });
 
 // 13. Friendships
-app.get('/api/characters/:id/friends', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/characters/:id/friends', (req, res) => {
     try {
         const friends = db.getFriends(req.params.id);
         res.json(friends);
@@ -1064,11 +738,7 @@ app.get('/api/characters/:id/friends', authMiddleware, (req, res) => {
     }
 });
 
-app.post('/api/characters/:id/friends', authMiddleware, async (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/characters/:id/friends', async (req, res) => {
     try {
         const { target_id } = req.body;
         if (!target_id) return res.status(400).json({ error: 'target_id is required' });
@@ -1166,11 +836,7 @@ app.post('/api/characters/:id/friends', authMiddleware, async (req, res) => {
 });
 
 // 13.5 Get character relationships (inter-char affinity)
-app.get('/api/characters/:id/relationships', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/characters/:id/relationships', (req, res) => {
     try {
         const relationships = db.getCharRelationships(req.params.id);
         // Enrich with character names and avatars — skip if target no longer exists
@@ -1191,11 +857,7 @@ app.get('/api/characters/:id/relationships', authMiddleware, (req, res) => {
 });
 
 // 13.6 Regenerate impression for a specific relationship pair
-app.post('/api/characters/:id/relationships/regenerate', authMiddleware, async (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/characters/:id/relationships/regenerate', async (req, res) => {
     try {
         const { target_id } = req.body;
         if (!target_id) return res.status(400).json({ error: 'target_id required' });
@@ -1294,11 +956,7 @@ app.post('/api/characters/:id/relationships/regenerate', authMiddleware, async (
 });
 
 // 14.1 List all groups
-app.get('/api/groups', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/groups', (req, res) => {
     try {
         res.json(db.getGroups());
     } catch (e) {
@@ -1307,11 +965,7 @@ app.get('/api/groups', authMiddleware, (req, res) => {
 });
 
 // 14.2 Create a group
-app.post('/api/groups', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/groups', (req, res) => {
     try {
         const { name, member_ids } = req.body;
         if (!name || !member_ids || member_ids.length === 0) {
@@ -1329,11 +983,7 @@ app.post('/api/groups', authMiddleware, (req, res) => {
 });
 
 // 14.3 Get group messages
-app.get('/api/groups/:id/messages', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/groups/:id/messages', (req, res) => {
     try {
         const limit = parseInt(req.query.limit) || 100;
         res.json(db.getGroupMessages(req.params.id, limit));
@@ -1343,11 +993,7 @@ app.get('/api/groups/:id/messages', authMiddleware, (req, res) => {
 });
 
 // 14.5 Hide/Unhide group messages (context hide mechanic)
-app.post('/api/groups/:id/messages/hide', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/groups/:id/messages/hide', (req, res) => {
     try {
         const { start, end } = req.body;
         const hidden = db.hideGroupMessagesByRange(req.params.id, start, end);
@@ -1357,11 +1003,7 @@ app.post('/api/groups/:id/messages/hide', authMiddleware, (req, res) => {
     }
 });
 
-app.post('/api/groups/:id/messages/unhide', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/groups/:id/messages/unhide', (req, res) => {
     try {
         const unhidden = db.unhideGroupMessages(req.params.id);
         res.json({ success: true, unhidden });
@@ -1371,11 +1013,7 @@ app.post('/api/groups/:id/messages/unhide', authMiddleware, (req, res) => {
 });
 
 // 14.6 Add member to group
-app.post('/api/groups/:id/members', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/groups/:id/members', (req, res) => {
     try {
         const { member_id } = req.body;
         if (!member_id) return res.status(400).json({ error: 'member_id is required' });
@@ -1387,11 +1025,7 @@ app.post('/api/groups/:id/members', authMiddleware, (req, res) => {
 });
 
 // 14.7 Kick member from group
-app.delete('/api/groups/:id/members/:memberId', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.delete('/api/groups/:id/members/:memberId', (req, res) => {
     try {
         db.removeGroupMember(req.params.id, req.params.memberId);
         res.json({ success: true, group: db.getGroup(req.params.id) });
@@ -1401,11 +1035,7 @@ app.delete('/api/groups/:id/members/:memberId', authMiddleware, (req, res) => {
 });
 
 // 14.8 Dissolve (delete) group
-app.delete('/api/groups/:id', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.delete('/api/groups/:id', (req, res) => {
     try {
         db.deleteGroup(req.params.id);
         res.json({ success: true });
@@ -1415,11 +1045,7 @@ app.delete('/api/groups/:id', authMiddleware, (req, res) => {
 });
 
 // 14.9 Clear group messages
-app.delete('/api/groups/:id/messages', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.delete('/api/groups/:id/messages', (req, res) => {
     try {
         db.clearGroupMessages(req.params.id);
         res.json({ success: true });
@@ -1431,17 +1057,12 @@ app.delete('/api/groups/:id/messages', authMiddleware, (req, res) => {
 // ─── Group Chat Debounce System ─────────────────────────────────────────
 // When user sends multiple messages quickly, we wait until they stop, then fire ONE AI reply chain.
 const groupDebounceTimers = {}; // { groupId: timeoutHandle }
-const groupReplyLock = {};
-const groupInterrupt = {};     // { groupId: true } — prevent overlapping chains
+const groupReplyLock = {};     // { groupId: true } — prevent overlapping chains
 const pausedGroups = new Set(); // groups where AI replies are paused by user
 const noChainGroups = new Set(); // groups where AI→AI secondary @-mention chains are blocked
 
 // 14.10 Set AI pause for a group
-app.post('/api/groups/:id/ai-pause', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/groups/:id/ai-pause', (req, res) => {
     const id = req.params.id;
     // Allow explicitly setting state from request body, otherwise fallback to toggle
     const wantsPause = req.body && req.body.paused !== undefined ? req.body.paused : !pausedGroups.has(id);
@@ -1461,20 +1082,12 @@ app.post('/api/groups/:id/ai-pause', authMiddleware, (req, res) => {
     }
 });
 
-app.get('/api/groups/:id/ai-pause', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/groups/:id/ai-pause', (req, res) => {
     res.json({ paused: pausedGroups.has(req.params.id) });
 });
 
 // 14.11 Toggle AI→AI secondary @-mention chain for a group
-app.post('/api/groups/:id/no-chain', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/groups/:id/no-chain', (req, res) => {
     const id = req.params.id;
     if (noChainGroups.has(id)) {
         noChainGroups.delete(id);
@@ -1485,19 +1098,11 @@ app.post('/api/groups/:id/no-chain', authMiddleware, (req, res) => {
     }
 });
 
-app.get('/api/groups/:id/no-chain', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/groups/:id/no-chain', (req, res) => {
     res.json({ noChain: noChainGroups.has(req.params.id) });
 });
 
-function triggerGroupAIChain(userId, groupId, wsClients, mentionedIds = [], isAtAll = false, isSecondaryChain = false) {
-    const db = getUserDb(userId);
-    const engine = getEngine(userId);
-    const memory = getMemory(userId);
-
+function triggerGroupAIChain(groupId, wsClients, mentionedIds = [], isAtAll = false, isSecondaryChain = false) {
     if (pausedGroups.has(groupId)) return; // AI replies paused by user
     if (groupReplyLock[groupId]) return; // already running
     groupReplyLock[groupId] = true;
@@ -1745,18 +1350,14 @@ Guidelines:
             if (uniqueSecondaryIds.size > 0) {
                 const mergedIds = Array.from(uniqueSecondaryIds);
                 // Wait slightly longer to ensure lock and typing UI are fully cleared
-                setTimeout(() => triggerGroupAIChain(userId, groupId, wsClients, mergedIds, false, true), 2500);
+                setTimeout(() => triggerGroupAIChain(groupId, wsClients, mergedIds, false, true), 2500);
             }
         }
     })();
 }
 
 // 14.4 Send message to group (user sends)
-app.post('/api/groups/:id/messages', authMiddleware, async (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/groups/:id/messages', async (req, res) => {
     try {
         const { content } = req.body;
         if (!content) return res.status(400).json({ error: 'content required' });
@@ -1792,7 +1393,7 @@ app.post('/api/groups/:id/messages', authMiddleware, async (req, res) => {
         const debounceDelay = (mentionedIds.length > 0 || isAtAll) ? 1500 : 5000;
         groupDebounceTimers[groupId] = setTimeout(() => {
             delete groupDebounceTimers[groupId];
-            triggerGroupAIChain(req.user.id, groupId, wsClients, mentionedIds, isAtAll);
+            triggerGroupAIChain(groupId, wsClients, mentionedIds, isAtAll);
         }, debounceDelay);
 
         res.json({ success: true, message: savedMsg });
@@ -1805,11 +1406,7 @@ app.post('/api/groups/:id/messages', authMiddleware, async (req, res) => {
 
 // ─── Private Transfer APIs ────────────────────────────────────────────────
 // 14.9 Get transfer info
-app.get('/api/transfers/:tid', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/transfers/:tid', (req, res) => {
     try {
         const t = db.getTransfer(parseInt(req.params.tid));
         if (!t) return res.status(404).json({ error: 'Transfer not found' });
@@ -1818,11 +1415,7 @@ app.get('/api/transfers/:tid', authMiddleware, (req, res) => {
 });
 
 // 14.10 Claim a private transfer  (recipient clicks "Claim")
-app.post('/api/transfers/:tid/claim', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/transfers/:tid/claim', (req, res) => {
     try {
         const { claimer_id = 'user' } = req.body;
         const result = db.claimTransfer(parseInt(req.params.tid), claimer_id);
@@ -1860,11 +1453,7 @@ app.post('/api/transfers/:tid/claim', authMiddleware, (req, res) => {
 });
 
 // 14.11 Refund a private transfer
-app.post('/api/transfers/:tid/refund', authMiddleware, async (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/transfers/:tid/refund', async (req, res) => {
     try {
         const { refunder_id = 'user' } = req.body;
         const tid = parseInt(req.params.tid);
@@ -1908,11 +1497,7 @@ app.post('/api/transfers/:tid/refund', authMiddleware, async (req, res) => {
 });
 
 // 14.12 User sends a transfer to a character
-app.post('/api/characters/:id/transfer', authMiddleware, async (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/characters/:id/transfer', async (req, res) => {
     try {
         const { amount, note = '' } = req.body;
         const charId = req.params.id;
@@ -2020,11 +1605,7 @@ app.post('/api/characters/:id/transfer', authMiddleware, async (req, res) => {
 
 // ─── Red Packet APIs ─────────────────────────────────────────────────────
 // 15.1 Get wallet balance
-app.get('/api/wallet/:id', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/wallet/:id', (req, res) => {
     try {
         res.json({ wallet: db.getWallet(req.params.id) });
     } catch (e) {
@@ -2033,11 +1614,7 @@ app.get('/api/wallet/:id', authMiddleware, (req, res) => {
 });
 
 // 15.2 Create a red packet (sent by user or char)
-app.post('/api/groups/:id/redpackets', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/groups/:id/redpackets', (req, res) => {
     try {
         const { sender_id = 'user', type, count, per_amount, total_amount, note } = req.body;
         if (!type || !count || (!per_amount && !total_amount)) {
@@ -2088,11 +1665,7 @@ app.post('/api/groups/:id/redpackets', authMiddleware, (req, res) => {
 });
 
 // 15.3 Get red packet details + claims
-app.get('/api/groups/:id/redpackets/:pid', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.get('/api/groups/:id/redpackets/:pid', (req, res) => {
     try {
         const pkt = db.getRedPacket(parseInt(req.params.pid));
         if (!pkt) return res.status(404).json({ error: 'Red packet not found' });
@@ -2113,11 +1686,7 @@ app.get('/api/groups/:id/redpackets/:pid', authMiddleware, (req, res) => {
 });
 
 // 15.4 Claim a red packet
-app.post('/api/groups/:id/redpackets/:pid/claim', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
+app.post('/api/groups/:id/redpackets/:pid/claim', (req, res) => {
     try {
         const { claimer_id = 'user' } = req.body;
         const result = db.claimRedPacket(parseInt(req.params.pid), claimer_id);
@@ -2215,7 +1784,10 @@ server.listen(PORT, () => {
     console.log(`[Express] ChatPulse Server running on http://localhost:${PORT}`);
 });
 
-// Private background engines are now dynamically started via WS Auth
+// Start Background Engine
+engine.setGroupChainCallback(triggerGroupAIChain);
+engine.startEngine(wsClients);
+engine.startGroupProactiveTimers(wsClients);
 module.exports = {
     triggerGroupAIChain
 };

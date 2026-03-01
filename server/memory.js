@@ -2,7 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const { LocalIndex } = require('vectra');
 const { callLLM } = require('./llm');
-const db = require('./db');
+const { getUserDb } = require('./db');
 
 // Dynamic import for transformers.js
 let pipeline = null;
@@ -33,14 +33,15 @@ async function getEmbedding(text) {
     return Array.from(output.data);
 }
 
-// Memory vector indices cache: CharacterID -> LocalIndex
+// Memory vector indices cache: UserId_CharacterID -> LocalIndex
 const indices = new Map();
 
-async function getVectorIndex(characterId) {
-    if (indices.has(characterId)) {
-        return indices.get(characterId);
+async function getVectorIndex(userId, characterId) {
+    const key = `${userId}_${characterId}`;
+    if (indices.has(key)) {
+        return indices.get(key);
     }
-    const dir = path.join(__dirname, '..', 'data', 'vectors', characterId);
+    const dir = path.join(__dirname, '..', 'data', 'vectors', String(userId), String(characterId));
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
     }
@@ -54,61 +55,64 @@ async function getVectorIndex(characterId) {
             dimension: 384 // Dimension of all-MiniLM-L6-v2
         });
     }
-    indices.set(characterId, index);
+    indices.set(key, index);
     return index;
 }
 
-async function wipeIndex(characterId) {
-    indices.delete(characterId);
-    const dir = path.join(__dirname, '..', 'data', 'vectors', characterId);
-    if (fs.existsSync(dir)) {
-        try {
-            fs.rmSync(dir, { recursive: true, force: true });
-        } catch (e) {
-            console.error(`[Memory] Failed to physically wipe vector dir for ${characterId}:`, e.message);
-        }
-    }
-}
+const memoryCache = new Map();
 
-/**
- * Searches for relevant memories based on a query text.
- */
-async function searchMemories(characterId, queryText, limit = 5) {
-    try {
-        const index = await getVectorIndex(characterId);
-        const queryEmbedding = await getEmbedding(queryText);
+function getMemory(userId) {
+    if (memoryCache.has(userId)) return memoryCache.get(userId);
 
-        const results = await index.queryItems(queryEmbedding, limit);
-        // Map results back to sqlite memory rows using metadata.id
-        const memories = [];
-        for (const res of results) {
-            // Threshold filtering (e.g., > 0.5 similarity)
-            if (res.score > 0.5 && res.item.metadata && res.item.metadata.memory_id) {
-                const memRow = db.getMemory(res.item.metadata.memory_id);
-                if (memRow) {
-                    memories.push(memRow);
-                }
+    // Instantiates this user's specific sqlite DB instance
+    const db = getUserDb(userId);
+
+    async function wipeIndex(characterId) {
+        const key = `${userId}_${characterId}`;
+        indices.delete(key);
+        const dir = path.join(__dirname, '..', 'data', 'vectors', String(userId), String(characterId));
+        if (fs.existsSync(dir)) {
+            try {
+                fs.rmSync(dir, { recursive: true, force: true });
+            } catch (e) {
+                console.error(`[Memory] Failed to physically wipe vector dir for ${characterId}:`, e.message);
             }
         }
-        return memories;
-    } catch (e) {
-        console.error(`[Memory] Search failed for ${characterId}:`, e.message);
-        return [];
-    }
-}
-
-/**
- * Uses a small LLM to extract memories from recent conversation context.
- */
-async function extractMemoryFromContext(character, recentMessages, groupId = null) {
-    if (!character.memory_api_endpoint || !character.memory_api_key || !character.memory_model_name) {
-        // Skip memory extraction if memory AI is not configured
-        return null;
     }
 
-    const contextText = recentMessages.map(m => `${m.role === 'user' ? 'User' : character.name}: ${m.content}`).join('\n');
+    async function searchMemories(characterId, queryText, limit = 5) {
+        try {
+            const index = await getVectorIndex(userId, characterId);
+            const queryEmbedding = await getEmbedding(queryText);
 
-    const extractionPrompt = `
+            const results = await index.queryItems(queryEmbedding, limit);
+            // Map results back to sqlite memory rows using metadata.id
+            const memories = [];
+            for (const res of results) {
+                // Threshold filtering (e.g., > 0.5 similarity)
+                if (res.score > 0.5 && res.item.metadata && res.item.metadata.memory_id) {
+                    const memRow = db.getMemory(res.item.metadata.memory_id);
+                    if (memRow) {
+                        memories.push(memRow);
+                    }
+                }
+            }
+            return memories;
+        } catch (e) {
+            console.error(`[Memory] Search failed for ${characterId}:`, e.message);
+            return [];
+        }
+    }
+
+    async function extractMemoryFromContext(character, recentMessages, groupId = null) {
+        if (!character.memory_api_endpoint || !character.memory_api_key || !character.memory_model_name) {
+            // Skip memory extraction if memory AI is not configured
+            return null;
+        }
+
+        const contextText = recentMessages.map(m => `${m.role === 'user' ? 'User' : character.name}: ${m.content}`).join('\n');
+
+        const extractionPrompt = `
 You are a memory extraction assistant. Analyze the following recent conversation snippet between User and ${character.name}.
 Identify if there are any new, significant facts, events, or relationship changes that should be remembered long-term.
 Return a structured JSON object. Focus on extracting WHAT happened, WHEN, WHERE, and WHO.
@@ -132,48 +136,45 @@ Output exactly in this JSON format (and nothing else):
 If there is nothing new or important, return "action": "none".
 `;
 
-    try {
-        const responseText = await callLLM({
-            endpoint: character.memory_api_endpoint,
-            key: character.memory_api_key,
-            model: character.memory_model_name,
-            messages: [
-                { role: 'system', content: 'You extract structured JSON facts.' },
-                { role: 'user', content: extractionPrompt }
-            ],
-            maxTokens: 300,
-            temperature: 0.1
-        });
+        try {
+            const responseText = await callLLM({
+                endpoint: character.memory_api_endpoint,
+                key: character.memory_api_key,
+                model: character.memory_model_name,
+                messages: [
+                    { role: 'system', content: 'You extract structured JSON facts.' },
+                    { role: 'user', content: extractionPrompt }
+                ],
+                maxTokens: 300,
+                temperature: 0.1
+            });
 
-        // Parse JSON safely
-        const startIdx = responseText.indexOf('{');
-        const endIdx = responseText.lastIndexOf('}');
-        if (startIdx !== -1 && endIdx !== -1) {
-            const jsonText = responseText.slice(startIdx, endIdx + 1);
-            const parsed = JSON.parse(jsonText);
+            // Parse JSON safely
+            const startIdx = responseText.indexOf('{');
+            const endIdx = responseText.lastIndexOf('}');
+            if (startIdx !== -1 && endIdx !== -1) {
+                const jsonText = responseText.slice(startIdx, endIdx + 1);
+                const parsed = JSON.parse(jsonText);
 
-            if (parsed.action === 'add' || parsed.action === 'update') {
-                await saveExtractedMemory(character.id, parsed, groupId);
-                return parsed;
+                if (parsed.action === 'add' || parsed.action === 'update') {
+                    await saveExtractedMemory(character.id, parsed, groupId);
+                    return parsed;
+                }
             }
+        } catch (e) {
+            console.error(`[Memory] Extraction failed for ${character.id}:`, e.message);
         }
-    } catch (e) {
-        console.error(`[Memory] Extraction failed for ${character.id}:`, e.message);
-    }
-    return null;
-}
-
-/**
- * Uses the small LLM to extract a "hidden state" (mood/secret) from recent private context.
- */
-async function extractHiddenState(character, recentMessages) {
-    if (!character.memory_api_endpoint || !character.memory_api_key || !character.memory_model_name) {
         return null;
     }
 
-    const contextText = recentMessages.map(m => `${m.role === 'user' ? 'User' : character.name}: ${m.content}`).join('\n');
+    async function extractHiddenState(character, recentMessages) {
+        if (!character.memory_api_endpoint || !character.memory_api_key || !character.memory_model_name) {
+            return null;
+        }
 
-    const extractionPrompt = `
+        const contextText = recentMessages.map(m => `${m.role === 'user' ? 'User' : character.name}: ${m.content}`).join('\n');
+
+        const extractionPrompt = `
 You are analyzing a private chat between User and ${character.name}.
 Based ONLY on these recent messages, summarize what ${character.name}'s current hidden mood, secret thought, or unspoken attitude towards User is right now.
 Keep it under 30 words, and write it in the FIRST PERSON perspective of ${character.name}.
@@ -187,61 +188,67 @@ ${contextText}
 Output only the summary sentence, without quotes or extra explanation.
 `;
 
-    try {
-        const responseText = await callLLM({
-            endpoint: character.memory_api_endpoint,
-            key: character.memory_api_key,
-            model: character.memory_model_name,
-            messages: [
-                { role: 'system', content: 'You are an internal mood analyzer. You output ONLY the summarized first-person mindset.' },
-                { role: 'user', content: extractionPrompt }
-            ],
-            maxTokens: 100,
-            temperature: 0.3
-        });
+        try {
+            const responseText = await callLLM({
+                endpoint: character.memory_api_endpoint,
+                key: character.memory_api_key,
+                model: character.memory_model_name,
+                messages: [
+                    { role: 'system', content: 'You are an internal mood analyzer. You output ONLY the summarized first-person mindset.' },
+                    { role: 'user', content: extractionPrompt }
+                ],
+                maxTokens: 100,
+                temperature: 0.3
+            });
 
-        const hiddenState = responseText.trim();
-        if (hiddenState && hiddenState.length > 0 && hiddenState.length < 200) {
-            db.updateCharacterHiddenState(character.id, hiddenState);
-            console.log(`[Memory] Extracted hidden state for ${character.name}: ${hiddenState}`);
-            return hiddenState;
+            const hiddenState = responseText.trim();
+            if (hiddenState && hiddenState.length > 0 && hiddenState.length < 200) {
+                db.updateCharacterHiddenState(character.id, hiddenState);
+                console.log(`[Memory] Extracted hidden state for ${character.name}: ${hiddenState}`);
+                return hiddenState;
+            }
+        } catch (e) {
+            console.error(`[Memory] Hidden state extraction failed for ${character.id}:`, e.message);
         }
-    } catch (e) {
-        console.error(`[Memory] Hidden state extraction failed for ${character.id}:`, e.message);
+        return null;
     }
-    return null;
+
+    async function saveExtractedMemory(characterId, memoryData, groupId = null) {
+        try {
+            // 1. Generate embedding for the event text
+            const textToEmbed = `${memoryData.event} People: ${memoryData.people || ''}. Items: ${memoryData.items || ''}.`;
+            const embeddingArray = await getEmbedding(textToEmbed);
+
+            // Convert JS array to Buffer for SQLite storage (optional, vectra uses its own file)
+            const embeddingBuffer = Buffer.from(new Float32Array(embeddingArray).buffer);
+            memoryData.embedding = embeddingBuffer;
+
+            // 2. Save to SQLite (with optional group_id for cleanup)
+            const memoryId = db.addMemory(characterId, memoryData, groupId);
+
+            // 3. Save to Vectra store
+            const index = await getVectorIndex(userId, characterId);
+            await index.insertItem({
+                vector: embeddingArray,
+                metadata: { memory_id: memoryId }
+            });
+
+            console.log(`[Memory] Stored new memory for ${characterId}: ${memoryData.event}`);
+        } catch (e) {
+            console.error(`[Memory] Save failed for ${characterId}:`, e.message);
+        }
+    }
+
+    const instance = {
+        wipeIndex,
+        searchMemories,
+        extractMemoryFromContext,
+        extractHiddenState,
+        saveExtractedMemory
+    };
+
+    memoryCache.set(userId, instance);
+    return instance;
 }
 
-async function saveExtractedMemory(characterId, memoryData, groupId = null) {
-    try {
-        // 1. Generate embedding for the event text
-        const textToEmbed = `${memoryData.event} People: ${memoryData.people || ''}. Items: ${memoryData.items || ''}.`;
-        const embeddingArray = await getEmbedding(textToEmbed);
-
-        // Convert JS array to Buffer for SQLite storage (optional, vectra uses its own file)
-        const embeddingBuffer = Buffer.from(new Float32Array(embeddingArray).buffer);
-        memoryData.embedding = embeddingBuffer;
-
-        // 2. Save to SQLite (with optional group_id for cleanup)
-        const memoryId = db.addMemory(characterId, memoryData, groupId);
-
-        // 3. Save to Vectra store
-        const index = await getVectorIndex(characterId);
-        await index.insertItem({
-            vector: embeddingArray,
-            metadata: { memory_id: memoryId }
-        });
-
-        console.log(`[Memory] Stored new memory for ${characterId}: ${memoryData.event}`);
-    } catch (e) {
-        console.error(`[Memory] Save failed for ${characterId}:`, e.message);
-    }
-}
-
-module.exports = {
-    searchMemories,
-    extractMemoryFromContext,
-    extractHiddenState,
-    saveExtractedMemory,
-    wipeIndex
-};
+module.exports = { getMemory };

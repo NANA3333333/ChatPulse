@@ -85,7 +85,9 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
 
     useEffect(() => {
         // Fetch user profile
-        fetch(`${apiUrl}/user`)
+        const headers = { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` };
+
+        fetch(`${apiUrl}/user`, { headers })
             .then(res => res.json())
             .then(data => {
                 setProfile(data);
@@ -110,7 +112,7 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
             .catch(console.error);
 
         // Fetch contacts for AI provider dropdown
-        fetch(`${apiUrl}/characters`)
+        fetch(`${apiUrl}/characters`, { headers })
             .then(res => res.json())
             .then(data => setContacts(data))
             .catch(console.error);
@@ -120,8 +122,11 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
         const updated = { ...profile, name: editName, avatar: editAvatar, banner: editBanner, bio: editBio };
         try {
             const res = await fetch(`${apiUrl}/user`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`
+                },
                 body: JSON.stringify(updated)
             });
             const data = await res.json();
@@ -138,8 +143,11 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
     const handleSaveTheme = async () => {
         try {
             const res = await fetch(`${apiUrl}/user`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`
+                },
                 body: JSON.stringify({ theme_config: JSON.stringify(editThemeConfig), custom_css: editCustomCss })
             });
             const data = await res.json();
@@ -224,7 +232,10 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
         try {
             const res = await fetch(`${apiUrl}/theme/generate`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`
+                },
                 body: JSON.stringify({
                     query: aiThemeQuery,
                     api_endpoint: endpoint,
@@ -253,7 +264,10 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
     const handleDeleteContact = async (id) => {
         if (!window.confirm("Are you sure you want to delete this contact and all their data?")) return;
         try {
-            const res = await fetch(`${apiUrl}/characters/${id}`, { method: 'DELETE' });
+            const res = await fetch(`${apiUrl}/characters/${id}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` }
+            });
             const data = await res.json();
             if (data.success) {
                 if (onCharactersUpdate) onCharactersUpdate();
@@ -266,7 +280,10 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
     const handleWipeData = async (id) => {
         if (!window.confirm(lang === 'en' ? "Are you sure you want to wipe all data (messages, memories, etc.) for this character?" : "确定要清空该角色的所有数据（消息、记忆等）吗？")) return;
         try {
-            const res = await fetch(`${apiUrl}/data/${id}`, { method: 'DELETE' });
+            const res = await fetch(`${apiUrl}/data/${id}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` }
+            });
             const data = await res.json();
             if (data.success) {
                 alert(lang === 'en' ? "Data wiped successfully." : "数据已清空。");
@@ -283,7 +300,10 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
         try {
             const res = await fetch(`${apiUrl}/characters`, {
                 method: 'POST',  // Note: /characters POST handles updates too
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`
+                },
                 body: JSON.stringify(editingContact)
             });
             const data = await res.json();
@@ -304,7 +324,11 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
         const formData = new FormData();
         formData.append('image', file);
         try {
-            const res = await fetch(`${apiUrl}/upload`, { method: 'POST', body: formData });
+            const res = await fetch(`${apiUrl}/upload`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` },
+                body: formData
+            });
             const data = await res.json();
             if (data.success) {
                 setAvatarCallback(data.url);
@@ -328,7 +352,11 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
         const formData = new FormData();
         formData.append('db_file', file);
         try {
-            const res = await fetch(`${apiUrl}/system/import`, { method: 'POST', body: formData });
+            const res = await fetch(`${apiUrl}/system/import`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` },
+                body: formData
+            });
             const data = await res.json();
             if (data.success) {
                 alert(lang === 'en' ? "Database restored! Please refresh the page in a few seconds." : "存档恢复成功！服务器正在重启，请在3秒后刷新本页面。");
@@ -349,7 +377,10 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
         if (!window.confirm(lang === 'en' ? "Final confirmation: Wipe everything?" : "最后一次确认：真的要抹除所有数据吗？")) return;
 
         try {
-            const res = await fetch(`${apiUrl}/system/wipe`, { method: 'DELETE' });
+            const res = await fetch(`${apiUrl}/system/wipe`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` }
+            });
             const data = await res.json();
             if (data.success) {
                 alert(lang === 'en' ? "All data wiped successfully." : "所有数据已成功清空。");
@@ -706,13 +737,17 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                             <span>{lang === 'en' ? 'Group Context Messages' : '群聊上下文消息数'}</span>
                             <span>{profile.group_msg_limit || 20} <span style={{ fontSize: '12px', color: '#999' }}>{lang === 'en' ? '(rich context)' : '（上下文丰富）'}</span></span>
                         </div>
-                        <input type="range" min="5" max="100" value={profile.group_msg_limit || 20}
+                        <input type="range" min="0" max="100" value={profile.group_msg_limit || 20}
                             onChange={e => {
                                 const v = parseInt(e.target.value);
                                 setProfile(p => ({ ...p, group_msg_limit: v }));
-                                fetch(`${apiUrl}/user`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ group_msg_limit: v }) });
+                                fetch(`${apiUrl}/user`, {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` },
+                                    body: JSON.stringify({ group_msg_limit: v })
+                                });
                             }}
-                            style={{ width: '100%', backgroundSize: `${((profile.group_msg_limit || 20) - 5) * 100 / (100 - 5)}% 100%` }} />
+                            style={{ width: '100%', backgroundSize: `${((profile.group_msg_limit || 20)) * 100 / 100}% 100%` }} />
                         <div style={{ fontSize: '11px', color: '#999', marginTop: '4px' }}>
                             {lang === 'en' ? 'Number of recent messages each AI can see in group chat. Higher = richer context, but slightly slower.'
                                 : '控制每个 AI 角色在群聊回复前能看到的最近消息数量。越高上下文越丰富，但响应稍慢。'}
@@ -729,7 +764,11 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                             onChange={e => {
                                 const v = parseInt(e.target.value);
                                 setProfile(p => ({ ...p, private_msg_limit_for_group: v }));
-                                fetch(`${apiUrl}/user`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ private_msg_limit_for_group: v }) });
+                                fetch(`${apiUrl}/user`, {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` },
+                                    body: JSON.stringify({ private_msg_limit_for_group: v })
+                                });
                             }}
                             style={{ width: '100%', backgroundSize: `${((profile.private_msg_limit_for_group ?? 3) - 0) * 100 / (100 - 0)}% 100%` }} />
                         <div style={{ fontSize: '11px', color: '#999', marginTop: '4px' }}>
@@ -748,7 +787,11 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                             onChange={e => {
                                 const v = parseInt(e.target.value) / 100;
                                 setProfile(p => ({ ...p, group_skip_rate: v }));
-                                fetch(`${apiUrl}/user`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ group_skip_rate: v }) });
+                                fetch(`${apiUrl}/user`, {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` },
+                                    body: JSON.stringify({ group_skip_rate: v })
+                                });
                             }}
                             style={{ width: '100%', backgroundSize: `${(Math.round((profile.group_skip_rate || 0) * 100) - 0) * 100 / (50 - 0)}% 100%` }} />
                         <div style={{ fontSize: '11px', color: '#999', marginTop: '4px' }}>
@@ -777,13 +820,21 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                                 const level = parseInt(e.target.value);
                                 if (level === 0) {
                                     setProfile(p => ({ ...p, group_proactive_enabled: 0 }));
-                                    fetch(`${apiUrl}/user`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ group_proactive_enabled: 0 }) });
+                                    fetch(`${apiUrl}/user`, {
+                                        method: 'PUT',
+                                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` },
+                                        body: JSON.stringify({ group_proactive_enabled: 0 })
+                                    });
                                 } else {
                                     const avg = 11 - level;
                                     const min = Math.max(1, avg - 2);
                                     const max = Math.max(min, 2 * avg - min); // Ensures (min+max)/2 always matches `avg` so slider doesn't snap back
                                     setProfile(p => ({ ...p, group_proactive_enabled: 1, group_interval_min: min, group_interval_max: max }));
-                                    fetch(`${apiUrl}/user`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ group_proactive_enabled: 1, group_interval_min: min, group_interval_max: max }) });
+                                    fetch(`${apiUrl}/user`, {
+                                        method: 'PUT',
+                                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` },
+                                        body: JSON.stringify({ group_proactive_enabled: 1, group_interval_min: min, group_interval_max: max })
+                                    });
                                 }
                             }}
                             style={{ width: '100%' }} />
@@ -803,7 +854,11 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                             onChange={e => {
                                 const v = parseInt(e.target.value) / 100;
                                 setProfile(p => ({ ...p, jealousy_chance: v }));
-                                fetch(`${apiUrl}/user`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jealousy_chance: v }) });
+                                fetch(`${apiUrl}/user`, {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` },
+                                    body: JSON.stringify({ jealousy_chance: v })
+                                });
                             }}
                             style={{ width: '100%', backgroundSize: `${(Math.round((profile.jealousy_chance ?? 0.3) * 100) - 0) * 100 / (100 - 0)}% 100%` }} />
                         <div style={{ fontSize: '11px', color: '#999', marginTop: '4px' }}>

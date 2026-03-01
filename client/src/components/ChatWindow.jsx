@@ -52,7 +52,7 @@ function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineSt
         if (!contact?.id) return;
         setMessages([]);
         setHasMore(false);
-        fetch(`${apiUrl}/messages/${contact.id}?limit=${PAGE_SIZE}`)
+        fetch(`${apiUrl}/messages/${contact.id}?limit=${PAGE_SIZE}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } })
             .then(res => res.json())
             .then(data => {
                 setMessages(data);
@@ -123,22 +123,22 @@ function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineSt
             if (hideCmd.cmd === 'hide') {
                 const res = await fetch(`${apiUrl}/messages/${currentContactId}/hide`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`, 'Content-Type': 'application/json' },
                     body: JSON.stringify({ startIdx: hideCmd.start, endIdx: hideCmd.end })
                 });
                 const data = await res.json();
                 if (data.success && contactRef.current?.id === currentContactId) {
-                    const updated = await fetch(`${apiUrl}/messages/${currentContactId}`).then(r => r.json());
+                    const updated = await fetch(`${apiUrl}/messages/${currentContactId}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } }).then(r => r.json());
                     setMessages(updated);
                 }
             } else if (hideCmd.cmd === 'unhide') {
                 const res = await fetch(`${apiUrl}/messages/${currentContactId}/unhide`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`, 'Content-Type': 'application/json' }
                 });
                 const data = await res.json();
                 if (data.success && contactRef.current?.id === currentContactId) {
-                    const updated = await fetch(`${apiUrl}/messages/${currentContactId}`).then(r => r.json());
+                    const updated = await fetch(`${apiUrl}/messages/${currentContactId}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } }).then(r => r.json());
                     setMessages(updated);
                 }
             }
@@ -148,7 +148,7 @@ function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineSt
         try {
             const res = await fetch(`${apiUrl}/messages`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ characterId: currentContactId, content: text })
             });
             const data = await res.json();
@@ -172,7 +172,7 @@ function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineSt
         try {
             await fetch(`${apiUrl}/messages/${currentContactId}/retry`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ failedMessageId })
             });
             // We just trigger the retry; the WS will handle pushing the new message when ready
@@ -187,13 +187,13 @@ function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineSt
         try {
             const res = await fetch(`${apiUrl}/characters/${currentContactId}/transfer`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ amount, note })
             });
             const data = await res.json();
             if (data.success && contactRef.current?.id === currentContactId) {
                 // Refresh messages to pick up the new transfer message with tid
-                const updated = await fetch(`${apiUrl}/messages/${currentContactId}`).then(r => r.json());
+                const updated = await fetch(`${apiUrl}/messages/${currentContactId}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } }).then(r => r.json());
                 setMessages(updated);
             }
         } catch (e) {
@@ -206,12 +206,12 @@ function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineSt
         try {
             const res = await fetch(`${apiUrl}/characters/${contactRef.current?.id}/friends`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ target_id: targetCharId })
             });
             const data = await res.json();
             if (data.success) {
-                const updated = await fetch(`${apiUrl}/messages/${contactRef.current?.id}`).then(r => r.json());
+                const updated = await fetch(`${apiUrl}/messages/${contactRef.current?.id}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } }).then(r => r.json());
                 setMessages(updated);
             } else {
                 alert(lang === 'en' ? 'Failed to recommend contact: ' + data.error : '推荐联系人失败: ' + data.error);
@@ -336,11 +336,11 @@ function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineSt
                     if (half === 0) return;
                     const res = await fetch(`${apiUrl}/messages/${cid}/hide`, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`, 'Content-Type': 'application/json' },
                         body: JSON.stringify({ startIdx: 0, endIdx: half - 1 })
                     });
                     if ((await res.json()).success && contactRef.current?.id === cid) {
-                        const updated = await fetch(`${apiUrl}/messages/${cid}`).then(r => r.json());
+                        const updated = await fetch(`${apiUrl}/messages/${cid}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } }).then(r => r.json());
                         setMessages(updated);
                     }
                 }}

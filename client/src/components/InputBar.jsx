@@ -57,10 +57,10 @@ function InputBar({ onSend, onTransfer, onQuickHide }) {
     return (
         <div className="input-area">
             <div className="input-toolbar" style={{ position: 'relative' }}>
-                <button onClick={() => setShowEmojiPicker(!showEmojiPicker)} title="Emoji"><Smile size={20} /></button>
+                <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} title="Emoji"><Smile size={20} /></button>
 
                 {/* File button — reads from user's local device via browser FileReader */}
-                <button onClick={() => fileInputRef.current?.click()} title={lang === 'en' ? 'Send text file content' : '发送文件内容'}>
+                <button type="button" onClick={() => fileInputRef.current?.click()} title={lang === 'en' ? 'Send text file content' : '发送文件内容'}>
                     <Paperclip size={20} />
                 </button>
                 <input
@@ -72,12 +72,13 @@ function InputBar({ onSend, onTransfer, onQuickHide }) {
                 />
 
                 {onTransfer && (
-                    <button onClick={onTransfer} title={t('Send Transfer')}>
+                    <button type="button" onClick={onTransfer} title={t('Send Transfer')}>
                         <CreditCard size={20} color="var(--accent-color)" />
                     </button>
                 )}
                 {onQuickHide && (
                     <button
+                        type="button"
                         onClick={onQuickHide}
                         title={lang === 'en' ? 'Quick-hide old messages from AI context' : '折叠前半部分的聊天记录（不给AI看到）'}
                         style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#888', padding: '4px 8px', borderRadius: '6px', border: '1px solid #ddd', background: '#fafafa' }}
@@ -95,7 +96,7 @@ function InputBar({ onSend, onTransfer, onQuickHide }) {
                         zIndex: 100
                     }}>
                         <div style={{ width: '100%', display: 'flex', justifyContent: 'flex-end', marginBottom: '5px' }}>
-                            <button onClick={() => setShowEmojiPicker(false)} style={{ padding: '2px' }}><X size={14} /></button>
+                            <button type="button" onClick={() => setShowEmojiPicker(false)} style={{ padding: '2px' }}><X size={14} /></button>
                         </div>
                         {emojis.map(e => (
                             <span key={e} onClick={() => addEmoji(e)} style={{ fontSize: '20px', cursor: 'pointer', padding: '4px', borderRadius: '4px' }}>
@@ -115,7 +116,7 @@ function InputBar({ onSend, onTransfer, onQuickHide }) {
                 />
             </div>
             <div className="input-actions">
-                <button className="send-button" onClick={handleSend}>{t('Send')}</button>
+                <button type="button" className="send-button" onClick={handleSend}>{t('Send')}</button>
             </div>
         </div>
     );

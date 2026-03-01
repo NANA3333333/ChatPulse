@@ -1,0 +1,116 @@
+const Database = require('better-sqlite3');
+const path = require('path');
+const fs = require('fs');
+const bcrypt = require('bcryptjs');
+
+const dataDir = path.join(__dirname, '..', 'data');
+if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+}
+
+// master.db is intended strictly for authentication and tracking which user maps to which personal db file
+const dbPath = path.join(dataDir, 'master.db');
+const db = new Database(dbPath);
+
+db.pragma('journal_mode = WAL');
+
+function initAuthDb() {
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS invite_codes (
+            code TEXT PRIMARY KEY,
+            used_by TEXT,
+            created_at INTEGER NOT NULL
+        );
+    `);
+
+    // Auto-seed root admin account "Nana"
+    const rootUser = db.prepare('SELECT id FROM users WHERE username = ?').get('Nana');
+    if (!rootUser) {
+        const id = generateId();
+        const hash = bcrypt.hashSync('lsd554951', 10);
+        db.prepare('INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)').run(id, 'Nana', hash, Date.now());
+        console.log('[AuthDB] Root user Nana seeded successfully.');
+    }
+    console.log('[AuthDB] Master auth database initialized successfully.');
+}
+
+// Generate a simple alphanumeric ID
+function generateId() {
+    return Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+}
+
+function createUser(username, password, inviteCode) {
+    try {
+        if (username !== 'Nana') {
+            if (!inviteCode) return { success: false, error: 'Invite code is required' };
+            const invite = db.prepare('SELECT used_by FROM invite_codes WHERE code = ?').get(inviteCode);
+            if (!invite) return { success: false, error: 'Invalid invite code' };
+            if (invite.used_by) return { success: false, error: 'Invite code has already been used' };
+        }
+
+        const id = generateId();
+        const hash = bcrypt.hashSync(password, 10);
+
+        db.transaction(() => {
+            db.prepare('INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)').run(id, username, hash, Date.now());
+            if (username !== 'Nana') {
+                db.prepare('UPDATE invite_codes SET used_by = ? WHERE code = ?').run(username, inviteCode);
+            }
+        })();
+
+        return { success: true, user: { id, username } };
+    } catch (e) {
+        if (e.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+            return { success: false, error: 'Username already exists' };
+        }
+        return { success: false, error: e.message };
+    }
+}
+
+function verifyUser(username, password) {
+    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+    if (!user) return { success: false, error: 'Invalid username or password' };
+
+    const isValid = bcrypt.compareSync(password, user.password_hash);
+    if (!isValid) return { success: false, error: 'Invalid username or password' };
+
+    return { success: true, user: { id: user.id, username: user.username } };
+}
+
+function getUserById(id) {
+    return db.prepare('SELECT id, username, created_at FROM users WHERE id = ?').get(id);
+}
+
+function generateInviteCode() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let code = '';
+    for (let i = 0; i < 8; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    db.prepare('INSERT INTO invite_codes (code, created_at) VALUES (?, ?)').run(code, Date.now());
+    return code;
+}
+
+function getInviteCodes() {
+    return db.prepare('SELECT code, used_by, created_at FROM invite_codes ORDER BY created_at DESC').all();
+}
+
+function getAllUsers() {
+    return db.prepare('SELECT id, username, created_at FROM users ORDER BY created_at DESC').all();
+}
+
+module.exports = {
+    initAuthDb,
+    createUser,
+    verifyUser,
+    getUserById,
+    generateInviteCode,
+    getInviteCodes,
+    getAllUsers
+};

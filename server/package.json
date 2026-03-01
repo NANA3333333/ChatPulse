@@ -13,10 +13,12 @@
   "type": "commonjs",
   "dependencies": {
     "@xenova/transformers": "^2.17.2",
+    "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.6.2",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
     "multer": "^2.0.2",
     "onnxruntime-node": "^1.24.2",
     "vectra": "^0.12.3",
