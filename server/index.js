@@ -1212,7 +1212,8 @@ function triggerGroupAIChain(groupId, wsClients, mentionedIds = [], isAtAll = fa
 
                     // 1+2 Hybrid Hidden Context Injection
                     const hiddenState = db.getCharacterHiddenState(char.id);
-                    const recentPrivateMsgs = db.getMessages(char.id, 3).reverse();
+                    const privateLimit = userProfile?.private_msg_limit_for_group ?? 3;
+                    const recentPrivateMsgs = privateLimit > 0 ? db.getMessages(char.id, privateLimit).reverse() : [];
                     let secretContextStr = '';
                     if (hiddenState || recentPrivateMsgs.length > 0) {
                         const pmLines = recentPrivateMsgs.map(m => `${m.role === 'user' ? userName : char.name}: ${m.content}`).join('\n');

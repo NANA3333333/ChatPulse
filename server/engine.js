@@ -739,7 +739,8 @@ async function triggerGroupProactive(groupId, wsClients) {
 
     // 1+2 Hybrid Hidden Context Injection
     const hiddenState = db.getCharacterHiddenState(picked.id);
-    const recentPrivateMsgs = db.getMessages(picked.id, 3).reverse();
+    const privateLimit = profile?.private_msg_limit_for_group ?? 3;
+    const recentPrivateMsgs = privateLimit > 0 ? db.getMessages(picked.id, privateLimit).reverse() : [];
     let secretContextStr = '';
     if (hiddenState || recentPrivateMsgs.length > 0) {
         const pmLines = recentPrivateMsgs.map(m => `${m.role === 'user' ? userName : picked.name}: ${m.content}`).join('\n');

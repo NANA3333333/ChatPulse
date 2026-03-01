@@ -706,7 +706,7 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                             <span>{lang === 'en' ? 'Group Context Messages' : '群聊上下文消息数'}</span>
                             <span>{profile.group_msg_limit || 20} <span style={{ fontSize: '12px', color: '#999' }}>{lang === 'en' ? '(rich context)' : '（上下文丰富）'}</span></span>
                         </div>
-                        <input type="range" min="5" max="50" value={profile.group_msg_limit || 20}
+                        <input type="range" min="5" max="100" value={profile.group_msg_limit || 20}
                             onChange={e => {
                                 const v = parseInt(e.target.value);
                                 setProfile(p => ({ ...p, group_msg_limit: v }));
@@ -716,6 +716,25 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                         <div style={{ fontSize: '11px', color: '#999', marginTop: '4px' }}>
                             {lang === 'en' ? 'Number of recent messages each AI can see in group chat. Higher = richer context, but slightly slower.'
                                 : '控制每个 AI 角色在群聊回复前能看到的最近消息数量。越高上下文越丰富，但响应稍慢。'}
+                        </div>
+                    </div>
+
+                    {/* Private Context Limit in Group */}
+                    <div style={{ marginBottom: '18px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', marginBottom: '6px' }}>
+                            <span>{lang === 'en' ? 'Private Context Mapped in Group' : '群聊自动映射私聊内心戏条数'}</span>
+                            <span>{profile.private_msg_limit_for_group ?? 3} <span style={{ fontSize: '12px', color: '#999' }}>{lang === 'en' ? '(secret memory)' : '（潜意识暗线）'}</span></span>
+                        </div>
+                        <input type="range" min="0" max="100" value={profile.private_msg_limit_for_group ?? 3}
+                            onChange={e => {
+                                const v = parseInt(e.target.value);
+                                setProfile(p => ({ ...p, private_msg_limit_for_group: v }));
+                                fetch(`${apiUrl}/user`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ private_msg_limit_for_group: v }) });
+                            }}
+                            style={{ width: '100%' }} />
+                        <div style={{ fontSize: '11px', color: '#999', marginTop: '4px' }}>
+                            {lang === 'en' ? 'Number of recent private messages injected into group chat context. 0 = disabled.'
+                                : '控制 AI 在群聊中被隐秘注入的近期私聊条数上限，用于生成“心照不宣”的暧昧感。0 = 关闭私聊映射。'}
                         </div>
                     </div>
 

@@ -94,10 +94,10 @@ function initDb() {
             group_msg_limit INTEGER DEFAULT 20,
             group_skip_rate INTEGER DEFAULT 10,
             group_proactive_enabled INTEGER DEFAULT 0,
-            group_interval_min INTEGER DEFAULT 10,
             group_interval_max INTEGER DEFAULT 60,
             theme_config TEXT DEFAULT '{}',
-            banner TEXT
+            banner TEXT,
+            private_msg_limit_for_group INTEGER DEFAULT 3
         );
         CREATE TABLE IF NOT EXISTS moment_likes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -292,6 +292,11 @@ function initDb() {
     // Add group_msg_limit to user_profile for controlling group context injection
     try {
         db.prepare('ALTER TABLE user_profile ADD COLUMN group_msg_limit INTEGER DEFAULT 20').run();
+    } catch (e) { }
+
+    // Add private_msg_limit_for_group to user_profile for controlling dual-layer memory injection size
+    try {
+        db.prepare('ALTER TABLE user_profile ADD COLUMN private_msg_limit_for_group INTEGER DEFAULT 3').run();
     } catch (e) { }
 
     // Add group_skip_rate to user_profile (% chance a char skips reply in group chat)
@@ -618,7 +623,7 @@ function getUserProfile() {
 }
 
 function updateUserProfile(data) {
-    const allowedFields = ['name', 'avatar', 'banner', 'bio', 'theme', 'custom_css', 'theme_config', 'group_msg_limit', 'group_skip_rate', 'group_proactive_enabled', 'group_interval_min', 'group_interval_max', 'jealousy_chance', 'wallet'];
+    const allowedFields = ['name', 'avatar', 'banner', 'bio', 'theme', 'custom_css', 'theme_config', 'group_msg_limit', 'group_skip_rate', 'group_proactive_enabled', 'group_interval_min', 'group_interval_max', 'jealousy_chance', 'wallet', 'private_msg_limit_for_group'];
     const fields = Object.keys(data).filter(k => allowedFields.includes(k));
     if (fields.length === 0) return;
     const setClause = fields.map(f => `${f} = ?`).join(', ');
