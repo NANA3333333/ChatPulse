@@ -24,10 +24,6 @@ app.use(express.json()); // Parses incoming JSON requests
 // Serve static uploaded files
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
 
-// Serve static React frontend
-const clientDistPath = path.join(__dirname, '../client/dist');
-app.use(express.static(clientDistPath));
-
 // Configure Multer for local image uploads
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
@@ -157,92 +153,6 @@ app.get('/api/messages/:characterId', (req, res) => {
         }
         res.json(messages);
     } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// 3.5 SillyTavern Context Interception (ST-ChatPulse Bridge)
-app.post('/api/integrations/st/context', (req, res) => {
-    try {
-        const payload = req.body;
-        if (!payload.st_character_id) return res.status(400).json({ error: 'Missing st_character_id' });
-
-        engine.updateSTContext(payload.st_character_id, {
-            name: payload.st_character_name,
-            userName: payload.st_user_name,
-            persona: payload.st_persona,
-            scenario: payload.st_scenario,
-            history: payload.chat_history,
-            lastSynced: Date.now()
-        });
-
-        // Auto-create character if they don't exist in ChatPulse DB
-        const existingChar = db.getCharacter(payload.st_character_id);
-        if (!existingChar) {
-            console.log(`[ST-Sync] Auto-creating missing character in ChatPulse DB: ${payload.st_character_name}`);
-            db.updateCharacter(payload.st_character_id, {
-                id: payload.st_character_id,
-                name: payload.st_character_name || 'ST Character',
-                avatar: payload.st_avatar || `https://api.dicebear.com/7.x/pixel-art/svg?seed=${payload.st_character_id}`
-            });
-            wsClients.forEach(ws => {
-                if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'refresh_contacts' }));
-            });
-        }
-
-        res.json({ success: true, message: 'Context synced from SillyTavern' });
-    } catch (e) {
-        console.error('[ST-ChatPulse API] Error syncing context:', e.message);
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// 3.6 SillyTavern Long-Term Memory Sync (ST-ChatPulse Bridge)
-app.post('/api/integrations/st/sync_memory', (req, res) => {
-    try {
-        const payload = req.body;
-        if (!payload.st_character_id || !payload.memory_summary) {
-            return res.status(400).json({ error: 'Missing st_character_id or memory_summary' });
-        }
-
-        // Auto-create character if they don't exist
-        const existingChar = db.getCharacter(payload.st_character_id);
-        if (!existingChar) {
-            console.log(`[ST-Sync] Auto-creating missing character for memory push: ${payload.st_character_name}`);
-            db.updateCharacter(payload.st_character_id, {
-                id: payload.st_character_id,
-                name: payload.st_character_name || 'ST Character',
-                avatar: payload.st_avatar || `https://api.dicebear.com/7.x/pixel-art/svg?seed=${payload.st_character_id}`
-            });
-            wsClients.forEach(ws => {
-                if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'refresh_contacts' }));
-            });
-        }
-
-        // Push memory
-        const memoryData = {
-            time: new Date().toLocaleString(),
-            location: 'SillyTavern',
-            people: payload.st_character_name || 'ST Character',
-            event: 'ST Context Summary',
-            relationships: 'Bond building in SillyTavern',
-            items: '',
-            importance: 8,
-            embedding: null
-        };
-
-        const memId = db.addMemory(payload.st_character_id, memoryData);
-
-        // Let's actually append the summary text into the `event` or `relationships` field
-        // Since it's a summary of the context, let's put it as the 'event'
-        db.updateMemory(memId, {
-            event: payload.memory_summary
-        });
-
-        console.log(`[ST-Sync] Received and saved memory summary for ${payload.st_character_id}`);
-        res.json({ success: true, memory_id: memId });
-    } catch (e) {
-        console.error('[ST-ChatPulse API] Error syncing memory:', e.message);
         res.status(500).json({ error: e.message });
     }
 });
@@ -1168,7 +1078,7 @@ app.get('/api/groups/:id/no-chain', (req, res) => {
     res.json({ noChain: noChainGroups.has(req.params.id) });
 });
 
-function triggerGroupAIChain(groupId, wsClients, mentionedIds = [], isAtAll = false) {
+function triggerGroupAIChain(groupId, wsClients, mentionedIds = [], isAtAll = false, isSecondaryChain = false) {
     if (pausedGroups.has(groupId)) return; // AI replies paused by user
     if (groupReplyLock[groupId]) return; // already running
     groupReplyLock[groupId] = true;
@@ -1197,10 +1107,20 @@ function triggerGroupAIChain(groupId, wsClients, mentionedIds = [], isAtAll = fa
                 const char = db.getCharacter(member.member_id);
                 if (!char || char.is_blocked) continue;
                 const isMentioned = mentionedIds.includes(char.id) || isAtAll;
-                // Mentioned chars bypass skip rate; others use the configured rate
+
+                // Bystander / Unmentioned message filtering
                 if (!isMentioned) {
+                    if (isSecondaryChain) {
+                        // If this is an AI-to-AI interaction (secondary chain), ONLY the mentioned char can talk.
+                        // Unmentioned AIs MUST NOT speak, to prevent infinite loops (char@char should only trigger that char).
+                        continue;
+                    }
+
                     const skipProfile = db.getUserProfile();
-                    const skipRate = (skipProfile?.group_skip_rate ?? 10) / 100;
+                    let skipRate = skipProfile?.group_skip_rate;
+                    if (skipRate === undefined) skipRate = 0.50;
+                    if (skipRate > 1) skipRate = skipRate / 100;
+
                     if (Math.random() < skipRate) continue;
                 }
 
@@ -1280,7 +1200,7 @@ Guidelines:
 4. DO NOT prefix your message with your name or any brackets. Just speak naturally.
 5. Output ONLY your reply text. Never repeat what you just said.
 6. If your feelings toward someone in the group change, add: [CHAR_AFFINITY:角色id:+5] or [CHAR_AFFINITY:角色id:-10] at the end.
-7. You CAN use @Name to directly address a specific person in the group (e.g. "@${userName} ...", "@${charMembers.map(m => db.getCharacter(m.member_id)?.name).filter(Boolean).join('", "@')}"). When you want their attention, mention them by @Name.`;
+7. CRITICAL: DO NOT use @Name just to mention someone's name in passing. ONLY use "@Name" (e.g. "@${userName} ...", "@${charMembers.map(m => db.getCharacter(m.member_id)?.name).filter(Boolean).join('", "@')}") when you EXPLICITLY want that specific person to reply to you right now. If you are just agreeing with them or talking about them, do not use the @ symbol.`;
 
                     const reply = await callLLM({
                         endpoint: char.api_endpoint,
@@ -1348,7 +1268,8 @@ Guidelines:
                             wsClients.forEach(c => { if (c.readyState === 1) c.send(payload); });
 
                             // Detect @mentions in char's own reply and schedule secondary chain
-                            const charMentionMatches = [...cleanReply.matchAll(/(?:^|\s)@([^\s@]+)/g)].map(m => m[1].toLowerCase());
+                            // Note: We use a more permissive regex because Chinese text often lacks spaces around @Name
+                            const charMentionMatches = [...cleanReply.matchAll(/@([^\s@，。！？；：“”‘’（）【】《》]+)/g)].map(m => m[1].toLowerCase());
                             if (charMentionMatches.length > 0) {
                                 const allGroupChars = group.members.filter(m => m.member_id !== 'user' && m.member_id !== char.id);
                                 const secondaryIds = allGroupChars
@@ -1381,9 +1302,18 @@ Guidelines:
             }
         } finally {
             delete groupReplyLock[groupId];
-            // Now fire any queued secondary chains (lock is released)
+
+            // Deduplicate and merge all pending secondary mentions
+            const uniqueSecondaryIds = new Set();
             for (const secondaryIds of pendingSecondaryChains) {
-                setTimeout(() => triggerGroupAIChain(groupId, wsClients, secondaryIds, false), 2000);
+                secondaryIds.forEach(id => uniqueSecondaryIds.add(id));
+            }
+
+            // Fire the merged secondary chain if anyone was mentioned
+            if (uniqueSecondaryIds.size > 0) {
+                const mergedIds = Array.from(uniqueSecondaryIds);
+                // Wait slightly longer to ensure lock and typing UI are fully cleared
+                setTimeout(() => triggerGroupAIChain(groupId, wsClients, mergedIds, false, true), 2500);
             }
         }
     })();
@@ -1407,9 +1337,10 @@ app.post('/api/groups/:id/messages', async (req, res) => {
         wsClients.forEach(c => { if (c.readyState === 1) c.send(wsPayload); });
 
         // Parse @mentions from message content (user only can do @all)
-        const allRef = /(?:^|\s)@(?:all|全体成员)(?:\s|$)/i.test(content);
+        const allRef = /@(?:all|全体成员)/i.test(content);
         const isAtAll = allRef; // only user (sender) can use @all
-        const mentionedNames = [...content.matchAll(/(?:^|\s)@([^\s@]+)/g)].map(m => m[1].toLowerCase());
+        // Permissive regex for Chinese/no-space text
+        const mentionedNames = [...content.matchAll(/@([^\s@，。！？；：“”‘’（）【】《》]+)/g)].map(m => m[1].toLowerCase());
         const charMembers = group.members.filter(m => m.member_id !== 'user');
         const mentionedIds = charMembers
             .filter(m => { const c = db.getCharacter(m.member_id); return c && mentionedNames.includes(c.name.toLowerCase()); })
@@ -1763,13 +1694,19 @@ ${isLucky ? `（共${pkt?.count}个红包，你是第${totalClaimed}个抢到的
     }
 }
 
-
 // ─────────────────────────────────────────────────────────────
-// Catch-all for React Router frontend
-app.get(/(.*)/, (req, res) => {
+// Serve React Frontend (Production)
+// ─────────────────────────────────────────────────────────────
+const clientDistPath = path.join(__dirname, '../client/dist');
+app.use(express.static(clientDistPath));
+
+// Catch-all route to serve the React app for any unhandled paths (client-side routing)
+app.get('*', (req, res) => {
     res.sendFile(path.join(clientDistPath, 'index.html'));
 });
 
+
+// ─────────────────────────────────────────────────────────────
 // Start listening
 console.log('[Express] Attempting to listen on port 8000...');
 const PORT = process.env.PORT || 8001;
