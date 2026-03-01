@@ -1702,6 +1702,9 @@ app.use(express.static(clientDistPath));
 
 // Catch-all route to serve the React app for any unhandled paths (client-side routing)
 app.get(/(.*)/, (req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.sendFile(path.join(clientDistPath, 'index.html'));
 });
 
