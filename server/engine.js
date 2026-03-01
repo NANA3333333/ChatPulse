@@ -735,7 +735,19 @@ async function triggerGroupProactive(groupId, wsClients) {
 
     const now = new Date();
     const hour = now.getHours();
-    let tod = hour < 6 ? '深夜' : hour < 10 ? '早上' : hour < 14 ? '中午' : hour < 18 ? '下午' : '晚上';
+    const tod = hour < 6 ? '深夜' : hour < 10 ? '早上' : hour < 14 ? '中午' : hour < 18 ? '下午' : '晚上';
+
+    // 1+2 Hybrid Hidden Context Injection
+    const hiddenState = db.getCharacterHiddenState(picked.id);
+    const recentPrivateMsgs = db.getMessages(picked.id, 3).reverse();
+    let secretContextStr = '';
+    if (hiddenState || recentPrivateMsgs.length > 0) {
+        const pmLines = recentPrivateMsgs.map(m => `${m.role === 'user' ? userName : picked.name}: ${m.content}`).join('\n');
+        secretContextStr = `\n\n====== [CRITICAL: ABSOLUTELY SECRET PRIVATE CONTEXT] ======`;
+        if (hiddenState) secretContextStr += `\n[YOUR HIDDEN MOOD/SECRET THOUGHT]: ${hiddenState}`;
+        if (pmLines) secretContextStr += `\n[RECENT PRIVATE CHAT INBOX (For Context ONLY)]:\n${pmLines}`;
+        secretContextStr += `\n\n[GOD COMMAND]: The above is your ABSOLUTELY PRIVATE memory and hidden mood. You MUST use this to subtly color your tone, act jealous, or make passing hints. HOWEVER, YOU ARE STRICTLY FORBIDDEN from directly quoting or fully exposing these private chats in the public group. Play it cool and use subtext.\n==========================================================`;
+    }
 
     const systemPrompt = `你是${picked.name}，在群聊"${group.name}"里。Persona: ${picked.persona || '无'}
 现在是${tod}。你想主动在群里发一条消息，引发一些互动。
@@ -744,7 +756,7 @@ async function triggerGroupProactive(groupId, wsClients) {
 1. 说一句全新的话，绝对不能重复或改写上面的任何内容。
 2. 可以发起新话题、聊生活、问问题、分享心情等。
 3. 保持口语化，简短（1-2句）。
-4. 不要带名字前缀，直接说话。`;
+4. 不要带名字前缀，直接说话。${secretContextStr}`;
 
     try {
         const reply = await callLLM({

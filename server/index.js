@@ -192,6 +192,7 @@ app.post('/api/messages', (req, res) => {
         // Asynchronously trigger memory extraction using the small AI
         const recentMessages = db.getMessages(characterId, 10);
         memory.extractMemoryFromContext(charObj, recentMessages).catch(e => console.error('[Memory] Background extraction error:', e));
+        memory.extractHiddenState(charObj, recentMessages).catch(e => console.error('[Memory] Background hidden state error:', e));
 
         res.json({ success: true, message: savedMessage });
     } catch (e) {
@@ -1209,12 +1210,24 @@ function triggerGroupAIChain(groupId, wsClients, mentionedIds = [], isAtAll = fa
                         ? `\n[MENTION]: Someone just @mentioned you directly! You MUST reply to this message — don't ignore it.`
                         : '';
 
+                    // 1+2 Hybrid Hidden Context Injection
+                    const hiddenState = db.getCharacterHiddenState(char.id);
+                    const recentPrivateMsgs = db.getMessages(char.id, 3).reverse();
+                    let secretContextStr = '';
+                    if (hiddenState || recentPrivateMsgs.length > 0) {
+                        const pmLines = recentPrivateMsgs.map(m => `${m.role === 'user' ? userName : char.name}: ${m.content}`).join('\n');
+                        secretContextStr = `\n\n====== [CRITICAL: ABSOLUTELY SECRET PRIVATE CONTEXT] ======`;
+                        if (hiddenState) secretContextStr += `\n[YOUR HIDDEN MOOD/SECRET THOUGHT]: ${hiddenState}`;
+                        if (pmLines) secretContextStr += `\n[RECENT PRIVATE CHAT INBOX (For Context ONLY)]:\n${pmLines}`;
+                        secretContextStr += `\n\n[GOD COMMAND]: The above is your ABSOLUTELY PRIVATE memory and hidden mood. You MUST use this to subtly color your tone, act jealous, or make passing hints. HOWEVER, YOU ARE STRICTLY FORBIDDEN from directly quoting or fully exposing these private chats in the public group. Play it cool and use subtext.\n==========================================================`;
+                    }
+
                     const systemPrompt = `你是${char.name}，正在一个叫"${group.name}"的【群聊】中聊天。
 （注意：这是群聊，不是私聊。）
 
 Persona: ${char.persona || 'No specific persona.'}
 ${relationSection}
-${noRepeatNote}${mentionNote}
+${noRepeatNote}${mentionNote}${secretContextStr}
 
 Guidelines:
 1. Stay in character. Be casual and conversational.

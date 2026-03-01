@@ -36,7 +36,8 @@ function initDb() {
             last_user_msg_time INTEGER DEFAULT 0,
             is_blocked INTEGER DEFAULT 0,
             system_prompt TEXT,
-            is_diary_unlocked INTEGER DEFAULT 0
+            is_diary_unlocked INTEGER DEFAULT 0,
+            hidden_state TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS messages (
@@ -367,6 +368,12 @@ function updateCharacter(id, data) {
             values.push(startAffinity);
         }
 
+        // Initialize hidden state
+        if (!fields.includes('hidden_state')) {
+            fields.push('hidden_state');
+            values.push('');
+        }
+
         const placeholders = fields.map(() => '?').join(', ');
         db.prepare(`INSERT INTO characters (id, ${fields.join(', ')}) VALUES (?, ${placeholders})`)
             .run(id, ...values);
@@ -384,6 +391,15 @@ function ensureAllDiaryPasswords() {
         db.prepare('UPDATE characters SET diary_password = ? WHERE id = ?').run(generateDiaryPassword(), c.id);
     }
     if (chars.length > 0) console.log(`[DB] Auto-assigned diary passwords to ${chars.length} character(s).`);
+}
+
+function getCharacterHiddenState(id) {
+    const row = db.prepare('SELECT hidden_state FROM characters WHERE id = ?').get(id);
+    return row ? row.hidden_state : '';
+}
+
+function updateCharacterHiddenState(id, hidden_state) {
+    db.prepare('UPDATE characters SET hidden_state = ? WHERE id = ?').run(hidden_state || '', id);
 }
 
 // ─── Message Queries ────────────────────────────────────────────────────
@@ -984,6 +1000,8 @@ module.exports = {
     initDb,
     getCharacters,
     getCharacter,
+    getCharacterHiddenState,
+    updateCharacterHiddenState,
     updateCharacter,
     deleteCharacter,
     getMessages,

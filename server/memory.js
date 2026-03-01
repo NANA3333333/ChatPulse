@@ -163,6 +163,55 @@ If there is nothing new or important, return "action": "none".
     return null;
 }
 
+/**
+ * Uses the small LLM to extract a "hidden state" (mood/secret) from recent private context.
+ */
+async function extractHiddenState(character, recentMessages) {
+    if (!character.memory_api_endpoint || !character.memory_api_key || !character.memory_model_name) {
+        return null;
+    }
+
+    const contextText = recentMessages.map(m => `${m.role === 'user' ? 'User' : character.name}: ${m.content}`).join('\n');
+
+    const extractionPrompt = `
+You are analyzing a private chat between User and ${character.name}.
+Based ONLY on these recent messages, summarize what ${character.name}'s current hidden mood, secret thought, or unspoken attitude towards User is right now.
+Keep it under 30 words, and write it in the FIRST PERSON perspective of ${character.name}.
+Example: "I am secretly happy that User remembered my preference, but I want to pretend I don't care."
+
+Private Chat:
+---
+${contextText}
+---
+
+Output only the summary sentence, without quotes or extra explanation.
+`;
+
+    try {
+        const responseText = await callLLM({
+            endpoint: character.memory_api_endpoint,
+            key: character.memory_api_key,
+            model: character.memory_model_name,
+            messages: [
+                { role: 'system', content: 'You are an internal mood analyzer. You output ONLY the summarized first-person mindset.' },
+                { role: 'user', content: extractionPrompt }
+            ],
+            maxTokens: 100,
+            temperature: 0.3
+        });
+
+        const hiddenState = responseText.trim();
+        if (hiddenState && hiddenState.length > 0 && hiddenState.length < 200) {
+            db.updateCharacterHiddenState(character.id, hiddenState);
+            console.log(`[Memory] Extracted hidden state for ${character.name}: ${hiddenState}`);
+            return hiddenState;
+        }
+    } catch (e) {
+        console.error(`[Memory] Hidden state extraction failed for ${character.id}:`, e.message);
+    }
+    return null;
+}
+
 async function saveExtractedMemory(characterId, memoryData, groupId = null) {
     try {
         // 1. Generate embedding for the event text
@@ -192,6 +241,7 @@ async function saveExtractedMemory(characterId, memoryData, groupId = null) {
 module.exports = {
     searchMemories,
     extractMemoryFromContext,
+    extractHiddenState,
     saveExtractedMemory,
     wipeIndex
 };
