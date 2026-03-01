@@ -162,6 +162,25 @@ function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineSt
         }
     };
 
+    const handleRetry = async (failedMessageId) => {
+        const currentContactId = contactRef.current?.id;
+        if (!currentContactId) return;
+
+        // Optimistically remove the error message from the UI right away
+        setMessages(prev => prev.filter(m => m.id !== failedMessageId));
+
+        try {
+            await fetch(`${apiUrl}/messages/${currentContactId}/retry`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ failedMessageId })
+            });
+            // We just trigger the retry; the WS will handle pushing the new message when ready
+        } catch (e) {
+            console.error('Failed to retry message:', e);
+        }
+    };
+
     const handleTransfer = async (amount, note) => {
         const currentContactId = contactRef.current?.id;
         setIsTransferModalOpen(false);
@@ -286,6 +305,7 @@ function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineSt
                                 characterName={contact.name}
                                 avatar={msg.role === 'character' ? contact.avatar : (userAvatar || 'https://api.dicebear.com/7.x/shapes/svg?seed=User')}
                                 apiUrl={apiUrl}
+                                onRetry={handleRetry}
                             />
                         </div>
                     );

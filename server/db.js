@@ -430,6 +430,10 @@ function addMessage(characterId, role, content) {
     return { id: info.lastInsertRowid, timestamp: ts };
 }
 
+function deleteMessage(messageId) {
+    db.prepare('DELETE FROM messages WHERE id = ?').run(messageId);
+}
+
 function markMessagesRead(characterId) {
     db.prepare('UPDATE messages SET read = 1 WHERE character_id = ? AND read = 0 AND role = ?')
         .run(characterId, 'character');
@@ -988,6 +992,7 @@ module.exports = {
     hideMessagesByRange,
     unhideMessages,
     addMessage,
+    deleteMessage,
     markMessagesRead,
     getUnreadCount,
     clearMessages,

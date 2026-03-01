@@ -199,6 +199,26 @@ app.post('/api/messages', (req, res) => {
     }
 });
 
+// 4.2 Retry a failed AI response (User initiates on an error bubble)
+app.post('/api/messages/:characterId/retry', (req, res) => {
+    try {
+        const { characterId } = req.params;
+        const { failedMessageId } = req.body;
+
+        // Delete the error message from the DB if provided
+        if (failedMessageId) {
+            db.deleteMessage(failedMessageId);
+        }
+
+        // Tell the engine to re-attempt generating a reply based on the existing chat history
+        engine.handleUserMessage(characterId, wsClients);
+
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // 4.5 Send a transfer to a character (Unblock mechanic)
 app.post('/api/transfer', (req, res) => {
     try {

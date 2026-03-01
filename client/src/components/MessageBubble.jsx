@@ -132,17 +132,40 @@ function TransferCardInteractive({ content, isUser, apiUrl }) {
     );
 }
 
-function MessageBubble({ message, avatar, characterName, apiUrl }) {
+function MessageBubble({ message, avatar, characterName, apiUrl, onRetry }) {
     const isUser = message.role === 'user';
     const content = message.content || '';  // null-safe: old DB records may have null content
     const { lang } = useLanguage();
 
     if (message.role === 'system') {
+        const isApiError = content.includes('API Error');
         return (
-            <div style={{ textAlign: 'center', margin: '8px 0' }}>
-                <span style={{ fontSize: '12px', color: '#aaa', backgroundColor: '#f0f0f0', padding: '3px 10px', borderRadius: '10px' }}>
+            <div style={{ textAlign: 'center', margin: '8px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px' }}>
+                <span style={{
+                    fontSize: '12px',
+                    color: isApiError ? '#c0392b' : '#aaa',
+                    backgroundColor: isApiError ? '#fff1f1' : '#f0f0f0',
+                    padding: '5px 12px',
+                    borderRadius: '10px',
+                    border: isApiError ? '1px solid #ffc0c0' : 'none',
+                    maxWidth: '85%',
+                    wordBreak: 'break-word'
+                }}>
                     {content.replace('[System] ', '')}
                 </span>
+                {isApiError && onRetry && (
+                    <button
+                        onClick={() => onRetry(message.id)}
+                        style={{
+                            background: '#fff', border: '1px solid #ffc0c0', color: '#c0392b',
+                            borderRadius: '12px', padding: '4px 12px', fontSize: '11px',
+                            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px',
+                            boxShadow: '0 2px 4px rgba(255,192,192,0.2)'
+                        }}
+                    >
+                        🔄 {lang === 'en' ? 'Retry Generation' : '重新生成'}
+                    </button>
+                )}
             </div>
         );
     }
