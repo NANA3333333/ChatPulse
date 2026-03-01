@@ -9,12 +9,9 @@ import MomentsFeed from './components/MomentsFeed';
 import SettingsPanel from './components/SettingsPanel';
 import ChatSettingsDrawer from './components/ChatSettingsDrawer';
 import AddCharacterModal from './components/AddCharacterModal';
-import AdminDashboard from './components/AdminDashboard';
 import './App.css';
 import { MessageSquare, Users, Compass, Settings, UserPlus, Globe, UsersRound, LogOut, Shield } from 'lucide-react';
 import { useLanguage } from './LanguageContext';
-import { useAuth } from './AuthContext';
-import Login from './components/Login';
 
 // Allow VITE config if available, otherwise dynamically use the current host IP/Domain
 const PROTOCOL = window.location.protocol;
@@ -23,7 +20,6 @@ const API_URL = import.meta.env.VITE_API_URL || `${PROTOCOL}//${HOST}:8001/api`;
 const WS_URL = import.meta.env.VITE_WS_URL || `ws://${HOST}:8001`;
 
 function App() {
-  const { token, logout } = useAuth();
   const { t, lang, toggleLanguage } = useLanguage();
   const [activeTab, setActiveTab] = useState('chats'); // 'chats', 'contacts', 'settings'
   const [activeContactId, setActiveContactId] = useState(null);
@@ -49,9 +45,8 @@ function App() {
   const processedMessagesRef = useRef(new Set());
 
   const fetchContacts = useCallback(() => {
-    if (!token) return;
     fetch(`${API_URL}/characters`, {
-      headers: { 'Authorization': `Bearer ${token}` }
+      headers: { 'Authorization': `Bearer DUMMY_TOKEN` }
     })
       .then(res => {
         if (!res.ok) throw new Error('API Error');
@@ -80,13 +75,9 @@ function App() {
   // 1. Fetch Contacts (Characters) and Profile on mount
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (!token) {
-      setIsLoaded(true);
-      return;
-    }
     fetchContacts();
     const headers = {
-      'Authorization': `Bearer ${token}`
+      'Authorization': `Bearer DUMMY_TOKEN`
     };
 
     fetch(`${API_URL}/user`, { headers })
@@ -257,10 +248,6 @@ function App() {
 
   const isViewingList = (activeTab === 'contacts' || (activeTab === 'chats' && !activeContactId && !activeGroupId));
 
-  if (!token) {
-    return <Login apiUrl={API_URL} />;
-  }
-
   if (!isLoaded) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', backgroundColor: 'var(--bg-color, #f5f5f5)' }}>
@@ -294,14 +281,6 @@ function App() {
           </button>
           <button className={`nav-icon ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')} title={lang === 'en' ? 'Settings — Global configuration' : '设置 — 全局设置'}>
             <Settings size={24} />
-          </button>
-          {userProfile?.username === 'Nana' && (
-            <button className={`nav-icon ${activeTab === 'admin' ? 'active' : ''}`} onClick={() => setActiveTab('admin')} title={lang === 'en' ? 'Admin Dashboard' : '管理后台'} style={{ color: 'var(--accent-color)' }}>
-              <Shield size={24} />
-            </button>
-          )}
-          <button className="nav-icon" onClick={logout} title={lang === 'en' ? 'Logout' : '退出登录'} style={{ color: '#ff4d4f' }}>
-            <LogOut size={24} />
           </button>
         </div>
       </nav>
@@ -436,11 +415,7 @@ function App() {
       {/* 3. Right Column (Chat Area / Content) — hidden on contacts tab */}
       {activeTab !== 'contacts' && (
         <div className="right-column" style={{ flexDirection: 'row', backgroundColor: activeTab === 'settings' ? '#f5f5f5' : '#fff' }}>
-          {activeTab === 'admin' ? (
-            <div style={{ flex: 1, height: '100%', overflowY: 'auto', minWidth: 0, minHeight: 0 }}>
-              <AdminDashboard apiUrl={API_URL} />
-            </div>
-          ) : activeTab === 'settings' ? (
+          {activeTab === 'settings' ? (
             <div style={{ flex: 1, height: '100%', overflowY: 'auto', minWidth: 0, minHeight: 0 }}>
               <SettingsPanel
                 apiUrl={API_URL}

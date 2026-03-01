@@ -10,7 +10,6 @@ const cors = require('cors');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const { getUserDb } = require('./db');
-const authDb = require('./authDb');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'chatpulse_super_secret_key';
 const { getEngine } = require('./engine');
@@ -67,17 +66,16 @@ wss.on('connection', (ws) => {
         try {
             const data = JSON.parse(message);
             if (data.type === 'auth') {
-                const decoded = jwt.verify(data.token, JWT_SECRET);
-                ws.userId = decoded.id;
-                const clients = getWsClients(decoded.id);
+                ws.userId = 'admin';
+                const clients = getWsClients('admin');
                 clients.add(ws);
 
                 // Spin up user-specific engine on first connect
-                const engine = getEngine(decoded.id);
+                const engine = getEngine('admin');
                 engine.setGroupChainCallback(triggerGroupAIChain);
                 engine.startEngine(clients);
                 engine.startGroupProactiveTimers(clients);
-                console.log(`[WS] Authenticated & Engine Started for user: ${decoded.username}`);
+                console.log(`[WS] Authenticated & Engine Started for user: admin`);
             }
         } catch (e) {
             console.error('[WS] Auth or Engine Start Error:', e.message);
@@ -109,66 +107,19 @@ app.post('/api/upload', upload.any(), (req, res) => {
 });
 
 // ─── AUTHENTICATION MIDDLEWARE ──────────────────────────────────────────
-authDb.initAuthDb();
-
+// Bypass JWT for Single-User Local Deployment
 const authMiddleware = (req, res, next) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'Unauthorized' });
-    }
-    const token = authHeader.split(' ')[1];
-    try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        req.user = decoded;
-        req.db = getUserDb(req.user.id);
-        req.engine = getEngine(req.user.id);
-        req.memory = getMemory(req.user.id);
-        next();
-    } catch (e) {
-        return res.status(401).json({ error: 'Invalid token' });
-    }
+    req.user = { id: 'admin', username: 'admin' };
+    req.db = getUserDb(req.user.id);
+    req.engine = getEngine(req.user.id);
+    req.memory = getMemory(req.user.id);
+    next();
 };
-
-// ─── AUTH ROUTES ────────────────────────────────────────────────────────
-app.post('/api/auth/register', (req, res) => {
-    try {
-        const { username, password, inviteCode } = req.body;
-        if (!username || !password) return res.status(400).json({ error: 'Missing username or password' });
-        const result = authDb.createUser(username, password, inviteCode);
-        if (!result.success) return res.status(400).json({ error: result.error });
-        const token = jwt.sign({ id: result.user.id, username: result.user.username }, JWT_SECRET, { expiresIn: '30d' });
-        getUserDb(result.user.id);
-        res.json({ success: true, token, user: result.user });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/auth/login', (req, res) => {
-    try {
-        const { username, password } = req.body;
-        const result = authDb.verifyUser(username, password);
-        if (!result.success) return res.status(401).json({ error: result.error });
-        const token = jwt.sign({ id: result.user.id, username: result.user.username }, JWT_SECRET, { expiresIn: '30d' });
-        getUserDb(result.user.id);
-        res.json({ success: true, token, user: result.user });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/auth/me', authMiddleware, (req, res) => {
-    res.json({ success: true, user: req.user });
-});
 
 // ─── SYSTEM ROUTES ────────────────────────────────────────────────────────
 app.get('/api/system/export', async (req, res) => {
     try {
-        const token = req.query.token;
-        if (!token) return res.status(401).send('Unauthorized');
-        const decoded = jwt.verify(token, JWT_SECRET);
-        const userId = decoded.id;
-
+        const userId = 'admin';
         getUserDb(userId); // ensure db is initialized
         const dbPath = path.join(__dirname, '..', 'data', `chatpulse_user_${userId}.db`);
         if (!fs.existsSync(dbPath)) return res.status(404).send('Database not found');
@@ -236,33 +187,7 @@ app.post('/api/system/import', authMiddleware, upload.single('db_file'), async (
     }
 });
 
-// ─── ADMIN ROUTES ───────────────────────────────────────────────────────
-const adminMiddleware = (req, res, next) => {
-    if (!req.user || req.user.username !== 'Nana') {
-        return res.status(403).json({ error: 'Forbidden. Admin level restricted.' });
-    }
-    next();
-};
-
-app.get('/api/admin/invites', authMiddleware, adminMiddleware, (req, res) => {
-    try {
-        const code = authDb.generateInviteCode();
-        res.json({ success: true, code });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/admin/users', authMiddleware, adminMiddleware, (req, res) => {
-    try {
-        const users = authDb.getAllUsers();
-        res.json({ success: true, users });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// REST API ROUTES
+// ─── REST API ROUTES
 // ─────────────────────────────────────────────────────────────
 
 // 0.5 Get User Profile
