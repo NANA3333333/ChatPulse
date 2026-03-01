@@ -12,7 +12,8 @@ function AddCharacterModal({ isOpen, onClose, onAdd, apiUrl }) {
         api_endpoint: '',
         api_key: '',
         model_name: '',
-        affinity: 50
+        affinity: 50,
+        wallet: 200
     });
 
     const [genQuery, setGenQuery] = useState('');
@@ -75,7 +76,8 @@ function AddCharacterModal({ isOpen, onClose, onAdd, apiUrl }) {
                 name: data.character.name || prev.name,
                 avatar: data.character.avatar || prev.avatar,
                 persona: data.character.persona || prev.persona,
-                affinity: data.character.affinity ?? prev.affinity
+                affinity: data.character.affinity ?? prev.affinity,
+                wallet: data.character.wallet ?? prev.wallet
             }));
         } catch (e) {
             alert(lang === 'en' ? 'Generation Failed: ' + e.message : '生成角色失败: ' + e.message);
@@ -163,6 +165,11 @@ function AddCharacterModal({ isOpen, onClose, onAdd, apiUrl }) {
                     <div>
                         <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 'bold' }}>Initial Affinity (0-100)</label>
                         <input type="number" min="0" max="100" value={formData.affinity} onChange={e => setFormData({ ...formData, affinity: parseInt(e.target.value) || 0 })}
+                            style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px', boxSizing: 'border-box' }} />
+                    </div>
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 'bold' }}>{lang === 'en' ? 'Initial Wallet Balance' : '初始钱包余额'}</label>
+                        <input type="number" min="0" step="10" value={formData.wallet} onChange={e => setFormData({ ...formData, wallet: parseFloat(e.target.value) || 0 })}
                             style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px', boxSizing: 'border-box' }} />
                     </div>
 
