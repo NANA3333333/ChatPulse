@@ -1624,20 +1624,21 @@ Guidelines:
                             wsClients.forEach(c => { if (c.readyState === 1) c.send(payload); });
 
                             // Detect @mentions in char's own reply and schedule secondary chain
-                            // Note: We use a more permissive regex because Chinese text often lacks spaces around @Name
-                            const charMentionMatches = [...cleanReply.matchAll(/@([^\s@，。！？；：“”‘’（）【】《》]+)/g)].map(m => m[1].toLowerCase());
-                            if (charMentionMatches.length > 0) {
-                                const allGroupChars = group.members.filter(m => m.member_id !== 'user' && m.member_id !== char.id);
-                                const secondaryIds = allGroupChars
-                                    .filter(m => { const c = db.getCharacter(m.member_id); return c && charMentionMatches.includes(c.name.toLowerCase()); })
-                                    .map(m => m.member_id);
-                                if (secondaryIds.length > 0) {
-                                    if (noChainGroups.has(groupId)) {
-                                        console.log(`[GroupChat] ${char.name} mentioned ${secondaryIds.join(',')} — secondary chain BLOCKED (no-chain mode ON)`);
-                                    } else {
-                                        console.log(`[GroupChat] ${char.name} mentioned ${secondaryIds.join(',')} — queuing secondary reply after current chain`);
-                                        pendingSecondaryChains.push(secondaryIds);
-                                    }
+                            // Robust substring matching to handle Chinese text without spaces (e.g. "@Grok你好")
+                            const lowerReply = cleanReply.toLowerCase();
+                            const allGroupChars = group.members.filter(m => m.member_id !== 'user' && m.member_id !== char.id);
+                            const secondaryIds = allGroupChars
+                                .filter(m => {
+                                    const c = db.getCharacter(m.member_id);
+                                    return c && lowerReply.includes(`@${c.name.toLowerCase()}`);
+                                })
+                                .map(m => m.member_id);
+                            if (secondaryIds.length > 0) {
+                                if (noChainGroups.has(groupId)) {
+                                    console.log(`[GroupChat] ${char.name} mentioned ${secondaryIds.join(',')} — secondary chain BLOCKED (no-chain mode ON)`);
+                                } else {
+                                    console.log(`[GroupChat] ${char.name} mentioned ${secondaryIds.join(',')} — queuing secondary reply after current chain`);
+                                    pendingSecondaryChains.push(secondaryIds);
                                 }
                             }
 
@@ -1700,11 +1701,14 @@ app.post('/api/groups/:id/messages', authMiddleware, async (req, res) => {
         // Parse @mentions from message content (user only can do @all)
         const allRef = /@(?:all|全体成员)/i.test(content);
         const isAtAll = allRef; // only user (sender) can use @all
-        // Permissive regex for Chinese/no-space text
-        const mentionedNames = [...content.matchAll(/@([^\s@，。！？；：“”‘’（）【】《》]+)/g)].map(m => m[1].toLowerCase());
+        // Permissive substring matching for Chinese/no-space text
+        const lowerContent = content.toLowerCase();
         const charMembers = group.members.filter(m => m.member_id !== 'user');
         const mentionedIds = charMembers
-            .filter(m => { const c = db.getCharacter(m.member_id); return c && mentionedNames.includes(c.name.toLowerCase()); })
+            .filter(m => {
+                const c = db.getCharacter(m.member_id);
+                return c && lowerContent.includes(`@${c.name.toLowerCase()}`);
+            })
             .map(m => m.member_id);
 
         // Debounce: reset timer each time user sends a message — AI chain fires 1.5s after LAST message
