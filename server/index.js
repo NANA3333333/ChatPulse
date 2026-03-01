@@ -1701,7 +1701,7 @@ const clientDistPath = path.join(__dirname, '../client/dist');
 app.use(express.static(clientDistPath));
 
 // Catch-all route to serve the React app for any unhandled paths (client-side routing)
-app.get('*', (req, res) => {
+app.get(/(.*)/, (req, res) => {
     res.sendFile(path.join(clientDistPath, 'index.html'));
 });
 
