@@ -129,7 +129,7 @@ body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background-color: var(--right-bg);
   color: var(--text-primary);
-  height: 100vh;
+  height: 100dvh;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -145,7 +145,7 @@ body {
 .app-container {
   display: flex;
   width: 100vw;
-  height: 100vh;
+  height: 100dvh;
   background-color: var(--card-bg);
   box-shadow: 0 0 30px rgba(123, 159, 224, 0.12);
 }
@@ -233,7 +233,7 @@ body {
   border-radius: 8px;
   border: 1px solid var(--input-border);
   background-color: rgba(255, 255, 255, 0.7);
-  font-size: 13px;
+  font-size: 16px;
   outline: none;
   transition: all 0.3s;
 }
@@ -549,7 +549,7 @@ body {
   background: transparent;
   resize: none;
   outline: none;
-  font-size: 15px;
+  font-size: 16px;
   font-family: inherit;
   color: var(--text-primary);
 }
@@ -715,7 +715,7 @@ body {
   background-color: rgba(0, 0, 0, 0.05);
 }
 
-@media (max-width: 600px) {
+@media (max-width: 768px) {
   .app-container {
     flex-direction: column;
   }
