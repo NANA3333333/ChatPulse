@@ -28,6 +28,7 @@ function App() {
   const [newIncomingMessage, setNewIncomingMessage] = useState(null);
   const [activeDrawer, setActiveDrawer] = useState(null); // 'memo', 'diary', or null
   const [userProfile, setUserProfile] = useState(null);
+  const [isLoaded, setIsLoaded] = useState(false);
   const [engineState, setEngineState] = useState({});
   const [showAddCharModal, setShowAddCharModal] = useState(false);
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
@@ -72,7 +73,11 @@ function App() {
     fetchContacts();
     fetch(`${API_URL}/user`)
       .then(res => res.json())
-      .then(data => setUserProfile(data));
+      .then(data => {
+        setUserProfile(data);
+        // Delaying the loading state slightly to ensure CSS variables have time to apply
+        setTimeout(() => setIsLoaded(true), 100);
+      });
     fetch(`${API_URL}/groups`)
       .then(res => res.json())
       .then(data => setGroups(data))
@@ -209,6 +214,14 @@ function App() {
   }, [userProfile]);
 
   const isViewingList = (activeTab === 'contacts' || (activeTab === 'chats' && !activeContactId && !activeGroupId));
+
+  if (!isLoaded) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', backgroundColor: 'var(--bg-color, #f5f5f5)' }}>
+        <div className="spin" style={{ width: '40px', height: '40px', border: '4px solid var(--accent-color, #07c160)', borderTopColor: 'transparent', borderRadius: '50%' }}></div>
+      </div>
+    );
+  }
 
   return (
     <div className={`app-container tab-${activeTab} ${activeContactId || activeGroupId ? 'has-active-chat' : 'no-active-chat'} ${isViewingList ? 'viewing-list' : 'viewing-content'}`}>
