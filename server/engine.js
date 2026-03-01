@@ -6,22 +6,6 @@ const { setDiaryPassword } = require('./db');
 // Store active timers per character
 const timers = new Map();
 
-// Store ST synced contexts
-const stContextMap = new Map();
-
-function updateSTContext(stCharId, contextData) {
-    stContextMap.set(stCharId, contextData);
-    // Auto-link to ChatPulse characters by name
-    const allChars = db.getCharacters();
-    const match = allChars.find(c => c.name.toLowerCase() === contextData.name.toLowerCase());
-    if (match) {
-        stContextMap.set(match.id, contextData);
-        console.log(`[ST-ChatPulse Bridge] Context synced and linked for character: ${match.name} (ID: ${match.id})`);
-    } else {
-        console.log(`[ST-ChatPulse Bridge] Context synced for ST char ${contextData.name}, but no matching ChatPulse character found yet.`);
-    }
-}
-
 // Generate a random delay between min and max minutes
 function getRandomDelayMs(min, max) {
     const minMs = min * 60 * 1000;
@@ -102,22 +86,6 @@ ${timeContext}
 ${pressureContext}${gossipContext}
 ${character.diary_password ? `[Secret Diary Password]: Your private diary is locked with the password "${character.diary_password}". Only YOU know this. If the user sincerely earns your trust or emotionally moves you, you may choose to reveal it naturally in dialogue. Do NOT output [DIARY_PASSWORD] tag unless directly asked to reveal it.\n` : ''}
 ${isTimerWakeup ? '[CRITICAL WAKEUP NOTICE]: Your previously self-scheduled timer has just expired! You MUST now proactively send the message you promised to send when you set the [TIMER]. Speak to the user now!\n\n' : ''}${character.system_prompt || defaultGuidelines}`;
-
-    // --- SILLY TAVERN CONTEXT BRIDGING ---
-    const stContext = stContextMap.get(character.id);
-    if (stContext) {
-        prompt += `\n\n=== MAIN STORYLINE CONTEXT (From SillyTavern) ===
-You are ALSO currently participating in a main storyline chat with the user in another interface. 
-Here is your current scenario and the most recent events of that main story:
-[Scenario]: ${stContext.scenario || 'N/A'}
-
-[Recent Main Story Chat History]:
-${stContext.history.map(m => `[${m.name}]: ${m.mes}`).join('\n')}
-
-**IMPORTANT**: You can reference the events/feelings from this main storyline in your response here (e.g. if you just argued there, you might be mad here, or post a sad Moment). Do NOT break character. You are the EXACT SAME PERSON.
-==================================================\n`;
-    }
-    // -------------------------------------
 
     // Extract recent memory context to guide the prompt
     const recentInput = contextMessages.slice(-2).map(m => m.content).join(' ');
@@ -815,12 +783,14 @@ function startGroupProactiveTimers(wsClients) {
 }
 
 module.exports = {
-    handleUserMessage,
-    stopTimer,
-    setGroupChainCallback,
     startEngine,
-    startGroupProactiveTimers,
-    broadcastWalletSync,
+    stopTimer,
+    handleUserMessage,
     broadcastNewMessage,
-    updateSTContext
+    broadcastWalletSync,
+    triggerJealousyCheck,
+    startGroupProactiveTimers,
+    stopGroupProactiveTimer,
+    scheduleGroupProactive,
+    setGroupChainCallback
 };
