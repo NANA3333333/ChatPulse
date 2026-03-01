@@ -84,6 +84,10 @@ function App() {
 
         // Delaying the loading state slightly to ensure CSS variables have time to apply
         setTimeout(() => setIsLoaded(true), 50);
+      })
+      .catch(err => {
+        console.error('Failed fetching user profile:', err);
+        setIsLoaded(true); // Always render the app
       });
     fetch(`${API_URL}/groups`)
       .then(res => res.json())
