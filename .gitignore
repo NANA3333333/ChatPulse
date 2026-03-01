@@ -12,3 +12,9 @@ server/uploads/
 # Client specific
 client/dist/
 client/node_modules/
+
+# Test and seed files
+test*.js
+server/test*.js
+server/seed*.js
+client/test*.js
