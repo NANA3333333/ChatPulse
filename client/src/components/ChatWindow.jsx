@@ -52,7 +52,7 @@ function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineSt
         if (!contact?.id) return;
         setMessages([]);
         setHasMore(false);
-        fetch(`${apiUrl} /messages/${contact.id}?limit = ${PAGE_SIZE} `)
+        fetch(`${apiUrl}/messages/${contact.id}?limit=${PAGE_SIZE}`)
             .then(res => res.json())
             .then(data => {
                 setMessages(data);
@@ -121,7 +121,7 @@ function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineSt
         const hideCmd = parseHideCommand(text.trim());
         if (hideCmd) {
             if (hideCmd.cmd === 'hide') {
-                const res = await fetch(`${apiUrl} /messages/${currentContactId}/hide`, {
+                const res = await fetch(`${apiUrl}/messages/${currentContactId}/hide`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ startIdx: hideCmd.start, endIdx: hideCmd.end })
