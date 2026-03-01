@@ -1365,7 +1365,8 @@ app.post('/api/groups/:id/messages', async (req, res) => {
         if (!group) return res.status(404).json({ error: 'Group not found' });
 
         // Save user message
-        const userProfile = db.getUserProfile?.() || { name: 'User', avatar: '' };
+        const baseProfile = typeof db.getUserProfile === 'function' ? db.getUserProfile() : null;
+        const userProfile = baseProfile || { name: 'User', avatar: '' };
         const msgId = db.addGroupMessage(req.params.id, 'user', content, userProfile.name, userProfile.avatar);
         const savedMsg = { id: msgId, group_id: req.params.id, sender_id: 'user', content, timestamp: Date.now(), sender_name: userProfile.name, sender_avatar: userProfile.avatar };
 
