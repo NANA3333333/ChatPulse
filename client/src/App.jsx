@@ -109,7 +109,7 @@ function App() {
       })
       .then(data => setGroups(data))
       .catch(err => console.error('Failed to load groups:', err));
-  }, [token]);
+  }, []);
 
   // Listen for iframe postMessage from SillyTavern parent
   useEffect(() => {
@@ -130,11 +130,10 @@ function App() {
 
   // 2. Setup WebSocket for real-time messages
   useEffect(() => {
-    if (!token) return;
-    const ws = new WebSocket(`${WS_URL}/?token=${token}`);
+    const ws = new WebSocket(`${WS_URL}/?token=DUMMY_TOKEN`);
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'auth', token: token }));
+      ws.send(JSON.stringify({ type: 'auth', token: 'DUMMY_TOKEN' }));
     };
 
     ws.onmessage = (event) => {
@@ -174,7 +173,7 @@ function App() {
       }
     };
     return () => ws.close();
-  }, [token, fetchContacts]);
+  }, [fetchContacts]);
 
   // Update contact last message preview on new incoming message
   useEffect(() => {
