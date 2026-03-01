@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, Users, Smile, Paperclip, X, Settings, Trash2, UserMinus, ArrowRightLeft, Gift } from 'lucide-react';
+import { Send, Users, Smile, Paperclip, X, Settings, Trash2, UserMinus, ArrowRightLeft, Gift, ChevronLeft } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 
 const quickEmojis = ['😀', '😂', '🥺', '😡', '🥰', '👍', '🙏', '💔', '🔥', '✨', '🥳', '😭', '😎', '🙄', '🤔'];
@@ -244,7 +244,7 @@ function GroupManageDrawer({ group, apiUrl, resolveSender, onClose, lang }) {
 }
 
 /* ─── Main GroupChatWindow ─── */
-function GroupChatWindow({ group, apiUrl, allContacts, userProfile, newGroupMessage, typingIndicators = [] }) {
+function GroupChatWindow({ group, apiUrl, allContacts, userProfile, newGroupMessage, typingIndicators, onBack }) {
     const { lang } = useLanguage();
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState('');
@@ -386,6 +386,9 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, newGroupMess
                 {/* Header */}
                 <div className="chat-header">
                     <div className="chat-header-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <button className="mobile-back-btn" onClick={onBack} title="Back">
+                            <ChevronLeft size={24} />
+                        </button>
                         <Users size={20} />
                         {group.name}
                         <span style={{ fontSize: '12px', color: '#999' }}>({group.members?.length || 0})</span>

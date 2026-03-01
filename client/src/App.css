@@ -689,6 +689,139 @@ body {
   margin-top: 30px;
 }
 
+.loading-t.moments-empty-text {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 15px;
+  padding: 40px;
+}
+
+/* ─── Mobile / Iframe Responsive Adjustments ─── */
+.mobile-back-btn {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 5px;
+  margin-right: 10px;
+  border-radius: 50%;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s;
+}
+
+.mobile-back-btn:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+@media (max-width: 600px) {
+  .app-container {
+    flex-direction: column;
+  }
+
+  /* Sidebar becomes bottom tab bar */
+  .sidebar-nav {
+    width: 100%;
+    height: 55px;
+    /* Fixed height for bottom bar */
+    flex-direction: row;
+    padding: 0;
+    justify-content: space-around;
+    order: 3;
+    /* Move to bottom */
+    border-top: 1px solid var(--card-border);
+  }
+
+  .my-avatar {
+    display: none;
+  }
+
+  .nav-icons {
+    flex-direction: row;
+    width: auto;
+    gap: 5px;
+    height: 100%;
+    align-items: stretch;
+    justify-content: center;
+    flex: 1;
+  }
+
+  .nav-icons-bottom {
+    flex-direction: row;
+    margin-top: 0;
+    height: 100%;
+    align-items: stretch;
+    justify-content: center;
+    display: flex;
+    flex: 1;
+  }
+
+  .nav-icon {
+    padding: 0 15px;
+    height: 100%;
+    border-radius: 0;
+    /* flat for tabs */
+  }
+
+  /* Middle Column takes full width unless right column is active */
+  .middle-column {
+    width: 100%;
+    order: 1;
+    flex: 1;
+    border-right: none;
+  }
+
+  /* Hide Middle Column when viewing a Chat or Settings/Moments */
+  .app-container.has-active-chat .middle-column,
+  .app-container.tab-discover .middle-column,
+  .app-container.tab-settings .middle-column {
+    display: none;
+  }
+
+  /* Right Column styling */
+  .right-column {
+    order: 1;
+    flex: 1;
+    width: 100%;
+  }
+
+  /* Hide Right Column when viewing contact list */
+  .app-container.tab-contacts .right-column,
+  .app-container.tab-chats.no-active-chat .right-column {
+    display: none;
+  }
+
+  /* Show Back button in Chat Header */
+  .mobile-back-btn {
+    display: flex;
+  }
+
+  /* Hide Bottom Tab Bar when inside a chat for more typing space */
+  .app-container.has-active-chat .sidebar-nav {
+    display: none;
+  }
+
+  /* Drawers (Memo, Settings) should take full width on mobile */
+  .memory-drawer,
+  .chat-settings-drawer {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    z-index: 100;
+    border-left: none;
+  }
+
+  /* Input area adjustments */
+  .input-area {
+    height: 120px;
+    /* smaller for phone */
+  }
+}
+
+
 /* ═══ Moments Feed ═══ */
 .moments-feed {
   width: 100%;
@@ -1004,5 +1137,90 @@ body {
 
   100% {
     background-position: 0% 50%;
+  }
+}
+
+/* ─── Mobile / Iframe Responsive Adjustments ─── */
+.mobile-back-btn {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 50%;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s;
+}
+
+.mobile-back-btn:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+@media (max-width: 600px) {
+  .app-container {
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+  }
+
+  .sidebar-nav {
+    flex-direction: row;
+    width: 100%;
+    height: 55px;
+    padding: 0 15px;
+    justify-content: space-between;
+    align-items: center;
+    order: 2;
+  }
+
+  .nav-icons {
+    flex-direction: row;
+    gap: 20px;
+    margin: 0;
+  }
+
+  .nav-icons-bottom,
+  .my-avatar img {
+    margin: 0;
+    margin-bottom: 0;
+  }
+
+  .my-avatar img {
+    width: 35px;
+    height: 35px;
+  }
+
+  /* When viewing the list (Contacts / Chat List) */
+  .app-container.viewing-list .right-column {
+    display: none;
+  }
+
+  .app-container.viewing-list .middle-column {
+    display: flex;
+    width: 100%;
+    flex: 1;
+    order: 1;
+    border-right: none;
+  }
+
+  /* When viewing content (A chat window, Moments, or Settings) */
+  .app-container.viewing-content .middle-column {
+    display: none;
+  }
+
+  .app-container.viewing-content .right-column {
+    display: flex;
+    order: 1;
+    flex: 1;
+    width: 100%;
+    height: calc(100vh - 55px);
+    height: calc(100dvh - 55px);
+    overflow: hidden;
+  }
+
+  .mobile-back-btn {
+    display: flex;
   }
 }

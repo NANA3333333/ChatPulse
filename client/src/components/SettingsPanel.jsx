@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Trash2, Edit3, Save, RefreshCw, Palette, Download, Upload, FileText, ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
+import { User, Trash2, Edit3, Save, RefreshCw, Palette, Download, Upload, FileText, ChevronDown, ChevronRight, Sparkles, ChevronLeft } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 
 const getDefaultGuidelines = (lang) => {
@@ -39,7 +39,7 @@ const getDefaultGuidelines = (lang) => {
 };
 
 
-function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate }) {
+function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) {
     const { t, lang } = useLanguage();
     const [profile, setProfile] = useState(null);
     const [isEditing, setIsEditing] = useState(false);
@@ -326,6 +326,11 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate }) {
                 {/* User Profile Section */}
                 <div style={{ backgroundColor: '#fff', padding: '20px', borderRadius: '8px', border: '1px solid #eee' }}>
                     <h2 style={{ margin: '0 0 20px 0', fontSize: '18px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        {onBack && (
+                            <button className="mobile-back-btn" onClick={onBack} title="Back" style={{ display: 'flex', padding: 0, marginRight: '5px' }}>
+                                <ChevronLeft size={24} />
+                            </button>
+                        )}
                         <User size={20} /> {t('User Profile')}
                     </h2>
 

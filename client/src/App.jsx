@@ -79,6 +79,23 @@ function App() {
       .catch(err => console.error('Failed to load groups:', err));
   }, []);
 
+  // Listen for iframe postMessage from SillyTavern parent
+  useEffect(() => {
+    const handleMessage = (event) => {
+      if (event.data?.type === 'st_chat_changed') {
+        const { characterId } = event.data;
+        if (characterId) {
+          fetchContacts(); // Ensure we have the latest list in case ST auto-created them
+          setActiveTab('chats');
+          setActiveContactId(characterId);
+          setActiveGroupId(null);
+        }
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [fetchContacts, setActiveContactId, setActiveGroupId, setActiveTab]);
+
   // 2. Setup WebSocket for real-time messages
   useEffect(() => {
     const ws = new WebSocket(WS_URL);
@@ -111,6 +128,8 @@ function App() {
           if (userWallet !== null && userWallet !== undefined) {
             setUserProfile(prev => prev ? { ...prev, wallet: userWallet } : prev);
           }
+        } else if (msg.type === 'refresh_contacts') {
+          fetchContacts();
         }
       } catch (e) {
         console.error('WS Parse Error', e);
@@ -189,8 +208,10 @@ function App() {
     }
   }, [userProfile]);
 
+  const isViewingList = (activeTab === 'contacts' || (activeTab === 'chats' && !activeContactId && !activeGroupId));
+
   return (
-    <div className="app-container">
+    <div className={`app-container tab-${activeTab} ${activeContactId || activeGroupId ? 'has-active-chat' : 'no-active-chat'} ${isViewingList ? 'viewing-list' : 'viewing-content'}`}>
       {/* 1. Very Left Sidebar (Navigation) */}
       <nav className="sidebar-nav">
         <div className="my-avatar" onClick={() => setActiveTab('settings')} style={{ cursor: 'pointer' }}>
@@ -349,7 +370,7 @@ function App() {
       {activeTab !== 'contacts' && (
         <div className="right-column" style={{ flexDirection: 'row', backgroundColor: activeTab === 'settings' ? '#f5f5f5' : '#fff' }}>
           {activeTab === 'settings' ? (
-            <div style={{ flex: 1, height: '100%', overflow: 'auto' }}>
+            <div style={{ flex: 1, height: '100%', overflowY: 'auto', minWidth: 0, minHeight: 0 }}>
               <SettingsPanel
                 apiUrl={API_URL}
                 contacts={contacts}
@@ -357,11 +378,12 @@ function App() {
                   fetchContacts(); // Refetch if deleted
                 }}
                 onProfileUpdate={setUserProfile}
+                onBack={() => setActiveTab('chats')}
               />
             </div>
           ) : activeTab === 'discover' ? (
-            <div style={{ flex: 1, height: '100%', overflow: 'hidden' }}>
-              <MomentsFeed apiUrl={API_URL} userProfile={userProfile} />
+            <div style={{ flex: 1, height: '100%', overflowY: 'auto', minWidth: 0, minHeight: 0 }}>
+              <MomentsFeed apiUrl={API_URL} userProfile={userProfile} onBack={() => setActiveTab('chats')} />
             </div>
           ) : activeContactId && activeTab === 'chats' ? (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'row', height: '100%', minWidth: 0 }}>
@@ -376,6 +398,7 @@ function App() {
                   onToggleMemo={() => setActiveDrawer(activeDrawer === 'memo' ? null : 'memo')}
                   onToggleDiary={() => setActiveDrawer(activeDrawer === 'diary' ? null : 'diary')}
                   onToggleSettings={() => setActiveDrawer(activeDrawer === 'settings' ? null : 'settings')}
+                  onBack={() => { setActiveContactId(null); activeContactRef.current = null; }}
                 />
               </div>
               {activeDrawer === 'memo' && (
@@ -414,6 +437,7 @@ function App() {
                 userProfile={userProfile}
                 newGroupMessage={newGroupMessage}
                 typingIndicators={groupTyping[activeGroupId] || []}
+                onBack={() => setActiveGroupId(null)}
               />
             </div>
           ) : (

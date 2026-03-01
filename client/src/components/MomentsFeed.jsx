@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Heart, MessageCircle, Send, Trash2 } from 'lucide-react';
+import { Heart, MessageCircle, Send, Trash2, ChevronLeft } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 
-function MomentsFeed({ apiUrl, userProfile }) {
+function MomentsFeed({ apiUrl, userProfile, onBack }) {
     const { t } = useLanguage();
     const [moments, setMoments] = useState([]);
     const [characters, setCharacters] = useState({});
@@ -130,7 +130,12 @@ function MomentsFeed({ apiUrl, userProfile }) {
     return (
         <div className="moments-feed" style={{ paddingBottom: '80px' }}>
             {/* Cover Photo Area */}
-            <div className="moments-cover" style={{ marginBottom: '20px', backgroundImage: userProfile?.banner ? `url(${userProfile.banner})` : undefined }}>
+            <div className="moments-cover" style={{ marginBottom: '20px', backgroundImage: userProfile?.banner ? `url(${userProfile.banner})` : undefined, position: 'relative' }}>
+                {onBack && (
+                    <button className="mobile-back-btn" onClick={onBack} title="Back" style={{ position: 'absolute', top: '15px', left: '15px', background: 'rgba(0,0,0,0.3)', color: 'white', display: 'flex' }}>
+                        <ChevronLeft size={24} />
+                    </button>
+                )}
                 <div className="moments-cover-user">
                     <span className="moments-cover-name">{userProfile?.name || 'User'}</span>
                     <img src={userProfile?.avatar || 'https://api.dicebear.com/7.x/notionists/svg?seed=User'} alt="Me" className="moments-cover-avatar" />

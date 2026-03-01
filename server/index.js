@@ -24,6 +24,10 @@ app.use(express.json()); // Parses incoming JSON requests
 // Serve static uploaded files
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
 
+// Serve static React frontend
+const clientDistPath = path.join(__dirname, '../client/dist');
+app.use(express.static(clientDistPath));
+
 // Configure Multer for local image uploads
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
@@ -153,6 +157,92 @@ app.get('/api/messages/:characterId', (req, res) => {
         }
         res.json(messages);
     } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 3.5 SillyTavern Context Interception (ST-ChatPulse Bridge)
+app.post('/api/integrations/st/context', (req, res) => {
+    try {
+        const payload = req.body;
+        if (!payload.st_character_id) return res.status(400).json({ error: 'Missing st_character_id' });
+
+        engine.updateSTContext(payload.st_character_id, {
+            name: payload.st_character_name,
+            userName: payload.st_user_name,
+            persona: payload.st_persona,
+            scenario: payload.st_scenario,
+            history: payload.chat_history,
+            lastSynced: Date.now()
+        });
+
+        // Auto-create character if they don't exist in ChatPulse DB
+        const existingChar = db.getCharacter(payload.st_character_id);
+        if (!existingChar) {
+            console.log(`[ST-Sync] Auto-creating missing character in ChatPulse DB: ${payload.st_character_name}`);
+            db.updateCharacter(payload.st_character_id, {
+                id: payload.st_character_id,
+                name: payload.st_character_name || 'ST Character',
+                avatar: payload.st_avatar || `https://api.dicebear.com/7.x/pixel-art/svg?seed=${payload.st_character_id}`
+            });
+            wsClients.forEach(ws => {
+                if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'refresh_contacts' }));
+            });
+        }
+
+        res.json({ success: true, message: 'Context synced from SillyTavern' });
+    } catch (e) {
+        console.error('[ST-ChatPulse API] Error syncing context:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 3.6 SillyTavern Long-Term Memory Sync (ST-ChatPulse Bridge)
+app.post('/api/integrations/st/sync_memory', (req, res) => {
+    try {
+        const payload = req.body;
+        if (!payload.st_character_id || !payload.memory_summary) {
+            return res.status(400).json({ error: 'Missing st_character_id or memory_summary' });
+        }
+
+        // Auto-create character if they don't exist
+        const existingChar = db.getCharacter(payload.st_character_id);
+        if (!existingChar) {
+            console.log(`[ST-Sync] Auto-creating missing character for memory push: ${payload.st_character_name}`);
+            db.updateCharacter(payload.st_character_id, {
+                id: payload.st_character_id,
+                name: payload.st_character_name || 'ST Character',
+                avatar: payload.st_avatar || `https://api.dicebear.com/7.x/pixel-art/svg?seed=${payload.st_character_id}`
+            });
+            wsClients.forEach(ws => {
+                if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'refresh_contacts' }));
+            });
+        }
+
+        // Push memory
+        const memoryData = {
+            time: new Date().toLocaleString(),
+            location: 'SillyTavern',
+            people: payload.st_character_name || 'ST Character',
+            event: 'ST Context Summary',
+            relationships: 'Bond building in SillyTavern',
+            items: '',
+            importance: 8,
+            embedding: null
+        };
+
+        const memId = db.addMemory(payload.st_character_id, memoryData);
+
+        // Let's actually append the summary text into the `event` or `relationships` field
+        // Since it's a summary of the context, let's put it as the 'event'
+        db.updateMemory(memId, {
+            event: payload.memory_summary
+        });
+
+        console.log(`[ST-Sync] Received and saved memory summary for ${payload.st_character_id}`);
+        res.json({ success: true, memory_id: memId });
+    } catch (e) {
+        console.error('[ST-ChatPulse API] Error syncing memory:', e.message);
         res.status(500).json({ error: e.message });
     }
 });
@@ -1675,6 +1765,11 @@ ${isLucky ? `（共${pkt?.count}个红包，你是第${totalClaimed}个抢到的
 
 
 // ─────────────────────────────────────────────────────────────
+// Catch-all for React Router frontend
+app.get(/(.*)/, (req, res) => {
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+});
+
 // Start listening
 console.log('[Express] Attempting to listen on port 8000...');
 const PORT = process.env.PORT || 8001;

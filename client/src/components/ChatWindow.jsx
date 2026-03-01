@@ -3,7 +3,7 @@ import MessageBubble from './MessageBubble';
 import InputBar from './InputBar';
 import TransferModal from './TransferModal';
 import RecommendModal from './RecommendModal';
-import { MoreHorizontal, Brain, BookOpen, EyeOff, Eye, UserPlus } from 'lucide-react';
+import { Send, Smile, Paperclip, Bell, Users, EyeOff, ShieldBan, Trash, BookOpen, Brain, MoreHorizontal, UserPlus, Gift, Heart, UserMinus, ShieldAlert, BadgeInfo, Eye, ChevronLeft } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 
 // Parse /hide 0-xx, /hide xx, /unhide commands
@@ -30,7 +30,7 @@ function SystemMessage({ text }) {
     );
 }
 
-function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineState, onToggleMemo, onToggleDiary, onToggleSettings, userAvatar }) {
+function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineState, onToggleMemo, onToggleDiary, onToggleSettings, userAvatar, onBack }) {
     const { t, lang } = useLanguage();
     const [messages, setMessages] = useState([]);
     const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
@@ -52,7 +52,7 @@ function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineSt
         if (!contact?.id) return;
         setMessages([]);
         setHasMore(false);
-        fetch(`${apiUrl}/messages/${contact.id}?limit=${PAGE_SIZE}`)
+        fetch(`${apiUrl} /messages/${contact.id}?limit = ${PAGE_SIZE} `)
             .then(res => res.json())
             .then(data => {
                 setMessages(data);
@@ -68,7 +68,7 @@ function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineSt
         const oldest = messages[0];
         try {
             const data = await fetch(
-                `${apiUrl}/messages/${contactRef.current?.id}?limit=${PAGE_SIZE}&before=${oldest.id}`
+                `${apiUrl} /messages/${contactRef.current?.id}?limit = ${PAGE_SIZE}& before=${oldest.id} `
             ).then(r => r.json());
             if (data.length > 0) {
                 setMessages(prev => [...data, ...prev]);
@@ -97,7 +97,7 @@ function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineSt
         const isBlocked = engineState?.[contact?.id]?.isBlocked === 1;
         if (isBlocked && !prevBlockedRef.current) {
             setMessages(prev => [...prev, {
-                id: `block-event-${Date.now()}`,
+                id: `block - event - ${Date.now()} `,
                 character_id: contact?.id,
                 role: 'system',
                 content: `[System] ${contact?.name} 将你拉黑了。`,
@@ -121,7 +121,7 @@ function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineSt
         const hideCmd = parseHideCommand(text.trim());
         if (hideCmd) {
             if (hideCmd.cmd === 'hide') {
-                const res = await fetch(`${apiUrl}/messages/${currentContactId}/hide`, {
+                const res = await fetch(`${apiUrl} /messages/${currentContactId}/hide`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ startIdx: hideCmd.start, endIdx: hideCmd.end })
@@ -203,7 +203,13 @@ function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineSt
         }
     };
 
-    if (!contact) return null;
+    if (!contact) {
+        return (
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', width: '100%' }}>
+                <span className="fa-solid fa-spinner fa-spin" style={{ fontSize: '24px', color: 'var(--accent-color)' }}></span>
+            </div>
+        );
+    }
 
     const hiddenCount = messages.filter(m => m.hidden).length;
     // Always show all messages to the user. Hidden = dimmed (AI won't see them).
@@ -213,6 +219,9 @@ function ChatWindow({ contact, allContacts, apiUrl, newIncomingMessage, engineSt
         <>
             <div className="chat-header">
                 <div className="chat-header-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <button className="mobile-back-btn" onClick={onBack} title="Back">
+                        <ChevronLeft size={24} />
+                    </button>
                     {contact.name}
                     {engineState?.[contact.id]?.isBlocked === 1 && <span style={{ color: 'var(--danger)', fontSize: '14px', fontWeight: 'bold' }}>(Blocked) 🚫</span>}
                 </div>
