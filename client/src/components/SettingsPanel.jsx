@@ -712,7 +712,7 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                                 setProfile(p => ({ ...p, group_msg_limit: v }));
                                 fetch(`${apiUrl}/user`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ group_msg_limit: v }) });
                             }}
-                            style={{ width: '100%' }} />
+                            style={{ width: '100%', backgroundSize: `${((profile.group_msg_limit || 20) - 5) * 100 / (100 - 5)}% 100%` }} />
                         <div style={{ fontSize: '11px', color: '#999', marginTop: '4px' }}>
                             {lang === 'en' ? 'Number of recent messages each AI can see in group chat. Higher = richer context, but slightly slower.'
                                 : '控制每个 AI 角色在群聊回复前能看到的最近消息数量。越高上下文越丰富，但响应稍慢。'}
@@ -731,7 +731,7 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                                 setProfile(p => ({ ...p, private_msg_limit_for_group: v }));
                                 fetch(`${apiUrl}/user`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ private_msg_limit_for_group: v }) });
                             }}
-                            style={{ width: '100%' }} />
+                            style={{ width: '100%', backgroundSize: `${((profile.private_msg_limit_for_group ?? 3) - 0) * 100 / (100 - 0)}% 100%` }} />
                         <div style={{ fontSize: '11px', color: '#999', marginTop: '4px' }}>
                             {lang === 'en' ? 'Number of recent private messages injected into group chat context. 0 = disabled.'
                                 : '控制 AI 在群聊中被隐秘注入的近期私聊条数上限，用于生成“心照不宣”的暧昧感。0 = 关闭私聊映射。'}
@@ -750,7 +750,7 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                                 setProfile(p => ({ ...p, group_skip_rate: v }));
                                 fetch(`${apiUrl}/user`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ group_skip_rate: v }) });
                             }}
-                            style={{ width: '100%' }} />
+                            style={{ width: '100%', backgroundSize: `${(Math.round((profile.group_skip_rate || 0) * 100) - 0) * 100 / (50 - 0)}% 100%` }} />
                         <div style={{ fontSize: '11px', color: '#999', marginTop: '4px' }}>
                             {lang === 'en' ? 'Probability each character randomly skips replies. 0% = always reply, 50% = skip ~every other.'
                                 : '每个角色随机跳过回复的概率。0% = 每条必回，50% = 约每2条跳1条。'}
@@ -805,7 +805,7 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                                 setProfile(p => ({ ...p, jealousy_chance: v }));
                                 fetch(`${apiUrl}/user`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jealousy_chance: v }) });
                             }}
-                            style={{ width: '100%' }} />
+                            style={{ width: '100%', backgroundSize: `${(Math.round((profile.jealousy_chance ?? 0.3) * 100) - 0) * 100 / (100 - 0)}% 100%` }} />
                         <div style={{ fontSize: '11px', color: '#999', marginTop: '4px' }}>
                             {lang === 'en' ? 'Probability that a character gets jealous when you chat with someone else. 0% = never, 100% = always.'
                                 : '当你和别人聊天时，角色产生嫉妒的概率。0% = 从不，100% = 总是。'}
@@ -912,14 +912,14 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                             <label style={{ flex: 1, display: 'flex', flexDirection: 'column', fontSize: '14px', color: '#666' }}>
                                 Min Interval (mins):
                                 <div className="autopulse-interval-control" style={{ marginTop: '5px' }}>
-                                    <input type="range" min="0.1" max="120" step="0.1" value={editingContact.interval_min || 0.1} onChange={(e) => setEditingContact({ ...editingContact, interval_min: parseFloat(e.target.value) })} />
+                                    <input type="range" min="0.1" max="120" step="0.1" value={editingContact.interval_min || 0.1} onChange={(e) => setEditingContact({ ...editingContact, interval_min: parseFloat(e.target.value) })} style={{ width: '100%', backgroundSize: `${((editingContact.interval_min || 0.1) - 0.1) * 100 / (120 - 0.1)}% 100%` }} />
                                     <input type="number" step="0.1" value={editingContact.interval_min || 0} onChange={(e) => setEditingContact({ ...editingContact, interval_min: parseFloat(e.target.value) })} className="autopulse-number-input" />
                                 </div>
                             </label>
                             <label style={{ flex: 1, display: 'flex', flexDirection: 'column', fontSize: '14px', color: '#666' }}>
                                 Max Interval (mins):
                                 <div className="autopulse-interval-control" style={{ marginTop: '5px' }}>
-                                    <input type="range" min="0.1" max="120" step="0.1" value={editingContact.interval_max || 0.1} onChange={(e) => setEditingContact({ ...editingContact, interval_max: parseFloat(e.target.value) })} />
+                                    <input type="range" min="0.1" max="120" step="0.1" value={editingContact.interval_max || 0.1} onChange={(e) => setEditingContact({ ...editingContact, interval_max: parseFloat(e.target.value) })} style={{ width: '100%', backgroundSize: `${((editingContact.interval_max || 0.1) - 0.1) * 100 / (120 - 0.1)}% 100%` }} />
                                     <input type="number" step="0.1" value={editingContact.interval_max || 0} onChange={(e) => setEditingContact({ ...editingContact, interval_max: parseFloat(e.target.value) })} className="autopulse-number-input" />
                                 </div>
                             </label>
