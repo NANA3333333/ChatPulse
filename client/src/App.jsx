@@ -218,22 +218,22 @@ function App() {
           <img src={userProfile?.avatar || "https://api.dicebear.com/7.x/shapes/svg?seed=User"} alt="Me" />
         </div>
         <div className="nav-icons">
-          <button className={`nav-icon ${activeTab === 'chats' ? 'active' : ''}`} onClick={() => setActiveTab('chats')} title={lang === 'en' ? 'Chats �?View conversations' : '聊天 �?查看会话列表'}>
+          <button className={`nav-icon ${activeTab === 'chats' ? 'active' : ''}`} onClick={() => setActiveTab('chats')} title={lang === 'en' ? 'Chats — View conversations' : '聊天 — 查看会话列表'}>
             <MessageSquare size={24} />
           </button>
-          <button className={`nav-icon ${activeTab === 'contacts' ? 'active' : ''}`} onClick={() => setActiveTab('contacts')} title={lang === 'en' ? 'Contacts �?Manage characters & groups' : '通讯�?�?管理角色和群�?}>
+          <button className={`nav-icon ${activeTab === 'contacts' ? 'active' : ''}`} onClick={() => setActiveTab('contacts')} title={lang === 'en' ? 'Contacts — Manage characters & groups' : '通讯录 — 管理角色和群聊'}>
             <Users size={24} />
           </button>
-          <button className={`nav-icon ${activeTab === 'discover' ? 'active' : ''}`} onClick={() => setActiveTab('discover')} title={lang === 'en' ? 'Discover �?Moments feed' : '发现 �?朋友圈动�?}>
+          <button className={`nav-icon ${activeTab === 'discover' ? 'active' : ''}`} onClick={() => setActiveTab('discover')} title={lang === 'en' ? 'Discover — Moments feed' : '发现 — 朋友圈动态'}>
             <Compass size={24} />
           </button>
         </div>
         <div className="nav-icons-bottom">
           <button className="nav-icon" onClick={toggleLanguage} title={t('Toggle Language')}>
             <Globe size={24} />
-            <span style={{ fontSize: '10px', marginTop: '4px', fontWeight: 'bold' }}>{lang === 'en' ? '�? : 'EN'}</span>
+            <span style={{ fontSize: '10px', marginTop: '4px', fontWeight: 'bold' }}>{lang === 'en' ? '中' : 'EN'}</span>
           </button>
-          <button className={`nav-icon ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')} title={lang === 'en' ? 'Settings �?Global configuration' : '设置 �?全局设置'}>
+          <button className={`nav-icon ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')} title={lang === 'en' ? 'Settings — Global configuration' : '设置 — 全局设置'}>
             <Settings size={24} />
           </button>
         </div>
@@ -366,7 +366,7 @@ function App() {
 
 
 
-      {/* 3. Right Column (Chat Area / Content) �?hidden on contacts tab */}
+      {/* 3. Right Column (Chat Area / Content) — hidden on contacts tab */}
       {activeTab !== 'contacts' && (
         <div className="right-column" style={{ flexDirection: 'row', backgroundColor: activeTab === 'settings' ? '#f5f5f5' : '#fff' }}>
           {activeTab === 'settings' ? (
