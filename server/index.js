@@ -1788,3 +1788,6 @@ server.listen(PORT, () => {
 engine.setGroupChainCallback(triggerGroupAIChain);
 engine.startEngine(wsClients);
 engine.startGroupProactiveTimers(wsClients);
+module.exports = {
+    triggerGroupAIChain
+};
