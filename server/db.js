@@ -243,6 +243,11 @@ function initDb() {
     } catch (e) {
     }
 
+    // Add memory API config for existing DBs
+    try { db.prepare('ALTER TABLE characters ADD COLUMN memory_api_endpoint TEXT').run(); } catch (e) { }
+    try { db.prepare('ALTER TABLE characters ADD COLUMN memory_api_key TEXT').run(); } catch (e) { }
+    try { db.prepare('ALTER TABLE characters ADD COLUMN memory_model_name TEXT').run(); } catch (e) { }
+
     // Add sender_name and sender_avatar to group_messages (so deleted chars still display)
     try {
         db.prepare('ALTER TABLE group_messages ADD COLUMN sender_name TEXT').run();
