@@ -75,8 +75,15 @@ function App() {
       .then(res => res.json())
       .then(data => {
         setUserProfile(data);
+        if (data.theme) localStorage.setItem('cp_theme', data.theme);
+        if (data.theme_config) {
+          localStorage.setItem('cp_theme_config', typeof data.theme_config === 'string' ? data.theme_config : JSON.stringify(data.theme_config));
+        }
+        if (data.custom_css) localStorage.setItem('cp_custom_css', data.custom_css);
+        if (data.avatar) localStorage.setItem('cp_avatar', data.avatar);
+
         // Delaying the loading state slightly to ensure CSS variables have time to apply
-        setTimeout(() => setIsLoaded(true), 100);
+        setTimeout(() => setIsLoaded(true), 50);
       });
     fetch(`${API_URL}/groups`)
       .then(res => res.json())
