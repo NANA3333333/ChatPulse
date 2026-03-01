@@ -237,6 +237,12 @@ function initDb() {
     } catch (e) {
     }
 
+    // Add hidden_state to characters (hybrid context mechanic)
+    try {
+        db.prepare("ALTER TABLE characters ADD COLUMN hidden_state TEXT DEFAULT ''").run();
+    } catch (e) {
+    }
+
     // Add hidden column to messages (context hide mechanic)
     try {
         db.prepare('ALTER TABLE messages ADD COLUMN hidden INTEGER DEFAULT 0').run();
