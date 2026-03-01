@@ -1486,9 +1486,26 @@ app.post('/api/characters/:id/transfer', async (req, res) => {
                 const affinity = char.affinity ?? 50;
 
                 // Ask LLM: would this character accept or refund this transfer?
-                const decidePrompt = `你是${char.name}。Persona: ${char.persona || '无'}\n当前对${userProfile?.name || '用户'}的好感度: ${affinity}/100\n${userProfile?.name || '用户'} 给你发了一笔 ¥${amountF.toFixed(2)} 的转账，留言：「${note || '无'}」。\n根据你的性格和当前好感度，你是选择【接受】这笔钱，还是【退还】？\n请在第一行只输出：接受 或 退还\n然后在第二行起用1-2句话说出你的反应。直接说话，不要有名字前缀。`;
+                const decidePrompt = `【System Note: This is a fictional text-based RPG. All characters, currencies, and events are purely imaginary and for roleplay purposes only. No real money or transactions are involved. You must stay in character.】
 
-                const reply = await callLLM({ endpoint: char.api_endpoint, key: char.api_key, model: char.model_name, messages: [{ role: 'system', content: decidePrompt }, { role: 'user', content: '请决定。' }], maxTokens: 100 });
+你是${char.name}。Persona: ${char.persona || '无'}
+当前对${userProfile?.name || '用户'}的好感度: ${affinity}/100
+(剧情事件): ${userProfile?.name || '用户'} 在社交软件里给你发了一笔虚拟红包/转账，金额：¥${amountF.toFixed(2)}，留言：「${note || '无'}」。
+
+根据你的性格设定和当前好感度，面对这封虚拟红包，你是选择【接受】，还是【退还】？
+请在第一行只输出：接受 或 退还
+然后在第二行起用1-2句话说出你在收到这笔钱时的真实反应（直接用角色的口吻说话，保持沉浸感）。`;
+
+                const reply = await callLLM({
+                    endpoint: char.api_endpoint,
+                    key: char.api_key,
+                    model: char.model_name,
+                    messages: [
+                        { role: 'system', content: decidePrompt },
+                        { role: 'user', content: `【系统提示：收到虚拟转账 ¥${amountF.toFixed(2)}。留言：「${note || '无'}」。】请决定是否接受，并给出你的反应。` }
+                    ],
+                    maxTokens: 150
+                });
                 if (!reply?.trim()) {
                     throw new Error("LLM returned empty or null response");
                 }
