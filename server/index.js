@@ -303,7 +303,7 @@ The JSON MUST have the EXACT following keys:
             }
 
             // Set defaults and formatting
-            parsed.avatar = `https://api.dicebear.com/7.x/notionists/svg?seed=${encodeURIComponent(parsed.name || 'AI')}&backgroundColor=f0f0f0`;
+            parsed.avatar = `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(parsed.name || 'AI')}&backgroundColor=f0f0f0`;
             parsed.api_endpoint = api_endpoint;
             parsed.api_key = api_key;
             parsed.model_name = model_name;
