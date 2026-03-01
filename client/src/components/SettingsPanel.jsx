@@ -317,6 +317,31 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
         }
     };
 
+    const handleImportDatabase = async (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+        if (!window.confirm(lang === 'en' ? "Warning! This will overwrite all your current characters and chats. The server will restart. Continue?" : "警告！这将会覆盖你当前所有的聊天记录和角色数据，并且服务器会自动重启。是否继续？")) {
+            event.target.value = null;
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('db_file', file);
+        try {
+            const res = await fetch(`${apiUrl}/system/import`, { method: 'POST', body: formData });
+            const data = await res.json();
+            if (data.success) {
+                alert(lang === 'en' ? "Database restored! Please refresh the page in a few seconds." : "存档恢复成功！服务器正在重启，请在3秒后刷新本页面。");
+                setTimeout(() => window.location.reload(), 3000);
+            } else {
+                alert("Failed to restore: " + data.error);
+            }
+        } catch (e) {
+            console.error('Import Error:', e);
+            alert('Upload failed.');
+        }
+    };
+
     if (!profile) return <div className="loading-text">Loading settings...</div>;
 
     return (
@@ -757,6 +782,25 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                         <span style={{ fontSize: '24px', fontWeight: '700', color: 'var(--accent-color)', marginLeft: '10px' }}>
                             ¥{(profile.wallet ?? 100).toFixed(2)}
                         </span>
+                    </div>
+                </div>
+
+                {/* Data Management */}
+                <div style={{ backgroundColor: '#fff', padding: '20px', borderRadius: '8px', border: '1px solid #eee' }}>
+                    <h2 style={{ margin: '0 0 15px 0', fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Save size={20} /> {lang === 'en' ? 'Data Backup & Restore' : '数据备份与恢复'}
+                    </h2>
+                    <p style={{ fontSize: '13px', color: '#666', marginBottom: '15px', lineHeight: 1.5 }}>
+                        {lang === 'en' ? 'Backup your entire ChatPulse database (chats, memories, settings) as a single SQLite file, or restore from a previous backup.' : '将你整个 ChatPulse 的所有聊天记录、AI记忆、角色和设置打包下载为一个专属存档（SQLite数据库文件），或者随时上传恢复。'}
+                    </p>
+                    <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
+                        <a href={`${apiUrl}/system/export`} download="chatpulse.db" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 16px', backgroundColor: 'var(--accent-color)', color: '#fff', textDecoration: 'none', borderRadius: '6px', fontSize: '14px', fontWeight: 'bold' }}>
+                            <Download size={18} /> {lang === 'en' ? 'Download Full Backup (.db)' : '下载完整备份 (.db)'}
+                        </a>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 16px', backgroundColor: '#f0f0f0', color: '#333', border: '1px solid #ddd', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold' }}>
+                            <Upload size={18} /> {lang === 'en' ? 'Restore from Backup' : '上传并恢复存档'}
+                            <input type="file" accept=".db,application/x-sqlite3,application/octet-stream" style={{ display: 'none' }} onChange={handleImportDatabase} />
+                        </label>
                     </div>
                 </div>
 
