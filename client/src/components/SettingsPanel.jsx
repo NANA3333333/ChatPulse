@@ -342,6 +342,28 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
         }
     };
 
+    const handleSystemWipe = async () => {
+        if (!window.confirm(lang === 'en' ? "DANGER: This will permanently wipe ALL characters, chats, and memories. Your theme settings will remain. Are you absolutely sure?" : "危险：这将永久清空所有角色、聊天记录、群聊和记忆。仅保留主题设置。你确定要执行【恢复出厂设置】吗？")) return;
+
+        // Double check
+        if (!window.confirm(lang === 'en' ? "Final confirmation: Wipe everything?" : "最后一次确认：真的要抹除所有数据吗？")) return;
+
+        try {
+            const res = await fetch(`${apiUrl}/system/wipe`, { method: 'DELETE' });
+            const data = await res.json();
+            if (data.success) {
+                alert(lang === 'en' ? "All data wiped successfully." : "所有数据已成功清空。");
+                if (onCharactersUpdate) onCharactersUpdate();
+                window.location.reload();
+            } else {
+                alert("Wipe failed: " + data.error);
+            }
+        } catch (e) {
+            console.error('Wipe Error:', e);
+            alert('Wipe failed.');
+        }
+    };
+
     if (!profile) return <div className="loading-text">Loading settings...</div>;
 
     return (
@@ -793,7 +815,7 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                     <p style={{ fontSize: '13px', color: '#666', marginBottom: '15px', lineHeight: 1.5 }}>
                         {lang === 'en' ? 'Backup your entire ChatPulse database (chats, memories, settings) as a single SQLite file, or restore from a previous backup.' : '将你整个 ChatPulse 的所有聊天记录、AI记忆、角色和设置打包下载为一个专属存档（SQLite数据库文件），或者随时上传恢复。'}
                     </p>
-                    <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap', alignItems: 'center' }}>
                         <a href={`${apiUrl}/system/export`} download="chatpulse.db" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 16px', backgroundColor: 'var(--accent-color)', color: '#fff', textDecoration: 'none', borderRadius: '6px', fontSize: '14px', fontWeight: 'bold' }}>
                             <Download size={18} /> {lang === 'en' ? 'Download Full Backup (.db)' : '下载完整备份 (.db)'}
                         </a>
@@ -801,6 +823,10 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                             <Upload size={18} /> {lang === 'en' ? 'Restore from Backup' : '上传并恢复存档'}
                             <input type="file" accept=".db,application/x-sqlite3,application/octet-stream" style={{ display: 'none' }} onChange={handleImportDatabase} />
                         </label>
+                        <div style={{ width: '1px', height: '24px', backgroundColor: '#ddd', margin: '0 5px' }}></div>
+                        <button onClick={handleSystemWipe} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 16px', backgroundColor: '#fff', color: 'var(--danger)', border: '1px solid var(--danger)', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold' }}>
+                            <Trash2 size={18} /> {lang === 'en' ? 'Factory Reset (Wipe All)' : '恢复出厂设置 (清空所有数据)'}
+                        </button>
                     </div>
                 </div>
 
