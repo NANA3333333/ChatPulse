@@ -124,6 +124,10 @@ app.get('/api/system/export', async (req, res) => {
         const backupFileName = `chatpulse_backup_${Date.now()}.db`;
         const backupPath = path.join(__dirname, '..', 'data', backupFileName);
 
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+
         // Await the backup snapshot. This correctly captures all memory buffered in WAL.
         await db.backup(backupPath);
 

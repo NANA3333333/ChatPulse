@@ -1100,7 +1100,10 @@ function getUserDb(userId) {
         getWallet,
         close: () => db.close(),
         getDbPath: () => dbPath,
-        backup: async (destPath) => db.backup(destPath)
+        backup: async (destPath) => {
+            db.pragma('wal_checkpoint(TRUNCATE)');
+            return db.backup(destPath);
+        }
     };
 
     initDb(); // auto-initialize tables for this user's db if they don't exist
