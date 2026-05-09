@@ -15,8 +15,11 @@ function registerCoreCityRoutes(app, deps) {
     app.get('/api/city/logs', authMiddleware, (req, res) => {
         try {
             ensureCityDb(req.db);
+            const rawLimit = String(req.query.limit || '').trim().toLowerCase();
             const requestedLimit = Number.parseInt(req.query.limit, 10);
-            const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 1000)) : 300;
+            const limit = rawLimit === 'all'
+                ? 'all'
+                : (Number.isFinite(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 10000)) : 300);
             res.json({ success: true, logs: req.db.city.getCityLogs(limit) });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });

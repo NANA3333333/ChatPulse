@@ -52,13 +52,26 @@ function createActionService(deps = {}) {
             richNarrations?.moment,
             richNarrations?.diary
         ].map((value) => String(value || '').trim()).filter(Boolean).join('\n');
+        const activeQuestClaim = db.city.getCharacterActiveQuestClaim?.(char.id) || null;
+        const activeQuestStatus = String(activeQuestClaim?.status || '').trim();
+        const activeQuestTarget = String(activeQuestClaim?.target_district || '').trim();
+        const isActiveQuestTarget = !!activeQuestClaim
+            && activeQuestTarget
+            && activeQuestTarget === String(district.id || '').trim()
+            && ['accepted', 'in_progress', 'ready_to_report', 'reporting'].includes(activeQuestStatus);
+        if (isActiveQuestTarget && richNarrations && (!richNarrations.quest_intent || typeof richNarrations.quest_intent !== 'object')) {
+            richNarrations.quest_intent = {
+                quest_id: activeQuestClaim.quest_id,
+                stage: ['ready_to_report', 'reporting'].includes(activeQuestStatus) ? 'report' : 'progress'
+            };
+        }
         const rawQuestIntent = richNarrations?.quest_intent;
         const questIntentStage = rawQuestIntent && typeof rawQuestIntent === 'object'
             ? String(rawQuestIntent.stage || '').trim().toLowerCase()
             : '';
-        const activeQuestClaim = db.city.getCharacterActiveQuestClaim?.(char.id) || null;
         const activeQuestTitle = String(activeQuestClaim?.title || '').trim();
         const isQuestAction = ['claim', 'progress', 'report'].includes(questIntentStage)
+            || isActiveQuestTarget
             || (!!activeQuestClaim && /汇报|交付|递交|交差|报告任务|送去交单|去交单/.test(taskNarrationText))
             || (!!activeQuestTitle && taskNarrationText.includes(activeQuestTitle));
         const districtMoneyCost = isQuestAction ? 0 : Number(district.money_cost || 0);
@@ -137,7 +150,11 @@ function createActionService(deps = {}) {
             }
         };
 
-        if (district.type === 'gambling') {
+        if (district.type === 'gambling' && isQuestAction) {
+            const questLog = getLogText(buildCollapsedCityLog(char, '任务行动文案生成失败', { district }));
+            primaryActionLogId = db.city.logAction(char.id, 'QUEST', questLog, dCal, dMoney, district.id);
+            if (richNarrations) broadcastCityToChat(userId, char, questLog, 'QUEST', richNarrations);
+        } else if (district.type === 'gambling') {
             const winRate = parseFloat(config.gambling_win_rate) || 0.35;
             const payout = parseFloat(config.gambling_payout) || 3.0;
             const didWin = Math.random() < winRate;
@@ -300,7 +317,7 @@ function createActionService(deps = {}) {
                     }
                 }
             }
-            if (isHackerDistrict(district)) {
+            if (isHackerDistrict(district) && !isQuestAction) {
                 hackerIntelPayload = buildHackerIntelAppendix(db, char);
                 normalLog = `${normalLog}\n\n[黑客据点情报]\n${hackerIntelPayload}`.trim();
             }

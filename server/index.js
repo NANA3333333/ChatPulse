@@ -1037,10 +1037,35 @@ app.post('/api/messages/:characterId/retry', authMiddleware, (req, res) => {
         const { characterId } = req.params;
         const { failedMessageId } = req.body;
         const requestId = createRequestTraceId('retry');
+        let retryEvent = null;
 
-        // Delete the error message from the DB if provided
         if (failedMessageId) {
+            const failedMessage = db.getMessages(characterId, 200)
+                .find((msg) => String(msg.id) === String(failedMessageId));
+            const metadata = failedMessage?.metadata && typeof failedMessage.metadata === 'object'
+                ? failedMessage.metadata
+                : null;
+            retryEvent = metadata?.systemEventReply || null;
             db.deleteMessage(failedMessageId);
+        }
+
+        if (retryEvent?.extraSystemDirective) {
+            engine.triggerImmediateUserReply(characterId, wsClients, {
+                useRetryResume: false,
+                extraSystemDirective: retryEvent.extraSystemDirective,
+                extraDirectiveRole: retryEvent.extraDirectiveRole || 'system',
+                eventUserDirective: retryEvent.eventUserDirective || '',
+                markSystemEventReply: false,
+                triggerSource: 'api_retry_system_event',
+                triggerRoute: 'POST /api/messages/:characterId/retry',
+                requestId,
+                triggerNote: failedMessageId ? `retry_system_event_message_${failedMessageId}` : 'retry_system_event',
+                skipTopicSwitchGate: !!retryEvent.skipTopicSwitchGate,
+                skipContextModuleRouting: !!retryEvent.skipContextModuleRouting
+            }).catch((err) => {
+                console.error('[Retry] System event retry failed:', err.message);
+            });
+            return res.json({ success: true, retriedSystemEvent: true });
         }
 
         // Re-attempt generation, resuming from the last failed RAG node when available.
@@ -2068,6 +2093,35 @@ app.get('/api/characters/:id/context-stats', authMiddleware, async (req, res) =>
         }
 
         const lastConversationPromptTokens = Number(latestConversationUsageRow?.prompt_tokens || 0);
+        const latestConversationUsage = latestConversationAttemptMeta?.usage || {};
+        const latestConversationPromptDetails = latestConversationUsage?.prompt_tokens_details || latestConversationUsage?.input_tokens_details || {};
+        const lastConversationCachedReadTokens = Math.max(0, Number(
+            latestConversationPromptDetails.cached_tokens
+            || latestConversationPromptDetails.cache_read_input_tokens
+            || latestConversationPromptDetails.cached_input_tokens
+            || latestConversationUsage.cache_read_input_tokens
+            || latestConversationUsage.cached_input_tokens
+            || latestConversationUsage.input_cached_tokens
+            || 0
+        ) || 0);
+        const lastConversationCacheCreationTokens = Math.max(0, Number(
+            latestConversationPromptDetails.cached_creation_tokens
+            || latestConversationPromptDetails.cache_creation_input_tokens
+            || latestConversationUsage.cache_creation_input_tokens
+            || latestConversationUsage.input_cache_creation_tokens
+            || (
+                Number(latestConversationUsage.claude_cache_creation_5_m_tokens || 0)
+                + Number(latestConversationUsage.claude_cache_creation_1_h_tokens || 0)
+            )
+            || 0
+        ) || 0);
+        const lastConversationUncachedPromptTokens = Math.max(
+            0,
+            lastConversationPromptTokens - lastConversationCachedReadTokens - lastConversationCacheCreationTokens
+        );
+        const lastConversationProviderCacheHitRate = lastConversationPromptTokens > 0
+            ? Math.round((lastConversationCachedReadTokens / lastConversationPromptTokens) * 100)
+            : 0;
         let loggedCachedRequestBodyTokens = Number(latestConversationAttemptMeta?.requestBodyTokens || 0);
         let loggedUncachedRequestBodyTokens = Number(latestConversationAttemptMeta?.uncachedRequestBodyTokens || 0);
         try {
@@ -2243,6 +2297,10 @@ app.get('/api/characters/:id/context-stats', authMiddleware, async (req, res) =>
                 last_conversation_completion_tokens: latestConversationUsageRow?.completion_tokens || 0,
                 last_conversation_context_type: latestConversationUsageRow?.context_type || '',
                 last_conversation_timestamp: latestConversationUsageRow?.timestamp || 0,
+                last_conversation_uncached_prompt_tokens: lastConversationUncachedPromptTokens,
+                last_conversation_cached_read_tokens: lastConversationCachedReadTokens,
+                last_conversation_cache_creation_tokens: lastConversationCacheCreationTokens,
+                last_conversation_provider_cache_hit_rate_percent: lastConversationProviderCacheHitRate,
                 last_conversation_snapshot_timestamp: Number(latestConversationSnapshot?.timestamp || latestConversationSnapshotRow?.timestamp || 0),
                 last_conversation_estimated_without_cache_tokens: snapshotWithoutCacheTokens,
                 last_conversation_estimated_with_cache_tokens: snapshotWithCacheTokens,

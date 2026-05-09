@@ -500,6 +500,59 @@ module.exports = function initCityDb(db) {
         `).get(safeLogId) || null;
     }
 
+    function getLatestQuestProgressReviewForClaim(claimOrId, characterId = '') {
+        const claimId = Number(typeof claimOrId === 'object' ? claimOrId?.id : claimOrId || 0);
+        const questId = Number(typeof claimOrId === 'object' ? claimOrId?.quest_id : 0);
+        const safeCharacterId = String(characterId || (typeof claimOrId === 'object' ? claimOrId?.character_id : '') || '').trim();
+        if (claimId) {
+            return db.prepare(`
+                SELECT *
+                FROM city_quest_progress_reviews
+                WHERE claim_id = ?
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+            `).get(claimId) || null;
+        }
+        if (questId && safeCharacterId) {
+            return db.prepare(`
+                SELECT *
+                FROM city_quest_progress_reviews
+                WHERE quest_id = ? AND character_id = ?
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+            `).get(questId, safeCharacterId) || null;
+        }
+        return null;
+    }
+
+    function getRecentQuestProgressReviewsForClaim(claimOrId, characterId = '', limit = 4) {
+        const claimId = Number(typeof claimOrId === 'object' ? claimOrId?.id : claimOrId || 0);
+        const questId = Number(typeof claimOrId === 'object' ? claimOrId?.quest_id : 0);
+        const safeCharacterId = String(characterId || (typeof claimOrId === 'object' ? claimOrId?.character_id : '') || '').trim();
+        const safeLimit = Math.max(1, Math.min(8, Number(limit || 4)));
+        if (claimId) {
+            return db.prepare(`
+                SELECT r.*, l.content AS log_content, l.timestamp AS log_timestamp, l.action_type
+                FROM city_quest_progress_reviews r
+                LEFT JOIN city_logs l ON l.id = r.log_id
+                WHERE r.claim_id = ?
+                ORDER BY r.updated_at DESC, r.id DESC
+                LIMIT ?
+            `).all(claimId, safeLimit);
+        }
+        if (questId && safeCharacterId) {
+            return db.prepare(`
+                SELECT r.*, l.content AS log_content, l.timestamp AS log_timestamp, l.action_type
+                FROM city_quest_progress_reviews r
+                LEFT JOIN city_logs l ON l.id = r.log_id
+                WHERE r.quest_id = ? AND r.character_id = ?
+                ORDER BY r.updated_at DESC, r.id DESC
+                LIMIT ?
+            `).all(questId, safeCharacterId, safeLimit);
+        }
+        return [];
+    }
+
     function upsertQuestProgressReview(data = {}) {
         const now = Date.now();
         const logId = Number(data.log_id || 0);
@@ -569,26 +622,39 @@ module.exports = function initCityDb(db) {
     }
 
     function getCityLogs(arg1 = 100, arg2 = null) {
-        const hasCharacterFilter = typeof arg1 === 'string';
+        const firstArgText = typeof arg1 === 'string' ? arg1.trim().toLowerCase() : '';
+        const hasCharacterFilter = typeof arg1 === 'string' && firstArgText !== 'all';
         const characterId = hasCharacterFilter ? arg1 : null;
         const limitInput = hasCharacterFilter ? arg2 : arg1;
-        const limit = Number.isFinite(Number(limitInput)) ? Math.max(1, Number(limitInput)) : 100;
+        const allLogs = String(limitInput || '').trim().toLowerCase() === 'all' || Number(limitInput) <= 0;
+        const limit = allLogs ? 0 : (Number.isFinite(Number(limitInput)) ? Math.max(1, Number(limitInput)) : 100);
         const rows = hasCharacterFilter
-            ? db.prepare(`
+            ? (allLogs ? db.prepare(`
+                SELECT c.name as char_name, c.avatar as char_avatar, l.* 
+                FROM city_logs l 
+                LEFT JOIN characters c ON l.character_id = c.id
+                WHERE l.character_id = ?
+                ORDER BY l.timestamp DESC
+            `).all(characterId) : db.prepare(`
                 SELECT c.name as char_name, c.avatar as char_avatar, l.* 
                 FROM city_logs l 
                 LEFT JOIN characters c ON l.character_id = c.id
                 WHERE l.character_id = ?
                 ORDER BY l.timestamp DESC 
                 LIMIT ?
-            `).all(characterId, limit)
-            : db.prepare(`
+            `).all(characterId, limit))
+            : (allLogs ? db.prepare(`
+                SELECT c.name as char_name, c.avatar as char_avatar, l.* 
+                FROM city_logs l 
+                LEFT JOIN characters c ON l.character_id = c.id
+                ORDER BY l.timestamp DESC
+            `).all() : db.prepare(`
                 SELECT c.name as char_name, c.avatar as char_avatar, l.* 
                 FROM city_logs l 
                 LEFT JOIN characters c ON l.character_id = c.id
                 ORDER BY l.timestamp DESC 
                 LIMIT ?
-            `).all(limit);
+            `).all(limit));
         const reviewByLogId = getQuestProgressReviewsByLogIds(rows.map((row) => row.id));
         return rows.map((row) => {
             const decorated = decorateCityLogForUser(row);
@@ -1253,7 +1319,7 @@ module.exports = function initCityDb(db) {
         // ★ Events & Quests
         getActiveEvents, getAllEvents, createEvent, expireEvents, deleteEvent,
         getActiveQuests, getAllQuests, createQuest, attachQuestAnnouncement, getQuestById, getQuestClaims, getCharacterActiveQuestClaim, claimQuest, updateQuestClaimStage, advanceQuestProgress, resolveQuestCompletion, completeQuest, deleteQuest,
-        getQuestProgressReviewByLogId, upsertQuestProgressReview,
+        getQuestProgressReviewByLogId, getLatestQuestProgressReviewForClaim, getRecentQuestProgressReviewsForClaim, upsertQuestProgressReview,
         db: db // Exposed to allow direct query access to City tables
     };
 };

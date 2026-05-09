@@ -63,6 +63,8 @@ function App() {
   // Use a ref to track the active contact ID without causing useEffect re-renders when it changes.
   const activeContactRef = useRef(activeContactId);
   useEffect(() => { activeContactRef.current = activeContactId; }, [activeContactId]);
+  const activeTabRef = useRef(activeTab);
+  useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
 
   useEffect(() => {
     if (!activeContactId) {
@@ -135,8 +137,8 @@ function App() {
             return {
               ...newContact,
               unread: existing.unread || 0,
-              lastMessage: existing.lastMessage || newContact.lastMessage,
-              time: existing.time || newContact.time
+              lastMessage: newContact.lastMessage || existing.lastMessage,
+              time: newContact.time || existing.time
             };
           }
           return newContact;
@@ -237,81 +239,111 @@ function App() {
   // 2. Setup WebSocket for real-time messages
   useEffect(() => {
     if (!token) return;
-    const ws = new WebSocket(`${WS_URL}/?token=${token}`);
+    let ws = null;
+    let reconnectTimer = null;
+    let closedByCleanup = false;
+    let hasOpenedWs = false;
 
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'auth', token: token }));
-    };
+    const connectWs = () => {
+      reconnectTimer = null;
+      ws = new WebSocket(`${WS_URL}/?token=${token}`);
 
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'new_message') {
-          setIncomingMessageQueue(prev => [...prev, msg.data]);
-          scheduleContactsRefresh();
-        } else if (msg.type === 'engine_state') {
-          setEngineState(msg.data);
-        } else if (msg.type === 'group_message') {
-          setIncomingGroupMessageQueue(prev => [...prev, msg.data]);
-          scheduleContactsRefresh();
-        } else if (msg.type === 'group_typing') {
-          setGroupTyping(prev => {
-            const key = msg.data.group_id;
-            const current = prev[key] || [];
-            if (current.find(t => t.sender_id === msg.data.sender_id)) return prev;
-            return { ...prev, [key]: [...current, msg.data] };
-          });
-        } else if (msg.type === 'group_typing_stop') {
-          setGroupTyping(prev => {
-            const key = msg.data.group_id;
-            return { ...prev, [key]: (prev[key] || []).filter(t => t.sender_id !== msg.data.sender_id) };
-          });
-        } else if (msg.type === 'wallet_sync') {
-          const { characterId, characterWallet, userWallet } = msg.data;
-          if (characterId && characterWallet !== null && characterWallet !== undefined) {
-            setContacts(prev => prev.map(c => c.id === characterId ? { ...c, wallet: characterWallet } : c));
-          }
-          if (userWallet !== null && userWallet !== undefined) {
-            setUserProfile(prev => prev ? { ...prev, wallet: userWallet } : prev);
-          }
-        } else if (msg.type === 'refresh_contacts') {
-          window.dispatchEvent(new Event('refresh_contacts'));
-          scheduleContactsRefresh(100);
-        } else if (msg.type === 'announcement') {
-          setGlobalAnnouncement(msg.content);
-        } else if (msg.type === 'force_reload') {
-          console.log('[WS] Force reload requested by server...');
-          setTimeout(() => window.location.reload(), 500);
-        } else if (msg.type === 'redpacket_claim') {
-          setRedpacketClaimEvent({ ...msg.data, _ts: Date.now() });
-        } else if (msg.type === 'moment_update') {
-          // If we aren't currently viewing moments, show the red dot
-          if (activeTab !== 'moments') {
-            setHasNewMoments(true);
-          }
-        } else if (msg.type === 'memory_update') {
-          console.log('[WS] Memory update received for character:', msg.characterId);
-          window.dispatchEvent(new CustomEvent('memory_update', { detail: { characterId: msg.characterId } }));
-        } else if (msg.type === 'city_update') {
-          window.dispatchEvent(new CustomEvent('city_update', { detail: msg }));
-          scheduleContactsRefresh();
-          if (!cityRefreshRef.current) {
-            cityRefreshRef.current = setTimeout(() => {
-              cityRefreshRef.current = null;
-              fetchContacts();
-            }, 1200);
-          }
-          if (msg.action === 'schedule_generating') {
-            setGeneratingSchedules(prev => ({ ...prev, [msg.charId]: true }));
-          } else if (msg.action === 'schedule_updated') {
-            setGeneratingSchedules(prev => ({ ...prev, [msg.charId]: false }));
-          }
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ type: 'auth', token: token }));
+        if (hasOpenedWs) {
+          window.dispatchEvent(new Event('ws_reconnected'));
         }
-      } catch (e) {
-        console.error('WS Parse Error', e);
-      }
+        hasOpenedWs = true;
+        scheduleContactsRefresh(100);
+      };
+
+      ws.onclose = () => {
+        if (closedByCleanup) return;
+        if (reconnectTimer) return;
+        reconnectTimer = setTimeout(connectWs, 1200);
+      };
+
+      ws.onerror = () => {
+        try { ws.close(); } catch (_) { }
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'new_message') {
+            setIncomingMessageQueue(prev => [...prev, msg.data]);
+            scheduleContactsRefresh();
+          } else if (msg.type === 'engine_state') {
+            setEngineState(msg.data);
+          } else if (msg.type === 'group_message') {
+            setIncomingGroupMessageQueue(prev => [...prev, msg.data]);
+            scheduleContactsRefresh();
+          } else if (msg.type === 'group_typing') {
+            setGroupTyping(prev => {
+              const key = msg.data.group_id;
+              const current = prev[key] || [];
+              if (current.find(t => t.sender_id === msg.data.sender_id)) return prev;
+              return { ...prev, [key]: [...current, msg.data] };
+            });
+          } else if (msg.type === 'group_typing_stop') {
+            setGroupTyping(prev => {
+              const key = msg.data.group_id;
+              return { ...prev, [key]: (prev[key] || []).filter(t => t.sender_id !== msg.data.sender_id) };
+            });
+          } else if (msg.type === 'wallet_sync') {
+            const { characterId, characterWallet, userWallet } = msg.data;
+            if (characterId && characterWallet !== null && characterWallet !== undefined) {
+              setContacts(prev => prev.map(c => c.id === characterId ? { ...c, wallet: characterWallet } : c));
+            }
+            if (userWallet !== null && userWallet !== undefined) {
+              setUserProfile(prev => prev ? { ...prev, wallet: userWallet } : prev);
+            }
+          } else if (msg.type === 'refresh_contacts') {
+            window.dispatchEvent(new Event('refresh_contacts'));
+            scheduleContactsRefresh(100);
+          } else if (msg.type === 'announcement') {
+            setGlobalAnnouncement(msg.content);
+          } else if (msg.type === 'force_reload') {
+            console.log('[WS] Force reload requested by server...');
+            setTimeout(() => window.location.reload(), 500);
+          } else if (msg.type === 'redpacket_claim') {
+            setRedpacketClaimEvent({ ...msg.data, _ts: Date.now() });
+          } else if (msg.type === 'moment_update') {
+            // If we aren't currently viewing moments, show the red dot
+            if (activeTabRef.current !== 'moments') {
+              setHasNewMoments(true);
+            }
+          } else if (msg.type === 'memory_update') {
+            console.log('[WS] Memory update received for character:', msg.characterId);
+            window.dispatchEvent(new CustomEvent('memory_update', { detail: { characterId: msg.characterId } }));
+          } else if (msg.type === 'city_update') {
+            window.dispatchEvent(new CustomEvent('city_update', { detail: msg }));
+            scheduleContactsRefresh();
+            if (!cityRefreshRef.current) {
+              cityRefreshRef.current = setTimeout(() => {
+                cityRefreshRef.current = null;
+                fetchContacts();
+              }, 1200);
+            }
+            if (msg.action === 'schedule_generating') {
+              setGeneratingSchedules(prev => ({ ...prev, [msg.charId]: true }));
+            } else if (msg.action === 'schedule_updated') {
+              setGeneratingSchedules(prev => ({ ...prev, [msg.charId]: false }));
+            }
+          }
+        } catch (e) {
+          console.error('WS Parse Error', e);
+        }
+      };
     };
+
+    connectWs();
+
     return () => {
+      closedByCleanup = true;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
       if (contactsRefreshRef.current) {
         clearTimeout(contactsRefreshRef.current);
         contactsRefreshRef.current = null;
@@ -320,7 +352,7 @@ function App() {
         clearTimeout(cityRefreshRef.current);
         cityRefreshRef.current = null;
       }
-      ws.close();
+      if (ws) ws.close();
     };
   }, [token, fetchContacts, scheduleContactsRefresh]);
 

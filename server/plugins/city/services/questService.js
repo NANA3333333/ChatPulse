@@ -25,6 +25,58 @@ function createQuestService(deps = {}) {
         return { questId, stage };
     }
 
+    function collectQuestKeywords(quest = {}) {
+        const source = `${quest.title || ''}\n${quest.description || ''}`;
+        const keywords = new Set();
+        for (const match of source.matchAll(/[\u4e00-\u9fa5A-Za-z0-9]{2,}/g)) {
+            const word = String(match[0] || '').trim();
+            if (!word || word.length < 2) continue;
+            if (/^(一个|一些|这个|那个|需要|任务|角色|地点|公告|悬赏|金币|奖励|完成|进行|前往)$/.test(word)) continue;
+            keywords.add(word);
+        }
+        return [...keywords].slice(0, 16);
+    }
+
+    function inferQuestIntentFromNarration(db, district, richNarrations = null) {
+        const text = getQuestNarrationText(richNarrations);
+        if (!text || !db?.city?.getActiveQuests || !district?.id) return null;
+
+        const concreteAction = /动手|开始|清理|疏通|捞|搬|送|护送|寻找|找到|修复|维修|登记|交付|递交|汇报|处理|拨开|挖|拖|带着|护住|扶|拦|检查|确认|接过|交给/.test(text);
+        if (!concreteAction) return null;
+
+        const targetDistrictId = String(district.id || '').trim();
+        const activeQuests = db.city.getActiveQuests?.() || [];
+        let best = null;
+
+        for (const quest of activeQuests) {
+            if (!quest || quest.is_completed) continue;
+            if (String(quest.status || '').toLowerCase() === 'completed') continue;
+            if (String(quest.target_district || '').trim() !== targetDistrictId) continue;
+
+            let score = 0;
+            const title = String(quest.title || '').trim();
+            const description = String(quest.description || '').trim();
+            if (title && text.includes(title)) score += 5;
+            if (title) {
+                const compactTitle = title.replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, '');
+                if (compactTitle && text.includes(compactTitle)) score += 4;
+            }
+            if (/公告|悬赏|任务/.test(text)) score += 2;
+            if (quest.reward_gold && text.includes(`${quest.reward_gold}`)) score += 1;
+
+            for (const keyword of collectQuestKeywords(quest)) {
+                if (text.includes(keyword)) score += keyword.length >= 4 ? 2 : 1;
+            }
+
+            if (!best || score > best.score) best = { quest, score };
+        }
+
+        if (!best || best.score < 4) return null;
+        const hesitantOnly = /要不要|想了想|犹豫|不确定|先等等|暂时没/.test(text) && !/动手|开始|清理|疏通|捞|搬|送|护送|修复|登记|交付|递交|处理/.test(text);
+        if (hesitantOnly) return null;
+        return { questId: Number(best.quest.id || 0), stage: 'claim', inferred: true };
+    }
+
     async function buildQuestResolutionNarrations(char, quest, district, db, outcome = 'success') {
         const fallbackLog = buildCollapsedCityLog(char, outcome === 'success' ? '任务完成文案生成失败' : '任务失败文案生成失败', { district });
         const fallbackSystemLog = buildCollapsedCityLog(char, outcome === 'success' ? '任务系统播报生成失败' : '任务失效播报生成失败', { district });
@@ -113,7 +165,10 @@ function createQuestService(deps = {}) {
         let bonusMoney = 0;
         let bonusCalories = 0;
         const textHaystack = getQuestNarrationText(richNarrations);
-        const intent = normalizeQuestIntent(richNarrations);
+        let intent = normalizeQuestIntent(richNarrations);
+        if (!intent && !db.city.getCharacterActiveQuestClaim?.(char.id)) {
+            intent = inferQuestIntentFromNarration(db, district, richNarrations);
+        }
 
         if (intent?.stage === 'claim' && intent.questId) {
             const quest = db.city.getQuestById?.(intent.questId);

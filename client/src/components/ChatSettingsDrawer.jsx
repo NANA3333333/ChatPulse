@@ -478,9 +478,16 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
         return lang === 'en' ? 'Continue current topic' : '继续当前话题';
     })();
     const actualInputTokens = contextStats?.last_conversation_prompt_tokens || contextStats?.last_actual_prompt_tokens || 0;
-    const actualSavedTokens = Math.max(0, lastRoundEstimatedWithoutCache - actualInputTokens);
+    const actualUncachedPromptTokens = contextStats?.last_conversation_uncached_prompt_tokens ?? 0;
+    const actualCachedReadTokens = contextStats?.last_conversation_cached_read_tokens ?? 0;
+    const actualCacheCreationTokens = contextStats?.last_conversation_cache_creation_tokens ?? 0;
+    const actualProviderCacheHitRate = contextStats?.last_conversation_provider_cache_hit_rate_percent ?? 0;
+    const actualComparableInputTokens = actualCachedReadTokens > 0 || actualCacheCreationTokens > 0
+        ? actualUncachedPromptTokens
+        : actualInputTokens;
+    const actualSavedTokens = Math.max(0, lastRoundEstimatedWithoutCache - actualComparableInputTokens);
     const actualSavedRate = lastRoundEstimatedWithoutCache > 0
-        ? Math.round((actualSavedTokens / lastRoundEstimatedWithoutCache) * 100)
+        ? Math.max(0, Math.min(100, Math.round((actualSavedTokens / lastRoundEstimatedWithoutCache) * 100)))
         : 0;
     const cacheOnlyHitRatePercent = contextStats?.cache_only_hit_rate_percent ?? 0;
     const cacheOnlySavedTokens = contextStats?.cache_only_saved_tokens ?? 0;
@@ -661,17 +668,30 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px' }}>
                             <div style={{ padding: '12px', borderRadius: '10px', background: '#eff6ff', border: '1px solid #bfdbfe' }}>
                                 <div style={{ fontSize: '12px', color: '#2563eb', marginBottom: '6px' }}>
-                                    {lang === 'en' ? 'Actual token saved last round' : '上一轮实际省下的 token'}
+                                    {lang === 'en' ? 'Local input reduction last round' : '上一轮本地输入结构节省'}
                                 </div>
                                 <div style={{ fontSize: '26px', fontWeight: '800', color: '#1d4ed8', lineHeight: 1.1 }}>
                                     {actualSavedRate}%
                                 </div>
                                 <div style={{ fontSize: '12px', color: '#1e40af', marginTop: '6px', lineHeight: 1.5 }}>
                                     {lang === 'en'
-                                        ? `About ${actualSavedTokens} tokens were saved in the last real request.`
-                                        : `按上一轮真实输入算，大约少喂了 ${actualSavedTokens} 个 token。`}
+                                        ? `Formula: 1 - normal-priced provider input / local no-cache estimate. About ${actualSavedTokens} tokens avoided normal input pricing.`
+                                        : `公式：1 - 厂商普通价输入 / 本地无缓存预估。约 ${actualSavedTokens} 个 token 避免了普通输入价。`}
                                 </div>
                             </div>
+                            {(actualCachedReadTokens > 0 || actualCacheCreationTokens > 0) && (
+                                <div style={{ padding: '10px 12px', borderRadius: '8px', background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534', lineHeight: 1.5 }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}>
+                                        <span>{lang === 'en' ? 'Provider Cache Hit' : '厂商缓存命中'}</span>
+                                        <span>{actualProviderCacheHitRate}%</span>
+                                    </div>
+                                    <div style={{ fontSize: '12px', marginTop: '4px' }}>
+                                        {lang === 'en'
+                                            ? `Read ${actualCachedReadTokens} T from cache, created ${actualCacheCreationTokens} T cache, normal-priced input ${actualUncachedPromptTokens} T.`
+                                            : `缓存读取 ${actualCachedReadTokens} T，缓存创建 ${actualCacheCreationTokens} T，普通价输入 ${actualUncachedPromptTokens} T。`}
+                                    </div>
+                                </div>
+                            )}
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Estimated Without Cache' : '无缓存预估 token'}</span><span style={{ fontWeight: '700', color: '#c0392b' }}>{estimatedWithoutCache} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Estimated With Cache' : '有缓存后预估 token'}</span><span style={{ fontWeight: '700', color: '#2c3e50' }}>{estimatedWithCache} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Tail Tokens' : '尾巴 token'}</span><span style={{ fontWeight: '700', color: '#27ae60' }}>{estimatedTailTokens} T</span></div>
@@ -693,7 +713,10 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Impression History (Q)' : '往事印象注入 (Q参数)'}</span><span style={{ fontWeight: '500', color: '#c0392b' }}>{estimatedO} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Other Overhead' : '其他类 T'}</span><span style={{ fontWeight: '500', color: '#7c3aed' }}>{estimatedWithCacheOther} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Tail Tokens' : '尾巴 token'}</span><span style={{ fontWeight: '700', color: '#27ae60' }}>{estimatedTailTokens} T</span></div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed #eee', paddingTop: '8px', marginTop: '4px' }}><span style={{ color: '#666', fontWeight: '600' }}>{lang === 'en' ? 'Actual Input Tokens' : '实际输入 token'}</span><span style={{ fontWeight: '700', color: '#8e44ad' }}>{actualInputTokens} T</span></div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed #eee', paddingTop: '8px', marginTop: '4px' }}><span style={{ color: '#666', fontWeight: '600' }}>{lang === 'en' ? 'Provider Actual Input Tokens' : '厂商实际输入 token（含缓存读/写）'}</span><span style={{ fontWeight: '700', color: '#8e44ad' }}>{actualInputTokens} T</span></div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Provider Cache Read' : '厂商缓存读取 token'}</span><span style={{ fontWeight: '500', color: '#16a34a' }}>{actualCachedReadTokens} T</span></div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Provider Cache Creation' : '厂商缓存创建 token'}</span><span style={{ fontWeight: '500', color: '#059669' }}>{actualCacheCreationTokens} T</span></div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Provider Normal-Priced Input' : '厂商普通价输入 token'}</span><span style={{ fontWeight: '500', color: '#7c3aed' }}>{actualUncachedPromptTokens} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Last Round RAG Injected' : '上一轮 RAG 注入 token'}</span><span style={{ fontWeight: '500', color: '#d97706' }}>{estimatedRagInjectedTokens} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Last Round Other Overhead' : '上一轮其他类 T'}</span><span style={{ fontWeight: '500', color: '#7c3aed' }}>{estimatedOtherTokens} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Last Round Routed to City' : '上一轮是否路由到商业街内容'}</span><span style={{ fontWeight: '500', color: lastConversationRoutedToCity ? '#e67e22' : '#7f8c8d' }}>{lastConversationRoutedToCity ? (lang === 'en' ? 'Yes' : '是') : (lang === 'en' ? 'No' : '否')}</span></div>

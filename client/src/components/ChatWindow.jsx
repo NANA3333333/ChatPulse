@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import MessageBubble from './MessageBubble';
 import InputBar from './InputBar';
 import TransferModal from './TransferModal';
@@ -220,12 +220,13 @@ function ChatWindow({
     const physical = derivePhysicalState(contact || {});
     const displayMessages = useMemo(() => collapseRepeatedApiErrors(messages), [messages]);
 
-    // Fetch most recent messages when contact changes
-    useEffect(() => {
-        if (!contact?.id) return;
-        setMessages([]);
-        setHasMore(false);
-        fetch(`${apiUrl}/messages/${contact.id}?limit=${PAGE_SIZE}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } })
+    const fetchLatestMessages = useCallback((options = {}) => {
+        if (!contactRef.current?.id) return Promise.resolve();
+        if (options.clear) {
+            setMessages([]);
+            setHasMore(false);
+        }
+        return fetch(`${apiUrl}/messages/${contactRef.current.id}?limit=${PAGE_SIZE}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } })
             .then(res => res.json())
             .then(data => {
                 setMessages(normalizeMessages(data));
@@ -233,7 +234,27 @@ function ChatWindow({
                 setHasMore(data.length >= PAGE_SIZE);
             })
             .catch(err => console.error('Failed to load messages:', err));
-    }, [contact?.id, apiUrl]);
+    }, [apiUrl]);
+
+    // Fetch most recent messages when contact changes
+    useEffect(() => {
+        if (!contact?.id) return;
+        fetchLatestMessages({ clear: true });
+    }, [contact?.id, fetchLatestMessages]);
+
+    useEffect(() => {
+        const refreshActiveMessages = (event) => {
+            const characterId = event?.detail?.characterId || event?.detail?.charId || event?.detail?.data?.character_id || '';
+            if (characterId && characterId !== contactRef.current?.id) return;
+            fetchLatestMessages();
+        };
+        window.addEventListener('city_update', refreshActiveMessages);
+        window.addEventListener('ws_reconnected', refreshActiveMessages);
+        return () => {
+            window.removeEventListener('city_update', refreshActiveMessages);
+            window.removeEventListener('ws_reconnected', refreshActiveMessages);
+        };
+    }, [fetchLatestMessages]);
 
     useEffect(() => {
         const handleCharacterDataWiped = (event) => {

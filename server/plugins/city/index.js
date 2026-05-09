@@ -11,7 +11,7 @@ const { registerEventQuestRoutes } = require('./routes/eventQuestRoutes');
 const initCityGrowthDb = require('../cityGrowth/growthDb');
 const schoolLogic = require('../cityGrowth/schoolLogic');
 const { enqueueBackgroundTask } = require('../../backgroundQueue');
-const { buildUniversalContext } = require('../../contextBuilder');
+const { buildUniversalContext, formatTypedAntiRepeatBlock } = require('../../contextBuilder');
 const { deriveEmotion, derivePhysicalState, applyEmotionEvent, getEmotionBehaviorGuidance, buildEmotionLogEntry } = require('../../emotion');
 
 // Phase 5: Social encounter cooldown - prevents same pair from chatting every tick
@@ -1015,12 +1015,25 @@ ${normalizedReply || '（空）'}
         const inventory = db.city.getInventory(char.id);
         const availableDistrictItems = getAvailableDistrictItems(db, district.id);
         const districtItemsPrompt = availableDistrictItems.length > 0
-            ? `\n[当前目标地点可用商品]\n${district.name} 现在真实可用的商品只有：${formatDistrictItemsForPrompt(availableDistrictItems)}\n- 如果你在 log / diary / moment / chat 里提到具体吃了、买了、拿了什么，只能从上面这些商品里选。\n- 可以不写具体商品；但如果写了，就绝对不要编造清单外的食物或商品。`
+            ? `\n[当前目标地点可用商品]\n${district.name} 现在真实可用的商品只有：${formatDistrictItemsForPrompt(availableDistrictItems)}\n- 如果你在 log / diary / moment / chat 里提到具体吃了、买了、拿了什么，只能从上面这些商品里选。\n- 可以不写具体商品；但如果写了，就绝对不要编造清单外的食物或商品。\n- 便利店是购买/补给场景：在便利店买到的食物会先进入背包，不等于当场恢复体力；如果这次真正目的是“吃饭/恢复体力”，优先去餐厅或吃背包里已有食物。\n- 如果地点已锁定为便利店，就把文案写成买了/带走/准备之后吃，不要写成已经坐下吃完并恢复。`
             : '';
-        const engineContextWrapper = { getUserDb: context.getUserDb, getMemory: context.getMemory };
+        const engineContextWrapper = { getUserDb: context.getUserDb, getMemory: context.getMemory, userId, forceCityDetail: true };
         const universalResult = await buildUniversalContext(engineContextWrapper, char, '', false);
-        const questContext = buildQuestPromptContext(db.city.getActiveQuests(), db.city.getCharacterActiveQuestClaim?.(char.id));
-        const basePrompt = buildSurvivalPrompt(districts, { ...char, calories: currentCals }, inventory, activeEvents, universalResult, district, questContext);
+        const activeQuestClaim = db.city.getCharacterActiveQuestClaim?.(char.id) || null;
+        const lastQuestReview = activeQuestClaim ? db.city.getLatestQuestProgressReviewForClaim?.(activeQuestClaim, char.id) : null;
+        const recentQuestReviews = activeQuestClaim ? db.city.getRecentQuestProgressReviewsForClaim?.(activeQuestClaim, char.id, 4) || [] : [];
+        const questContext = buildQuestPromptContext(db.city.getActiveQuests(), activeQuestClaim, lastQuestReview, recentQuestReviews);
+        const basePrompt = buildSurvivalPrompt(districts, { ...char, calories: currentCals }, inventory, activeEvents, universalResult, district, questContext, db);
+        const questDirectedBlock = activeQuestClaim ? `
+
+[当前任务优先级]
+- 你手上有公告任务：${activeQuestClaim.emoji || '📜'} ${activeQuestClaim.title}。
+- 任务目标地点：${activeQuestClaim.target_district || 'street'}；当前进度：${activeQuestClaim.progress_count || 0}/${activeQuestClaim.completion_target || 0}；阶段：${activeQuestClaim.status}。
+- 如果本轮锁定地点就是任务目标地点，log / chat / moment / diary 必须写成推进这项任务，而不是写普通地点玩法。
+- 本轮必须返回 quest_intent：{"quest_id":${Number(activeQuestClaim.quest_id || activeQuestClaim.id || 0)},"stage":"${['ready_to_report', 'reporting'].includes(String(activeQuestClaim.status || '')) ? 'report' : 'progress'}"}。
+- 写任务推进时要出现可评分的具体行动：寻找/接触目标、确认情况、动手处理、护送、交付、汇报、解决阻碍等，按任务要求选择。
+- 如果目标地点是赌场，但任务不是“参与赌博”，不要写下注、轮盘、骰宝、牌局输赢或自行消遣；赌场只是任务发生地点。
+- 如果目标地点是黑客据点，但任务不是“监听/入侵/截获情报”，不要写黑客行动、监听记录、截获私聊、翻日志；黑客据点只是任务发生地点。` : '';
 
         const directedPrompt = `${basePrompt}
 
@@ -1034,7 +1047,7 @@ ${normalizedReply || '（空）'}
 - action 必须选择 [${String(district.id || '').toUpperCase()}]。
 - log 要写成这次去 ${district.name} 实际发生了什么，优先参考当前状态、当前位置、最近商业街连续性和商业街常规输入。
 - 不要复述私聊对白，不要围绕“刚才那句话”做二次改写。
-- 如果当前状态里已经带着明显情绪，就让商业街行动自然延续，但不要夸张到失真。${districtItemsPrompt}`;
+- 如果当前状态里已经带着明显情绪，就让商业街行动自然延续，但不要夸张到失真。${questDirectedBlock}${districtItemsPrompt}`;
 
         if (!(char.api_endpoint && char.api_key && char.model_name)) {
             const fallbackNarrations = await buildReplyIntentNarrations(char, district, replyText, db);
@@ -1138,6 +1151,23 @@ ${normalizedReply || '（空）'}
         }
     }
 
+    function buildRecentPrivateChatAntiRepeatBlock(db, char) {
+        try {
+            if (!db || typeof db.getVisibleMessages !== 'function' || !char?.id) return '';
+            const recentMessages = db.getVisibleMessages(char.id, 14) || [];
+            const recentCharacterReplies = recentMessages
+                .filter((message) => message?.role === 'character')
+                .map((message) => String(message.content || '').replace(/\s+/g, ' ').trim())
+                .filter((text) => text && text.length >= 8)
+                .slice(-6);
+
+            if (recentCharacterReplies.length === 0) return '';
+            return `\n[最近私聊回复，chat 字段禁止复写]\n${recentCharacterReplies.map((text) => `- ${text}`).join('\n')}\n- 如果本轮要填写 chat，必须承接当前商业街事件说新的状态/发现/决定；不要复述上面这些私聊的观点、控诉、解释、请求或收尾句。\n- 不要把用户刚刚说过的话扩写成同一段争执；如果只是想继续旧话题，chat 可以留空。`;
+        } catch (e) {
+            return '';
+        }
+    }
+
     async function regenerateActionNarrations(char, district, db, baseNarrations = {}, options = {}) {
         if (!(char?.api_endpoint && char?.api_key && char?.model_name)) {
             return baseNarrations;
@@ -1149,6 +1179,7 @@ ${normalizedReply || '（空）'}
         const state = normalizeSurvivalState(char);
         const calories = Number(options.currentCals ?? char.calories ?? 2000);
         const recentAntiRepeat = buildRecentNarrationAntiRepeatBlock(db, char, district);
+        const privateChatAntiRepeat = buildRecentPrivateChatAntiRepeatBlock(db, char);
         const itemLine = options.item
             ? `\n[这次实际涉及的物品]\n- ${options.item.emoji || ''}${options.item.name || options.item.id || '物品'}`
             : '';
@@ -1172,7 +1203,7 @@ ${normalizedReply || '（空）'}
 地点类型：${district.type || 'generic'}
 体力：${calories}/4000
 金币：${Number(char.wallet || 0)}
-精力：${state.energy} 睡眠债：${state.sleep_debt} 心情：${state.mood} 压力：${state.stress} 饱腹：${state.satiety} 胃负担：${state.stomach_load}${itemLine}${recentAntiRepeat}
+精力：${state.energy} 睡眠债：${state.sleep_debt} 心情：${state.mood} 压力：${state.stress} 饱腹：${state.satiety} 胃负担：${state.stomach_load}${itemLine}${recentAntiRepeat}${privateChatAntiRepeat}
 
 [已有草稿，仅供参考，不得照抄]
 ${draftText || '（无）'}
@@ -1250,6 +1281,20 @@ ${districtSpecificRule ? districtSpecificRule + '\n' : ''}严格返回 JSON：
         }
 
         const kindLabel = kind === 'work' ? '工作' : '补觉/休息';
+        const actionType = kind === 'work' ? 'WORK_DISTRACT' : 'SLEEP_DISTURB';
+        let recentSameKindBlock = '';
+        try {
+            const recentSameKindLogs = (db?.city?.getCharacterRecentLogs?.(char.id, 12) || [])
+                .filter((log) => String(log.action_type || '').toUpperCase() === actionType)
+                .map((log) => String(log.message || '').replace(/\s+/g, ' ').trim())
+                .filter((text) => text && !isCollapsedCityLog(text))
+                .slice(0, 5);
+            if (recentSameKindLogs.length > 0) {
+                recentSameKindBlock = `\n\n最近已经写过的同类结算文案，禁止复写句式或明显措辞：\n${recentSameKindLogs.map((text) => `- ${text}`).join('\n')}`;
+            }
+        } catch (e) {
+            recentSameKindBlock = '';
+        }
         const effectLine = kind === 'work'
             ? `这次因为分神，实际少赚了 ${amount} 金币。`
             : `这次因为被打断，额外增加了 ${amount} 点睡眠债。`;
@@ -1257,13 +1302,16 @@ ${districtSpecificRule ? districtSpecificRule + '\n' : ''}严格返回 JSON：
 
 地点：${districtName || '当前地点'}
 后果：${effectLine}
+${recentSameKindBlock}
 
 要求：
 1. 只写 1-2 句商业街活动记录文案。
 2. 要写出“本来在忙/在睡，被聊天打扰后出了现实代价”的感觉。
 3. 语气要贴合角色，不要写系统、后台、数值结算说明。
 4. 文案里要能让人感觉到一点紧迫感、烦躁、无奈或被拖住的现实感。
-5. 不要脱离场景乱发挥。`;
+5. 必须换一个新的切入点，可以写环境、动作、身体反应、情绪后劲或没完成的事，但不要照搬上面的开头、转折和收尾。
+6. 如果是补觉/休息被打断，不要总写“迷迷糊糊、眼皮发沉、脑子更昏、比没睡还累、彻底睡不着”这一组固定表达。
+7. 不要脱离场景乱发挥。`;
 
         try {
             const messages = [
@@ -1283,6 +1331,8 @@ ${districtSpecificRule ? districtSpecificRule + '\n' : ''}严格返回 JSON：
                 messages,
                 maxTokens: 3000,
                 temperature: 0.55,
+                presencePenalty: 0.25,
+                frequencyPenalty: 0.35,
                 debugAttempt: buildCityAttemptRecorder(db, char, 'city_busy_penalty_narration', {
                     busyKind: kind,
                     districtName: districtName || '',
@@ -1644,7 +1694,13 @@ ${districtSpecificRule ? districtSpecificRule + '\n' : ''}严格返回 JSON：
 
     // LLM prompts
 
-    function buildQuestPromptContext(activeQuests = [], activeQuestClaim = null) {
+    function clipQuestContextText(value, maxLength = 180) {
+        const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+        if (!normalized) return '';
+        return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
+    }
+
+    function buildQuestPromptContext(activeQuests = [], activeQuestClaim = null, lastQuestReview = null, recentQuestReviews = []) {
         const openTasks = Array.isArray(activeQuests) ? activeQuests.slice(0, 6).map((quest) => {
             const claimText = quest.claim_count > 0 ? `已接单 ${quest.claim_count} 人` : '暂时无人接单';
             return `- [QUEST_${quest.id}] ${quest.emoji || '📜'} ${quest.title} | 地点=${quest.target_district || 'street'} | 奖励=${Number(quest.reward_gold || 0)}金币${Number(quest.reward_cal || 0) > 0 ? ` ${Number(quest.reward_cal || 0)}体力` : ''} | ${claimText} | ${quest.description || ''}`;
@@ -1658,7 +1714,45 @@ ${districtSpecificRule ? districtSpecificRule + '\n' : ''}严格返回 JSON：
                 ready_to_report: '你已经做完主要内容，下一步该去汇报交付。',
                 reporting: '你正在准备汇报交付。'
             };
-            personalTask = `\n[你当前手上的公告任务]\n- 任务：${activeQuestClaim.emoji || '📜'} ${activeQuestClaim.title}\n- 目标地点：${activeQuestClaim.target_district || 'street'}\n- 当前阶段：${activeQuestClaim.status}\n- 进度：${activeQuestClaim.progress_count || 0}/${activeQuestClaim.completion_target || 0}\n- 说明：${stageMap[activeQuestClaim.status] || '按任务自然推进。'}\n- 任务要求：${activeQuestClaim.description || ''}`;
+            const nextQuestIntentStage = ['ready_to_report', 'reporting'].includes(String(activeQuestClaim.status || '')) ? 'report' : 'progress';
+            const reviewStatus = String(lastQuestReview?.status || '').trim();
+            const hasLastReview = !!lastQuestReview && reviewStatus !== 'pending';
+            const progressDelta = Number(lastQuestReview?.progress_delta || 0);
+            const progressAfter = Number(lastQuestReview?.progress_after ?? activeQuestClaim.progress_count ?? 0);
+            const targetScore = Number(lastQuestReview?.target_score || activeQuestClaim.completion_target || 0);
+            const reviewComment = String(lastQuestReview?.comment || lastQuestReview?.error_message || '').trim();
+            const reviewLabel = String(lastQuestReview?.short_label || '').trim();
+            const pressureLine = progressDelta <= 0
+                ? '上一次没有推进任务；如果继续闲逛或做普通地点玩法，很可能拿不到赏金。'
+                : '上一次已经推进了一点，但还没完成；这次要沿着有效方向继续做具体任务动作。';
+            const lastReviewBlock = hasLastReview
+                ? `\n[上一次任务评分]\n- 结果：${reviewStatus === 'success' ? `+${progressDelta}分 ${reviewLabel ? `(${reviewLabel})` : ''}` : '评分失败'}\n- 累计进度：${progressAfter}/${targetScore || activeQuestClaim.completion_target || 0}\n- 评价：${reviewComment || '暂无具体评价'}\n- 压力提醒：${pressureLine}`
+                : '';
+            const reviewTimeline = Array.isArray(recentQuestReviews)
+                ? recentQuestReviews
+                    .filter((review) => review && String(review.status || '').trim() !== 'pending')
+                    .slice(0, 4)
+                    .reverse()
+                : [];
+            const continuityHaystack = reviewTimeline
+                .map((review) => [review.short_label, review.comment, review.log_content].map((value) => String(value || '')).join(' '))
+                .join('\n');
+            const hasContactedTarget = /成功接头|找到目标|找到.*VIP|接触.*VIP|达成护送|需要人送您安全到家|带着他|护送/.test(continuityHaystack);
+            const continuityHint = hasContactedTarget
+                ? '\n[当前任务连续阶段]\n- 已经找到并接触过目标 VIP，且已达成/开始护送关系。\n- 后续行动必须写护送、保护、避开尾随者、带目标移动、处理阻碍或准备交付；不得再写“VIP还没出现”“不知道他长什么样”“重新寻找目标”。'
+                : '';
+            const timelineBlock = reviewTimeline.length > 0
+                ? `\n[最近任务轨迹]\n${reviewTimeline.map((review) => {
+                    const label = String(review.short_label || '').trim();
+                    const comment = clipQuestContextText(review.comment || review.error_message || '', 110);
+                    const log = clipQuestContextText(review.log_content || '', 170);
+                    const delta = Number(review.progress_delta || 0);
+                    const after = Number(review.progress_after || 0);
+                    const target = Number(review.target_score || activeQuestClaim.completion_target || 0);
+                    return `- ${after}/${target}：${delta >= 0 ? `+${delta}` : delta}分${label ? `（${label}）` : ''}；${comment || '暂无评价'}${log ? `；上轮事实：${log}` : ''}`;
+                }).join('\n')}${continuityHint}\n- 连续性要求：本轮必须承接最近任务轨迹继续推进，不要倒退到已经完成过的阶段；如果已经找到/接触目标，就继续护送、处理阻碍、移动到下一节点或准备交付，不要重新写“目标还没出现/不知道目标是谁”。`
+                : '';
+            personalTask = `\n[你当前手上的公告任务]\n- 任务：${activeQuestClaim.emoji || '📜'} ${activeQuestClaim.title}\n- 目标地点：${activeQuestClaim.target_district || 'street'}\n- 当前阶段：${activeQuestClaim.status}\n- 进度：${activeQuestClaim.progress_count || 0}/${activeQuestClaim.completion_target || 0}\n- 说明：${stageMap[activeQuestClaim.status] || '按任务自然推进。'}\n- 任务要求：${activeQuestClaim.description || ''}${lastReviewBlock}${timelineBlock}\n- 若本轮行动地点等于目标地点，优先推进这项任务，不要写成普通地点闲逛或消费。\n- 本轮推进任务时必须附带 quest_intent：{"quest_id":${Number(activeQuestClaim.quest_id || activeQuestClaim.id || 0)},"stage":"${nextQuestIntentStage}"}。\n- 任务文案必须出现可评分的具体行动：寻找/接触目标、确认情况、动手处理、护送、交付、汇报、解决阻碍等，按任务要求选择。\n- 如果目标地点是赌场，但任务不是“参与赌博”，不要写下注、轮盘、骰宝、牌局输赢或自行消遣；赌场只是任务发生地点。`;
         }
 
         return {
@@ -1671,7 +1765,7 @@ ${districtSpecificRule ? districtSpecificRule + '\n' : ''}严格返回 JSON：
         return questService.normalizeQuestIntent(richNarrations);
     }
 
-    function buildSurvivalPrompt(districts, char, inventory, activeEvents, universalContext, targetDistrict, questContext = null) {
+    function buildSurvivalPrompt(districts, char, inventory, activeEvents, universalContext, targetDistrict, questContext = null, promptDb = null) {
         const energySources = [];
         const resourceGens = [];
         const medicals = [];
@@ -1763,7 +1857,17 @@ ${districtSpecificRule ? districtSpecificRule + '\n' : ''}严格返回 JSON：
         }
         const questOpenBlock = questContext?.openTasks?.length > 0 ? `\n[公告栏悬赏]\n${questContext.openTasks.join('\n')}` : '';
         const personalQuestBlock = questContext?.personalTask || '';
-        const antiRepeatBlock = buildRecentNarrationAntiRepeatBlock(ensureCityDb(context.getUserDb(char.user_id || 'default')), char, targetDistrict || { type: '', id: '' });
+        const promptHistoryDb = promptDb || ensureCityDb(context.getUserDb(char.user_id || 'default'));
+        const continuityDistrict = targetDistrict || districts.find((entry) => entry.id === char.location) || null;
+        const antiRepeatBlock = buildRecentNarrationAntiRepeatBlock(promptHistoryDb, char, continuityDistrict || { type: '', id: '' });
+        const typedAntiRepeatBlock = formatTypedAntiRepeatBlock(universalContext?.antiRepeatHints, {
+            include: ['private_character_replies', 'city_private_outreach', 'city_self_logs'],
+            maxPerType: 4,
+            maxTextLen: 220,
+            mode: 'city_chat',
+            title: '[大输入库分型防复读]'
+        });
+        const privateChatAntiRepeatBlock = typedAntiRepeatBlock || buildRecentPrivateChatAntiRepeatBlock(promptHistoryDb, char);
 
         let hardConstraintText = '';
         if (state.energy < 20) {
@@ -1825,11 +1929,19 @@ ${taskInstruction}
 [任务机制补充]
 - 你也会看到公告栏里的悬赏任务，它和普通商业街活动一样是真实世界信息。
 - 如果你想去接某个公告任务，就在输出里额外带上 quest_intent：{"quest_id":任务ID,"stage":"claim"}，并让 action 去往对应地点。
-- 如果你已经在做任务，继续正常生成商业街行动；若是在推进任务，可带 stage="progress"。
+- 如果你已经在做任务，并且本轮行动地点就是任务目标地点，优先推进任务，必须带 stage="progress"；不要写成普通地点玩法。
 - 如果你准备交付任务、领取赏金，就额外带上 quest_intent：{"quest_id":任务ID,"stage":"report"}。
 - 不要把 quest_intent 当系统说明写进 log，log 仍然必须像普通商业街活动。${questOpenBlock}${personalQuestBlock}
+- 如果本轮行动意图是“接下某个公告任务 / 开始执行某个公告任务 / 推进手上已有任务 / 交付任务”，就要在 JSON 里同步带 quest_intent；不要只在自然文案里表达这个意图却漏掉标签。
+- 如果只是看见公告、犹豫、评估要不要接，且没有明确行动，可以不带 quest_intent。
 - 任务推进必须贴合任务内容：采购/配送要写拿货、送达；清理/维修要写动手处理；调查类要写打听、寻找、发现；巡逻/护送要写陪同、盯守、来回查看。
 - 去错地点、只是在附近闲逛、或者文案和任务不匹配，都不会推进任务进度。
+- 黑客据点只是地点之一。只有任务内容明确要求监听/入侵/截获情报时，才把行动写成黑客行动；普通公告任务在黑客据点推进时，不要自动写监听记录或截获私聊。
+[吃饭/补给语义]
+- 餐厅/饭店/现场用餐 = 这轮吃饭并恢复体力。
+- 背包里的食物 = 选择 EAT_ITEM 才是当场吃掉并恢复体力。
+- 便利店 = 购买包装食品或饮料，默认先放进背包；除非系统明确允许 EAT_ITEM，否则不要把便利店购买写成已经吃完恢复。
+- 如果当前真正目标是缓解饥饿、补体力、吃一顿，优先选择餐厅或 EAT_ITEM，而不是便利店 BUY。
 [行动约束]${hardConstraintText}
 
 [输出要求]
@@ -1840,11 +1952,12 @@ ${taskInstruction}
 - 不要把“你在干嘛 / 你在做什么 / 你在哪 / 忙吗 / 在吗”这种追问当作默认开头，除非这次事件本身真的需要立刻确认用户位置、安危或回应
 - 比起泛泛追问，更优先写“我刚刚怎么了 / 我现在什么状态 / 我准备做什么 / 我为什么突然想给你发消息”
 - 如果要提问，也要让问题强依附于这次商业街事件本身，而不是空泛地确认用户在不在
+- chat 不是正常私聊重 roll；不要复制或近似改写最近私聊已经说过的话
 - 若值得公开展示再填 moment
 - 若有没说出口的心声再填 diary
 - 想花钱但钱不够时，也要把失败尝试真实写进 log
 - 不要重复 preamble 里刚做过的地点/动作
-- 不要使用高复用套话，不要把“从家离开、肚子里空空的、先把自己安顿好”这类句式当默认开头${antiRepeatBlock ? antiRepeatBlock : ''}
+- 不要使用高复用套话，不要把“从家离开、肚子里空空的、先把自己安顿好”这类句式当默认开头${antiRepeatBlock ? antiRepeatBlock : ''}${privateChatAntiRepeatBlock ? privateChatAntiRepeatBlock : ''}
 
 只返回 JSON：
   {
@@ -2500,7 +2613,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             } catch (e) { /* ignore bad schedule */ }
         }
 
-        const activeQuestClaim = db.city.getCharacterActiveQuestClaim?.(char.id);
+        const activeQuestClaim = db.city.getCharacterActiveQuestClaim?.(char.id) || null;
         if (activeQuestClaim?.target_district) {
             const questDistrict = districts.find((entry) => entry.id === activeQuestClaim.target_district);
             if (questDistrict) {
@@ -2514,10 +2627,12 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
 
         // LLM decision with inventory awareness + active event context
         const inventory = db.city.getInventory(char.id);
-        const engineContextWrapper = { getUserDb: context.getUserDb, getMemory: context.getMemory };
+        const engineContextWrapper = { getUserDb: context.getUserDb, getMemory: context.getMemory, userId, forceCityDetail: true };
         const universalResult = await buildUniversalContext(engineContextWrapper, char, '', false);
-        const questContext = buildQuestPromptContext(db.city.getActiveQuests(), db.city.getCharacterActiveQuestClaim?.(char.id));
-        const prompt = buildSurvivalPrompt(districts, { ...char, calories: currentCals }, inventory, activeEvents, universalResult, targetDistrict, questContext);
+        const lastQuestReview = activeQuestClaim ? db.city.getLatestQuestProgressReviewForClaim?.(activeQuestClaim, char.id) : null;
+        const recentQuestReviews = activeQuestClaim ? db.city.getRecentQuestProgressReviewsForClaim?.(activeQuestClaim, char.id, 4) || [] : [];
+        const questContext = buildQuestPromptContext(db.city.getActiveQuests(), activeQuestClaim, lastQuestReview, recentQuestReviews);
+        const prompt = buildSurvivalPrompt(districts, { ...char, calories: currentCals }, inventory, activeEvents, universalResult, targetDistrict, questContext, db);
         try {
             const messages = [
                 { role: 'system', content: '你是一个城市生活模拟角色行动引擎。你必须严格按照用户要求返回完整 JSON 对象，不要输出 JSON 之外的解释、markdown 或额外文本。返回结果必须包含 action、log、chat、moment、diary 五个字段。' },
@@ -2843,7 +2958,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             // Broadcast generating state
             broadcastCityEvent(context.userId, char.id, 'schedule_generating', null);
 
-            const engineContextWrapper = { getUserDb: context.getUserDb, getMemory: context.getMemory };
+            const engineContextWrapper = { getUserDb: context.getUserDb, getMemory: context.getMemory, userId: context.userId, forceCityDetail: true };
             const universalResult = await buildUniversalContext(engineContextWrapper, char, '', false);
             const prompt = buildSchedulePrompt(char, districts, universalResult);
             const isGeminiModel = String(char.model_name || '').toLowerCase().includes('gemini');

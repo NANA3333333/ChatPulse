@@ -187,7 +187,7 @@ function getUserDb(userId) {
             stomach_load INTEGER DEFAULT 0,
             work_distraction INTEGER DEFAULT 0,
             sleep_disruption INTEGER DEFAULT 0,
-            llm_debug_capture INTEGER DEFAULT 0,
+            llm_debug_capture INTEGER DEFAULT 1,
             sweep_limit INTEGER DEFAULT 30,
             sweep_initialized INTEGER DEFAULT 1,
             sweep_last_error TEXT DEFAULT '',
@@ -999,6 +999,11 @@ function getUserDb(userId) {
             if (!fields.includes('emoji')) {
                 fields.push('emoji');
                 values.push('👤');
+            }
+            // Recent LLM Input / Output panel depends on this capture flag.
+            if (!fields.includes('llm_debug_capture')) {
+                fields.push('llm_debug_capture');
+                values.push(1);
             }
 
             const placeholders = fields.map(() => '?').join(', ');

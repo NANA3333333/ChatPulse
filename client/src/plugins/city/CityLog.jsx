@@ -248,7 +248,12 @@ function splitHackerIntelContent(value) {
 }
 
 export default function CityLog({ apiUrl, userProfile }) {
-    const announcementActionTypes = new Set(['ANNOUNCE', 'MAYOR', 'EVENT', 'QUEST']);
+    const announcementActionTypes = new Set(['ANNOUNCE', 'MAYOR', 'EVENT']);
+    const isAnnouncementLog = (log) => {
+        const actionType = String(log.action_type || '').toUpperCase();
+        if (announcementActionTypes.has(actionType)) return true;
+        return actionType === 'QUEST' && String(log.character_id || '').toLowerCase() === 'system';
+    };
     const [tab, setTab] = useState('feed');
     const [logs, setLogs] = useState([]);
     const [announcements, setAnnouncements] = useState([]);
@@ -273,7 +278,7 @@ export default function CityLog({ apiUrl, userProfile }) {
         try {
             const headers = { Authorization: `Bearer ${token}` };
             const [logsRes, announcementsRes, eventsRes, charsRes] = await Promise.all([
-                fetch(`${apiUrl}/city/logs?limit=300`, { headers }),
+                fetch(`${apiUrl}/city/logs?limit=all`, { headers }),
                 fetch(`${apiUrl}/city/announcements?limit=50`, { headers }),
                 fetch(`${apiUrl}/city/events`, { headers }),
                 fetch(`${apiUrl}/city/characters`, { headers }),
@@ -340,7 +345,7 @@ export default function CityLog({ apiUrl, userProfile }) {
         };
     }, [apiUrl, token]);
 
-    const activityLogs = logs.filter((log) => !announcementActionTypes.has(String(log.action_type || '').toUpperCase()));
+    const activityLogs = logs.filter((log) => !isAnnouncementLog(log));
 
     const latestLogDateTag = activityLogs.length > 0
         ? (() => {

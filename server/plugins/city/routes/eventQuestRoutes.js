@@ -144,34 +144,41 @@ function registerEventQuestRoutes(app, deps) {
                 const rewardText = `${Number(quest.reward_gold || 0)}金币${Number(quest.reward_cal || 0) > 0 ? ` + ${Number(quest.reward_cal || 0)}体力` : ''}`;
                 const directiveLines = [
                     '[系统任务派发提醒]',
+                    '这是一条系统事件，不是 Nana 在聊天框里发来的普通用户消息。',
                     `用户刚刚手动把一个公告任务分派给你，任务已经登记到你名下。`,
                     `任务：${quest.emoji || '📜'} ${quest.title}`,
                     `地点：${districtLabel}`,
                     quest.description ? `任务内容：${quest.description}` : '',
                     `奖励：${rewardText}`,
+                    '本轮只回应这个任务派发事件；不要继续、复述或改写你前面已经说过的私聊内容。',
                     '请你先像正常私聊一样，给用户发一条自然回应，表示你已经知道这件事。',
                     '如果你决定立刻去做，就像平时私聊触发商业街那样，在回复里自然附带 [CITY_ACTION: {...}] 或 [CITY_INTENT: ...]，让系统继续走你领取公告后的正常链路。',
                     '不要把标签、系统提示、流程说明直接说给用户听。'
                 ].filter(Boolean);
-                try {
-                    actionResult = await engine.triggerImmediateUserReply(char.id, wsClients, {
+                actionResult = { queued: true };
+                engine.triggerImmediateUserReply(char.id, wsClients, {
                         extraSystemDirective: directiveLines.join('\n'),
+                        extraDirectiveRole: 'system',
+                        eventUserDirective: `Nana 通过任务面板指派你去做「${quest.title}」。请把这当成 Nana 刚刚给你的新请求来回应：只回答你是否知道/是否接下这个任务；不要续写、复述或改写你上一轮已经说过的私聊内容。`,
                         triggerSource: 'city_manual_quest_assignment',
                         triggerRoute: 'POST /api/city/quests/:questId/claim',
                         triggerNote: `quest_${quest.id}_manual_assignment`
+                }).catch((err) => {
+                    const message = err?.message || 'manual_assignment_reply_failed';
+                    console.warn(`[City/QuestClaim] manual assignment reply failed for ${char.name}: ${message}`);
+                    try {
+                        req.db.city.logAction(
+                            'system',
+                            'QUEST',
+                            `⚠️ ${char.name} 已领取「${quest.title}」，但任务私聊派发失败：${message}`,
+                            0,
+                            0,
+                            targetDistrict?.id || quest.target_district || 'street'
+                        );
+                    } catch (logErr) {
+                        console.warn(`[City/QuestClaim] failed to log manual assignment error: ${logErr.message}`);
+                    }
                     });
-                } catch (err) {
-                    actionError = err?.message || 'manual_assignment_reply_failed';
-                    console.warn(`[City/QuestClaim] manual assignment reply failed for ${char.name}: ${actionError}`);
-                    req.db.city.logAction(
-                        'system',
-                        'QUEST',
-                        `⚠️ ${char.name} 已领取「${quest.title}」，但任务私聊派发失败：${actionError}`,
-                        0,
-                        0,
-                        targetDistrict?.id || quest.target_district || 'street'
-                    );
-                }
             }
 
             res.json({
