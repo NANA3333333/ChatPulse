@@ -520,7 +520,7 @@ function initGroupChatPlugin(app, context) {
                             .filter(c => c && !c.is_blocked);
 
                         // --- Use Universal Context Builder ---
-                        const engineContextWrapper = { getUserDb, getMemory: context.getMemory };
+                        const engineContextWrapper = { getUserDb, getMemory: context.getMemory, userId };
                         const universalResult = await buildUniversalContext(engineContextWrapper, char, recentInput, true, activeTargets);
 
                         const knownMembers = [];
