@@ -897,10 +897,10 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                                         style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', minHeight: '60px', resize: 'vertical' }}
                                     />
                                     <div style={{ display: 'flex', gap: '10px' }}>
-                                        <button onClick={handleSaveProfile} title={lang === 'en' ? 'Save profile changes' : '淇濆瓨涓汉璧勬枡淇敼'} style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '6px 12px', backgroundColor: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+                                        <button onClick={handleSaveProfile} title={lang === 'en' ? 'Save profile changes' : '保存个人资料修改'} style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '6px 12px', backgroundColor: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
                                             <Save size={16} /> Save
                                         </button>
-                                        <button onClick={() => setIsEditing(false)} title={lang === 'en' ? 'Cancel editing' : '鍙栨秷缂栬緫'} style={{ padding: '6px 12px', backgroundColor: '#f5f5f5', color: '#333', border: '1px solid #ddd', borderRadius: '4px', cursor: 'pointer' }}>Cancel</button>
+                                        <button onClick={() => setIsEditing(false)} title={lang === 'en' ? 'Cancel editing' : '取消编辑'} style={{ padding: '6px 12px', backgroundColor: '#f5f5f5', color: '#333', border: '1px solid #ddd', borderRadius: '4px', cursor: 'pointer' }}>Cancel</button>
                                     </div>
                                 </div>
                             ) : (
@@ -913,7 +913,7 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                                                 <p style={{ color: '#666', margin: 0, whiteSpace: 'pre-wrap', fontSize: '14px' }}>{profile.bio || 'Signature...'}</p>
                                             </div>
                                         </div>
-                                        <button onClick={() => setIsEditing(true)} title={lang === 'en' ? 'Edit your profile (name, avatar, bio)' : '缂栬緫涓汉璧勬枡锛堝悕瀛椼€佸ご鍍忋€佺鍚嶏級'} style={{ background: 'none', border: 'none', color: 'var(--accent-color)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                        <button onClick={() => setIsEditing(true)} title={lang === 'en' ? 'Edit your profile (name, avatar, bio)' : '编辑个人资料（名字、头像、签名）'} style={{ background: 'none', border: 'none', color: 'var(--accent-color)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }}>
                                             <Edit3 size={16} /> Edit
                                         </button>
                                     </div>

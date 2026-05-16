@@ -465,9 +465,9 @@ function initGroupChatPlugin(app, context) {
                                     const t = db.getTransfer(tId);
                                     if (t) {
                                         const status = t.claimed ? '（已被对方领取）' : (t.refunded ? '（已退还）' : '（待领取）');
-                                        return `[杞处: 楼${amount}, 澶囨敞: "${note}" ${status}]`;
+                                        return `[转账: ¥${amount}, 备注: "${note}" ${status}]`;
                                     }
-                                    return `[杞处: 楼${amount}, 澶囨敞: "${note}"]`;
+                                    return `[转账: ¥${amount}, 备注: "${note}"]`;
                                 }
                                 const rpMatch = content.match(/^\[REDPACKET:(\d+)\]$/);
                                 if (rpMatch) {
@@ -483,15 +483,15 @@ function initGroupChatPlugin(app, context) {
                                         let claimNote = '';
                                         if (rp.claims && rp.claims.length > 0) {
                                             const claimers = rp.claims.map(c => {
-                                                const cName = c.claimer_id === 'user' ? (db.getUserProfile()?.name || '鐢ㄦ埛') : (db.getCharacter(c.claimer_id)?.name || c.claimer_id);
-                                                return `${cName}(楼${c.amount})`;
+                                                const cName = c.claimer_id === 'user' ? (db.getUserProfile()?.name || '用户') : (db.getCharacter(c.claimer_id)?.name || c.claimer_id);
+                                                return `${cName}(¥${c.amount})`;
                                             }).join(', ');
-                                            claimNote = ` 棰嗗彇璁板綍: ${claimers}`;
+                                            claimNote = ` 领取记录: ${claimers}`;
                                         }
-                                        const senderName = rp.sender_id === 'user' ? '鐢ㄦ埛' : (db.getCharacter(rp.sender_id)?.name || rp.sender_id);
-                                        return `[${senderName}鍙戜簡涓€涓兢绾㈠寘: 楼${rp.total_amount}${rp.type === 'lucky' ? '(鎷兼墜姘?' : '(鏅€?'}, 澶囨敞: "${rp.note}" ${statusStr}${claimNote}]`;
+                                        const senderName = rp.sender_id === 'user' ? '用户' : (db.getCharacter(rp.sender_id)?.name || rp.sender_id);
+                                        return `[${senderName}发了一个群红包: ¥${rp.total_amount}${rp.type === 'lucky' ? '(拼手气)' : '(普通)'}, 备注: "${rp.note}" ${statusStr}${claimNote}]`;
                                     }
-                                    return `[缇ょ孩鍖匽`;
+                                    return `[群红包]`;
                                 }
                             } catch (e) { }
                             return content;
@@ -529,25 +529,25 @@ function initGroupChatPlugin(app, context) {
                         for (const m of otherMembers) {
                             if (m.member_id === 'user') {
                                 const userRel = db.getCharRelationship(char.id, 'user');
-                                knownMembers.push(`- ${userName} (id: user, 濂芥劅搴? ${userRel?.affinity ?? char.affinity ?? 50})`);
+                                knownMembers.push(`- ${userName} (id: user, 好感度: ${userRel?.affinity ?? char.affinity ?? 50})`);
                                 continue;
                             }
                             const otherChar = db.getCharacter(m.member_id);
                             if (!otherChar) continue;
                             const rel = db.getCharRelationship(char.id, otherChar.id);
                             if (rel && rel.isAcquainted) {
-                                knownMembers.push(`- ${otherChar.name} (id: ${otherChar.id}, 濂芥劅搴? ${rel.affinity}, 鍗拌薄: "${rel.impression}")`);
+                                knownMembers.push(`- ${otherChar.name} (id: ${otherChar.id}, 好感度: ${rel.affinity}, 印象: "${rel.impression}")`);
                             } else {
-                                unknownMembers.push(`- ${otherChar.name} (id: ${otherChar.id}, 浣犱笉璁よ瘑杩欎釜浜猴紝鍙煡閬撳悕瀛?`);
+                                unknownMembers.push(`- ${otherChar.name} (id: ${otherChar.id}, 你不认识这个人，只知道名字)`);
                             }
                         }
 
                         let relationSection = '';
                         if (knownMembers.length > 0) {
-                            relationSection += `\n浣犺璇嗙殑浜猴細\n${knownMembers.join('\n')} `;
+                            relationSection += `\n你认识的人：\n${knownMembers.join('\n')} `;
                         }
                         if (unknownMembers.length > 0) {
-                            relationSection += `\n浣犱笉璁よ瘑鐨勪汉锛歕n${unknownMembers.join('\n')} `;
+                            relationSection += `\n你不认识的人：\n${unknownMembers.join('\n')} `;
                         }
 
                         // List char's own recent messages to prevent repetition
@@ -608,7 +608,7 @@ function initGroupChatPlugin(app, context) {
 
                         // Prevent third-party proxies from auto-appending "缁х画" if the active AI spoke last 
                         if (llmMessages.length > 0 && llmMessages[llmMessages.length - 1].role === 'assistant') {
-                            llmMessages.push({ role: 'user', content: '[绯荤粺鎻愮ず锛氱兢閲岀幇鍦ㄥ緢瀹夐潤锛岃鑷劧鍦扮户缁彂瑷€鎴栧紑鍚柊璇濋銆俔' });
+                            llmMessages.push({ role: 'user', content: '[系统提示：群里现在很安静，请自然地继续发言或开启新话题。]' });
                         }
 
                         recordGroupLlmDebug(db, char, 'input', llmMessages, {

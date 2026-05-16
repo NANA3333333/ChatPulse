@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Database, ExternalLink, Eye, Play, RefreshCw, Save, Search, Trash2 } from 'lucide-react';
+import { CheckCircle2, Clock3, Database, ExternalLink, KeyRound, Play, RefreshCw, Save, Search, Trash2, Wifi } from 'lucide-react';
 
 const panel = {
   height: '100%',
@@ -69,6 +69,20 @@ const sectionStyle = {
   padding: '12px'
 };
 
+const badgeStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '4px',
+  height: '22px',
+  padding: '0 8px',
+  borderRadius: '999px',
+  border: '1px solid #dbe4ef',
+  background: '#f8fafc',
+  color: '#475569',
+  fontSize: '11px',
+  whiteSpace: 'nowrap'
+};
+
 function getHeaders() {
   const token = localStorage.getItem('cp_token') || '';
   return {
@@ -88,65 +102,96 @@ async function requestJson(url, options = {}) {
   return data;
 }
 
-function ResultList({ result }) {
-  if (!result) return <div style={{ color: '#64748b', fontSize: '13px' }}>还没有输出。</div>;
-  if (Array.isArray(result.results)) {
-    if (result.results.length === 0) return <div style={{ color: '#64748b', fontSize: '13px' }}>没有找到可用结果。</div>;
-    return (
-      <div style={{ display: 'grid', gap: '8px' }}>
-        {result.results.map((item, index) => (
-          <div key={`${item.url || item.title}-${index}`} style={{ padding: '10px', border: '1px solid #d8e0ea', borderRadius: '6px', background: '#fff' }}>
-            <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '4px' }}>{item.title || item.url || 'Result'}</div>
-            {item.snippet && <div style={{ color: '#475569', fontSize: '12px', lineHeight: 1.5 }}>{item.snippet}</div>}
-            {item.url && (
-              <a href={item.url} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginTop: '6px', color: '#2563eb', fontSize: '12px' }}>
-                打开来源 <ExternalLink size={12} />
-              </a>
-            )}
-          </div>
-        ))}
-      </div>
-    );
-  }
-  if (Array.isArray(result.knowledge_results)) {
-    if (result.knowledge_results.length === 0) return <div style={{ color: '#64748b', fontSize: '13px' }}>外部知识库没有命中。</div>;
-    return (
-      <div style={{ display: 'grid', gap: '8px' }}>
-        {result.knowledge_results.map((item) => (
-          <div key={item.chunk_id} style={{ padding: '10px', border: '1px solid #d8e0ea', borderRadius: '6px', background: '#fff' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <div style={{ flex: 1, fontWeight: 700, fontSize: '13px' }}>{item.title}</div>
-              <span style={{ color: '#64748b', fontSize: '11px' }}>score {item.score}</span>
-            </div>
-            <div style={{ color: '#475569', fontSize: '12px', lineHeight: 1.5, marginTop: '6px', whiteSpace: 'pre-wrap' }}>{item.content}</div>
-            {item.source_url && (
-              <a href={item.source_url} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginTop: '6px', color: '#2563eb', fontSize: '12px' }}>
-                来源 <ExternalLink size={12} />
-              </a>
-            )}
-          </div>
-        ))}
-      </div>
-    );
-  }
+function formatTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function providerLabel(providerId, providers = []) {
+  if (providerId === 'duckduckgo' || providerId === 'duckduckgo_instant_answer') return 'DuckDuckGo';
+  return providers.find(item => item.id === providerId)?.label || providerId || 'Auto';
+}
+
+function normalizeProviderId(source) {
+  if (!source) return '';
+  if (source === 'duckduckgo_instant_answer') return 'duckduckgo';
+  if (source.startsWith('serper')) return 'serper';
+  if (source.startsWith('tavily')) return 'tavily';
+  if (source.startsWith('brave')) return 'brave';
+  if (source.startsWith('bing')) return 'bing';
+  return source;
+}
+
+function TaskRecord({ task, selected, providers, onSelect, onRerun, onDelete }) {
+  const source = task.output?.source || task.input?.provider || '';
+  const statusColor = task.status === 'done' ? '#16a34a' : task.status === 'error' ? '#dc2626' : '#64748b';
+  const outputResults = Array.isArray(task.output?.results) ? task.output.results.slice(0, 3) : [];
+  const outputText = task.output?.text || task.output?.url || '';
   return (
-    <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: '#334155', fontSize: '12px', lineHeight: 1.5 }}>
-      {result.text || JSON.stringify(result, null, 2)}
-    </pre>
+    <div
+      style={{
+        border: selected ? '1px solid #2563eb' : '1px solid #e2e8f0',
+        borderRadius: '7px',
+        padding: '8px',
+        background: selected ? '#eff6ff' : '#fff'
+      }}
+    >
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <button
+          style={{ ...iconButton, width: '28px', height: '28px', flexShrink: 0 }}
+          onClick={() => onSelect(task)}
+          title="查看任务输出"
+        >
+          {task.status === 'done' ? <CheckCircle2 size={14} /> : <Clock3 size={14} />}
+        </button>
+        <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => onSelect(task)}>
+          <div style={{ fontWeight: 700, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{task.title}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '4px', alignItems: 'center' }}>
+            <span style={{ ...badgeStyle, color: statusColor }}>{task.kind} / {task.status}</span>
+            {source && <span style={badgeStyle}>{providerLabel(normalizeProviderId(String(source)), providers)}</span>}
+            <span style={badgeStyle}>{formatTime(task.finished_at || task.created_at)}</span>
+          </div>
+        </div>
+        <button style={{ ...iconButton, width: '28px', height: '28px' }} onClick={() => onRerun(task)} title="重新执行"><Play size={14} /></button>
+        <button style={{ ...iconButton, width: '28px', height: '28px' }} onClick={() => onDelete(task)} title="删除"><Trash2 size={14} /></button>
+      </div>
+      {task.error && <div style={{ color: '#dc2626', fontSize: '11px', marginTop: '6px' }}>{task.error}</div>}
+      {selected && (outputResults.length > 0 || outputText) && (
+        <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #dbe4ef', display: 'grid', gap: '6px' }}>
+          {outputResults.map((item, index) => (
+            <div key={`${item.url || item.title}-${index}`} style={{ display: 'grid', gap: '2px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 700, color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title || item.url || 'Result'}</div>
+              {item.snippet && <div style={{ fontSize: '11px', color: '#64748b', lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{item.snippet}</div>}
+              {item.url && <a href={item.url} target="_blank" rel="noreferrer" style={{ color: '#2563eb', fontSize: '11px', textDecoration: 'none' }}>打开来源</a>}
+            </div>
+          ))}
+          {!outputResults.length && outputText && (
+            <div style={{ fontSize: '11px', color: '#64748b', lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+              {outputText}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
 export default function McpLabPanel({ apiUrl }) {
   const headers = useMemo(() => getHeaders(), []);
   const [status, setStatus] = useState(null);
-  const [serperConfig, setSerperConfig] = useState(null);
-  const [serperKey, setSerperKey] = useState('');
+  const [webConfig, setWebConfig] = useState(null);
+  const [webKeys, setWebKeys] = useState({});
+  const [clearKeyIds, setClearKeyIds] = useState([]);
+  const [selectedProvider, setSelectedProvider] = useState('auto');
   const [characters, setCharacters] = useState([]);
   const [characterId, setCharacterId] = useState('');
   const [query, setQuery] = useState('');
   const [url, setUrl] = useState('');
-  const [result, setResult] = useState(null);
+  const [notice, setNotice] = useState('');
   const [tasks, setTasks] = useState([]);
+  const [selectedTaskId, setSelectedTaskId] = useState('');
   const [docs, setDocs] = useState([]);
   const [noteTitle, setNoteTitle] = useState('');
   const [noteUrl, setNoteUrl] = useState('');
@@ -166,12 +211,14 @@ export default function McpLabPanel({ apiUrl }) {
       ]);
       setStatus(statusData);
       try {
-        const configData = await requestJson(endpoint(apiUrl, '/mcp-lab/serper-config'), { headers });
-        setSerperConfig(configData);
+        const configData = await requestJson(endpoint(apiUrl, '/mcp-lab/web-config'), { headers });
+        setWebConfig(configData);
+        setSelectedProvider(configData.preferred_provider || 'auto');
       } catch (configError) {
-        setSerperConfig(null);
+        setWebConfig(null);
       }
       setTasks(taskData.tasks || []);
+      setSelectedTaskId((current) => current || taskData.tasks?.[0]?.id || '');
       const nextCharacters = Array.isArray(characterData) ? characterData : [];
       setCharacters(nextCharacters);
       setCharacterId((current) => current || nextCharacters[0]?.id || '');
@@ -193,9 +240,10 @@ export default function McpLabPanel({ apiUrl }) {
       const data = await requestJson(endpoint(apiUrl, '/mcp-lab/search'), {
         method: 'POST',
         headers,
-        body: JSON.stringify({ query })
+        body: JSON.stringify({ query, provider: selectedProvider })
       });
-      setResult(data.result);
+      const count = Array.isArray(data.result?.results) ? data.result.results.length : 0;
+      setNotice(`查询完成：${providerLabel(data.result?.source || selectedProvider, providers)} 返回 ${count} 条结果`);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -203,17 +251,22 @@ export default function McpLabPanel({ apiUrl }) {
     }
   }
 
-  async function saveSerperKey() {
+  async function saveWebConfig() {
     setBusy(true);
     setError('');
     try {
-      const data = await requestJson(endpoint(apiUrl, '/mcp-lab/serper-config'), {
+      const data = await requestJson(endpoint(apiUrl, '/mcp-lab/web-config'), {
         method: 'PUT',
         headers,
-        body: JSON.stringify({ serper_api_key: serperKey })
+        body: JSON.stringify({
+          preferred_provider: selectedProvider,
+          keys: webKeys,
+          clear_ids: clearKeyIds
+        })
       });
-      setSerperConfig(data);
-      setSerperKey('');
+      setWebConfig(data);
+      setWebKeys({});
+      setClearKeyIds([]);
       const statusData = await requestJson(endpoint(apiUrl, '/mcp-lab/status'), { headers });
       setStatus(statusData);
     } catch (e) {
@@ -233,21 +286,7 @@ export default function McpLabPanel({ apiUrl }) {
         headers,
         body: JSON.stringify({ url })
       });
-      setResult(data.result);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function inspectContext() {
-    if (!characterId) return;
-    setBusy(true);
-    setError('');
-    try {
-      const data = await requestJson(endpoint(apiUrl, `/mcp-lab/context/${encodeURIComponent(characterId)}`), { headers });
-      setResult(data.context);
+      setNotice(`页面抓取完成：${data.result?.status || ''} ${data.result?.content_type || ''}`.trim());
     } catch (e) {
       setError(e.message);
     } finally {
@@ -260,7 +299,7 @@ export default function McpLabPanel({ apiUrl }) {
     setBusy(true);
     setError('');
     try {
-      const data = await requestJson(endpoint(apiUrl, '/mcp-lab/knowledge'), {
+      await requestJson(endpoint(apiUrl, '/mcp-lab/knowledge'), {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -271,7 +310,7 @@ export default function McpLabPanel({ apiUrl }) {
           content: noteContent
         })
       });
-      setResult(data.doc);
+      setNotice('外部知识已保存');
       setNoteTitle('');
       setNoteUrl('');
       setNoteContent('');
@@ -293,7 +332,7 @@ export default function McpLabPanel({ apiUrl }) {
         headers,
         body: JSON.stringify({ character_id: characterId, query: knowledgeQuery })
       });
-      setResult({ knowledge_results: data.results || [] });
+      setNotice(`外部知识命中 ${data.results?.length || 0} 条`);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -311,13 +350,14 @@ export default function McpLabPanel({ apiUrl }) {
     setBusy(true);
     setError('');
     try {
-      const input = kind === 'fetch_url' ? { url } : { query };
+      const input = kind === 'fetch_url' ? { url } : { query, provider: selectedProvider };
       const title = kind === 'fetch_url' ? url : query;
       await requestJson(endpoint(apiUrl, '/mcp-lab/tasks'), {
         method: 'POST',
         headers,
         body: JSON.stringify({ kind, title, input, run_now: true })
       });
+      setNotice('任务已创建并执行');
       await load();
     } catch (e) {
       setError(e.message);
@@ -349,15 +389,30 @@ export default function McpLabPanel({ apiUrl }) {
     }
   }
 
+  const providers = webConfig?.providers || status?.web_search_providers || [];
+  const activeProvider = webConfig?.active_provider || status?.search_provider || 'duckduckgo';
+  const selectedProviderConfig = providers.find(provider => provider.id === selectedProvider);
+
+  function toggleClearProvider(providerId) {
+    setClearKeyIds((current) => current.includes(providerId)
+      ? current.filter(id => id !== providerId)
+      : [...current, providerId]);
+  }
+
+  function selectTask(task) {
+    setSelectedTaskId(current => current === task.id ? '' : task.id);
+  }
+
   return (
     <div style={panel}>
       <div style={toolbar}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 800, fontSize: '15px' }}>MCP 实验台</div>
           <div style={{ color: '#64748b', fontSize: '12px', marginTop: '2px' }}>
-            {status?.note || '联网工具、外部知识库、上下文检查的实验入口'}
+            联网搜索、外部知识库和任务记录
           </div>
         </div>
+        <span style={badgeStyle}><Wifi size={12} /> {providerLabel(activeProvider, providers)}</span>
         <button style={iconButton} onClick={load} title="刷新">
           <RefreshCw size={16} />
         </button>
@@ -365,35 +420,60 @@ export default function McpLabPanel({ apiUrl }) {
 
       {error && <div style={{ margin: '12px 16px 0', padding: '8px 10px', border: '1px solid #fecaca', borderRadius: '6px', color: '#b91c1c', background: '#fff1f2', fontSize: '12px' }}>{error}</div>}
 
-      <div style={{ padding: '14px 16px', display: 'grid', gridTemplateColumns: 'minmax(300px, 420px) minmax(0, 1fr)', gap: '14px', overflow: 'hidden', minHeight: 0 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', minWidth: 0, overflowY: 'auto', paddingRight: '2px' }}>
-          <section style={sectionStyle}>
-            <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '8px' }}>角色上下文</div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <select style={{ ...inputStyle, flex: 1 }} value={characterId} onChange={(e) => setCharacterId(e.target.value)}>
-                {characters.map((character) => (
-                  <option key={character.id} value={character.id}>{character.name || character.id}</option>
-                ))}
-              </select>
-              <button style={primaryButton} onClick={inspectContext} disabled={busy || !characterId} title="检查上下文">
-                <Eye size={15} /> 检查
-              </button>
-            </div>
-          </section>
+      {notice && <div style={{ margin: '10px 16px 0', padding: '7px 10px', border: '1px solid #bfdbfe', borderRadius: '6px', color: '#1d4ed8', background: '#eff6ff', fontSize: '12px' }}>{notice}</div>}
 
+      <div style={{ padding: '14px 16px', overflowY: 'auto', minHeight: 0 }}>
+        <div style={{ display: 'grid', gap: '12px', maxWidth: '1120px', margin: '0 auto' }}>
           <section style={sectionStyle}>
-            <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '8px' }}>联网查询</div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
+              <div style={{ fontWeight: 700, fontSize: '13px' }}>联网查询</div>
+              <span style={badgeStyle}>当前：{providerLabel(activeProvider, providers)}</span>
+            </div>
             <div style={{ display: 'grid', gap: '8px', marginBottom: '10px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#64748b', fontSize: '12px' }}>
-                <span>搜索源：{status?.search_provider === 'serper' ? 'Serper / Google' : 'DuckDuckGo Instant Answer'}</span>
-                {serperConfig?.masked && <span>({serperConfig.masked})</span>}
-              </div>
               <div style={{ display: 'flex', gap: '8px' }}>
-                <input style={{ ...inputStyle, flex: 1 }} type="password" value={serperKey} onChange={(e) => setSerperKey(e.target.value)} placeholder={serperConfig?.has_key ? '输入新 Serper Key；留空保存可清除用户级 Key' : 'Serper API Key，可空'} />
-                <button style={iconButton} onClick={saveSerperKey} disabled={busy} title="保存 Serper Key">
+                <select style={{ ...inputStyle, flex: 1 }} value={selectedProvider} onChange={(e) => setSelectedProvider(e.target.value)}>
+                  <option value="auto">自动选择可用搜索源</option>
+                  {providers.map(provider => (
+                    <option key={provider.id} value={provider.id}>{provider.label}</option>
+                  ))}
+                  <option value="duckduckgo">DuckDuckGo 免 Key</option>
+                </select>
+                <button style={iconButton} onClick={saveWebConfig} disabled={busy} title="保存联网 Key 与搜索源">
                   <Save size={15} />
                 </button>
               </div>
+              {selectedProviderConfig ? (
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '8px', alignItems: 'center' }}>
+                  <div style={{ position: 'relative', minWidth: 0 }}>
+                    <KeyRound size={14} style={{ position: 'absolute', left: '10px', top: '10px', color: '#64748b' }} />
+                    <input
+                      style={{ ...inputStyle, width: '100%', paddingLeft: '30px' }}
+                      type="password"
+                      value={webKeys[selectedProviderConfig.id] || ''}
+                      onChange={(e) => setWebKeys(current => ({ ...current, [selectedProviderConfig.id]: e.target.value }))}
+                      placeholder={selectedProviderConfig.has_key ? `${selectedProviderConfig.masked || '已保存'} / ${selectedProviderConfig.source}` : `${selectedProviderConfig.label} API Key`}
+                    />
+                  </div>
+                  <button
+                    style={{
+                      ...iconButton,
+                      width: '54px',
+                      background: clearKeyIds.includes(selectedProviderConfig.id) ? '#fee2e2' : '#fff',
+                      borderColor: clearKeyIds.includes(selectedProviderConfig.id) ? '#fca5a5' : '#cbd5e1',
+                      color: clearKeyIds.includes(selectedProviderConfig.id) ? '#b91c1c' : '#475569',
+                      fontSize: '11px'
+                    }}
+                    onClick={() => toggleClearProvider(selectedProviderConfig.id)}
+                    title="标记清除这个用户级 Key，再点保存生效"
+                  >
+                    清除
+                  </button>
+                </div>
+              ) : (
+                <div style={{ color: '#64748b', fontSize: '12px', lineHeight: 1.5 }}>
+                  {selectedProvider === 'duckduckgo' ? 'DuckDuckGo 不需要 Key。' : '自动模式会优先使用已保存 Key，未配置时使用 DuckDuckGo。'}
+                </div>
+              )}
             </div>
             <div style={{ display: 'flex', gap: '8px' }}>
               <input style={{ ...inputStyle, flex: 1 }} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索关键词" onKeyDown={(e) => { if (e.key === 'Enter') runSearch(); }} />
@@ -406,72 +486,72 @@ export default function McpLabPanel({ apiUrl }) {
             </button>
           </section>
 
-          <section style={sectionStyle}>
-            <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '8px' }}>抓取页面</div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <input style={{ ...inputStyle, flex: 1 }} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com" onKeyDown={(e) => { if (e.key === 'Enter') fetchUrl(); }} />
-              <button style={primaryButton} onClick={fetchUrl} disabled={busy} title="抓取">
-                <ExternalLink size={15} /> 抓取
-              </button>
-            </div>
-            <button style={{ ...iconButton, width: '100%', marginTop: '8px' }} onClick={() => createTask('fetch_url')} disabled={busy || !url.trim()} title="创建并执行抓取任务">
-              <Play size={15} /> 加入任务
-            </button>
-          </section>
-
-          <section style={sectionStyle}>
-            <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '8px' }}>外部知识库</div>
-            <div style={{ display: 'grid', gap: '8px' }}>
-              <input style={inputStyle} value={noteTitle} onChange={(e) => setNoteTitle(e.target.value)} placeholder="标题" />
-              <input style={inputStyle} value={noteUrl} onChange={(e) => setNoteUrl(e.target.value)} placeholder="来源 URL，可空" />
-              <textarea style={textAreaStyle} value={noteContent} onChange={(e) => setNoteContent(e.target.value)} placeholder="保存到独立外部知识库，不进入角色记忆库" />
-              <button style={{ ...primaryButton, width: '100%' }} onClick={saveKnowledge} disabled={busy || !noteContent.trim()} title="保存知识">
-                <Save size={15} /> 保存知识
-              </button>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px', alignItems: 'start' }}>
+            <section style={sectionStyle}>
+              <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '8px' }}>抓取页面</div>
               <div style={{ display: 'flex', gap: '8px' }}>
-                <input style={{ ...inputStyle, flex: 1 }} value={knowledgeQuery} onChange={(e) => setKnowledgeQuery(e.target.value)} placeholder="搜索外部知识" onKeyDown={(e) => { if (e.key === 'Enter') searchKnowledge(); }} />
-                <button style={iconButton} onClick={searchKnowledge} disabled={busy || !knowledgeQuery.trim()} title="搜索知识">
-                  <Database size={15} />
+                <input style={{ ...inputStyle, flex: 1 }} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com" onKeyDown={(e) => { if (e.key === 'Enter') fetchUrl(); }} />
+                <button style={primaryButton} onClick={fetchUrl} disabled={busy} title="抓取">
+                  <ExternalLink size={15} /> 抓取
                 </button>
               </div>
-            </div>
-            <div style={{ display: 'grid', gap: '6px', marginTop: '10px' }}>
-              {docs.slice(0, 5).map((doc) => (
-                <div key={doc.id} style={{ border: '1px solid #e2e8f0', borderRadius: '6px', padding: '7px 8px' }}>
-                  <div style={{ fontWeight: 700, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.title}</div>
-                  <div style={{ color: '#64748b', fontSize: '11px' }}>{doc.source_type} / {doc.trust_level}</div>
+              <button style={{ ...iconButton, width: '100%', marginTop: '8px' }} onClick={() => createTask('fetch_url')} disabled={busy || !url.trim()} title="创建并执行抓取任务">
+                <Play size={15} /> 加入任务
+              </button>
+            </section>
+
+            <section style={sectionStyle}>
+              <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '8px' }}>外部知识库</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '8px' }}>
+                <input style={inputStyle} value={noteTitle} onChange={(e) => setNoteTitle(e.target.value)} placeholder="标题" />
+                <input style={inputStyle} value={noteUrl} onChange={(e) => setNoteUrl(e.target.value)} placeholder="来源 URL，可空" />
+                <select style={inputStyle} value={characterId} onChange={(e) => setCharacterId(e.target.value)} title="知识归属角色">
+                  <option value="">全局知识</option>
+                  {characters.map((character) => (
+                    <option key={character.id} value={character.id}>{character.name || character.id}</option>
+                  ))}
+                </select>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input style={{ ...inputStyle, flex: 1 }} value={knowledgeQuery} onChange={(e) => setKnowledgeQuery(e.target.value)} placeholder="搜索知识" onKeyDown={(e) => { if (e.key === 'Enter') searchKnowledge(); }} />
+                  <button style={iconButton} onClick={searchKnowledge} disabled={busy || !knowledgeQuery.trim()} title="搜索知识">
+                    <Database size={15} />
+                  </button>
                 </div>
-              ))}
-            </div>
-          </section>
+              </div>
+              <textarea style={{ ...textAreaStyle, width: '100%', marginTop: '8px' }} value={noteContent} onChange={(e) => setNoteContent(e.target.value)} placeholder="保存到独立外部知识库，不进入角色记忆库" />
+              <button style={{ ...primaryButton, width: '100%', marginTop: '8px' }} onClick={saveKnowledge} disabled={busy || !noteContent.trim()} title="保存知识">
+                <Save size={15} /> 保存知识
+              </button>
+              {docs.length > 0 && (
+                <div style={{ display: 'flex', gap: '6px', marginTop: '10px', flexWrap: 'wrap' }}>
+                  {docs.slice(0, 4).map((doc) => (
+                    <span key={doc.id} style={badgeStyle}>{doc.title}</span>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
 
           <section style={sectionStyle}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-              <div style={{ fontWeight: 700, fontSize: '13px' }}>任务队列</div>
+              <div style={{ fontWeight: 700, fontSize: '13px' }}>联网任务记录</div>
               <span style={{ color: '#64748b', fontSize: '12px' }}>{tasks.length}</span>
             </div>
             <div style={{ display: 'grid', gap: '8px' }}>
               {tasks.length === 0 && <div style={{ color: '#64748b', fontSize: '12px' }}>还没有任务。</div>}
               {tasks.map(task => (
-                <div key={task.id} style={{ border: '1px solid #e2e8f0', borderRadius: '6px', padding: '8px' }}>
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{task.title}</div>
-                      <div style={{ color: task.status === 'error' ? '#dc2626' : '#64748b', fontSize: '11px' }}>{task.kind} / {task.status}</div>
-                    </div>
-                    <button style={iconButton} onClick={() => rerunTask(task)} title="重新执行"><Play size={14} /></button>
-                    <button style={iconButton} onClick={() => deleteTask(task)} title="删除"><Trash2 size={14} /></button>
-                  </div>
-                  {task.error && <div style={{ color: '#dc2626', fontSize: '11px', marginTop: '6px' }}>{task.error}</div>}
-                </div>
+                <TaskRecord
+                  key={task.id}
+                  task={task}
+                  selected={task.id === selectedTaskId}
+                  providers={providers}
+                  onSelect={selectTask}
+                  onRerun={rerunTask}
+                  onDelete={deleteTask}
+                />
               ))}
             </div>
           </section>
-        </div>
-
-        <div style={{ background: '#fff', border: '1px solid #d8e0ea', borderRadius: '8px', padding: '12px', overflowY: 'auto', minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '10px' }}>输出</div>
-          <ResultList result={result} />
         </div>
       </div>
     </div>

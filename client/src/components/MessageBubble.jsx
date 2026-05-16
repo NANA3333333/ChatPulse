@@ -300,7 +300,7 @@ function MessageBubble({ message, avatar, characterName, apiUrl, onRetry, contac
                                             <div style={{ fontSize: '16px', fontWeight: '400' }}>{cardName}</div>
                                         </div>
                                         <div style={{ padding: '4px 15px 6px', fontSize: '12px', color: '#999' }}>
-                                            涓汉鍚嶇墖
+                                            {lang === 'en' ? 'Contact card' : '个人名片'}
                                         </div>
                                     </div>
                                 );

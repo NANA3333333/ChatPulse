@@ -65,7 +65,7 @@ function createSocialService(deps = {}) {
         }
 
         let simulationLogs = [];
-        const engineContextWrapper = getEngineContextWrapper();
+        const engineContextWrapper = getEngineContextWrapper(userId);
         const questCompetitionContext = buildQuestCompetitionContext(db, occupants, district);
 
         for (let i = 0; i < occupants.length; i++) {

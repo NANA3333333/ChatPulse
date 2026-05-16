@@ -282,7 +282,9 @@ function getUserDb(userId) {
             theme_config TEXT DEFAULT '{}',
             banner TEXT,
             private_msg_limit_for_group INTEGER DEFAULT 3,
-            serper_api_key TEXT DEFAULT ''
+            serper_api_key TEXT DEFAULT '',
+            web_search_keys_json TEXT DEFAULT '{}',
+            web_search_provider TEXT DEFAULT 'auto'
         );
         CREATE TABLE IF NOT EXISTS moment_likes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -868,6 +870,8 @@ function getUserDb(userId) {
         try { db.prepare('ALTER TABLE user_profile ADD COLUMN moments_token_limit INTEGER DEFAULT 500').run(); } catch (e) { }
         try { db.prepare('ALTER TABLE user_profile ADD COLUMN moments_reaction_rate INTEGER DEFAULT 30').run(); } catch (e) { }
         try { db.prepare('ALTER TABLE user_profile ADD COLUMN serper_api_key TEXT DEFAULT ""').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile ADD COLUMN web_search_keys_json TEXT DEFAULT "{}"').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile ADD COLUMN web_search_provider TEXT DEFAULT "auto"').run(); } catch (e) { }
         // Track last moment posted by each character (cooldown)
         try { db.prepare('ALTER TABLE characters ADD COLUMN last_moment_at INTEGER DEFAULT 0').run(); } catch (e) { }
         // Enhanced jealousy system
@@ -1845,7 +1849,7 @@ function getUserDb(userId) {
     }
 
     function updateUserProfile(data) {
-        const allowedFields = ['name', 'avatar', 'banner', 'bio', 'theme', 'custom_css', 'theme_config', 'group_msg_limit', 'group_skip_rate', 'group_proactive_enabled', 'group_interval_min', 'group_interval_max', 'jealousy_chance', 'wallet', 'private_msg_limit_for_group', 'moments_token_limit', 'moments_reaction_rate', 'serper_api_key'];
+        const allowedFields = ['name', 'avatar', 'banner', 'bio', 'theme', 'custom_css', 'theme_config', 'group_msg_limit', 'group_skip_rate', 'group_proactive_enabled', 'group_interval_min', 'group_interval_max', 'jealousy_chance', 'wallet', 'private_msg_limit_for_group', 'moments_token_limit', 'moments_reaction_rate', 'serper_api_key', 'web_search_keys_json', 'web_search_provider'];
         const fields = Object.keys(data).filter(k => allowedFields.includes(k));
         if (fields.length === 0) return;
         const normalizedData = { ...data };

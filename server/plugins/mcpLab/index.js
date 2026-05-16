@@ -2,6 +2,32 @@ const crypto = require('crypto');
 const initMcpLabDb = require('./db');
 
 const tasksByUser = new Map();
+const WEB_SEARCH_PROVIDERS = [
+    {
+        id: 'serper',
+        label: 'Serper / Google',
+        env: 'SERPER_API_KEY',
+        docs: 'https://serper.dev/'
+    },
+    {
+        id: 'tavily',
+        label: 'Tavily Search',
+        env: 'TAVILY_API_KEY',
+        docs: 'https://tavily.com/'
+    },
+    {
+        id: 'brave',
+        label: 'Brave Search',
+        env: 'BRAVE_SEARCH_API_KEY',
+        docs: 'https://brave.com/search/api/'
+    },
+    {
+        id: 'bing',
+        label: 'Bing Web Search',
+        env: 'BING_SEARCH_API_KEY',
+        docs: 'https://www.microsoft.com/bing/apis/bing-web-search-api'
+    }
+];
 
 function nowIso() {
     return new Date().toISOString();
@@ -15,6 +41,16 @@ function getUserTasks(userId) {
 
 function safeText(value, maxLength = 2000) {
     return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
+function safeParseJson(value, fallback = {}) {
+    if (!value) return fallback;
+    if (typeof value !== 'string') return value || fallback;
+    try {
+        return JSON.parse(value);
+    } catch (e) {
+        return fallback;
+    }
 }
 
 function makeId() {
@@ -96,9 +132,19 @@ function flattenDuckDuckGoTopics(items, output = []) {
 async function runWebSearch(query, options = {}) {
     const q = safeText(query, 300);
     if (!q) throw new Error('Query is required.');
-    const serperKey = String(options.serperKey || '').trim();
-    if (serperKey) {
-        return runSerperSearch(q, serperKey);
+    const provider = String(options.provider || '').trim();
+    const apiKey = String(options.apiKey || options.serperKey || '').trim();
+    if (provider === 'serper' && apiKey) {
+        return runSerperSearch(q, apiKey);
+    }
+    if (provider === 'tavily' && apiKey) {
+        return runTavilySearch(q, apiKey);
+    }
+    if (provider === 'brave' && apiKey) {
+        return runBraveSearch(q, apiKey);
+    }
+    if (provider === 'bing' && apiKey) {
+        return runBingSearch(q, apiKey);
     }
     const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&no_redirect=1&no_html=1`;
     const response = await fetchWithTimeout(url, { timeoutMs: 12000 });
@@ -118,6 +164,23 @@ async function runWebSearch(query, options = {}) {
         source: 'duckduckgo_instant_answer',
         results: results.filter(item => item.snippet || item.url).slice(0, 8),
         fetched_at: nowIso()
+    };
+}
+
+function normalizeSearchResults(query, source, results, extra = {}) {
+    return {
+        query,
+        source,
+        results: (Array.isArray(results) ? results : [])
+            .map(item => ({
+                title: safeText(item.title || item.name || item.url || 'Result', 180),
+                snippet: safeText(item.snippet || item.description || item.content || '', 600),
+                url: String(item.url || item.link || '').trim()
+            }))
+            .filter(item => item.snippet || item.url)
+            .slice(0, 10),
+        fetched_at: nowIso(),
+        ...extra
     };
 }
 
@@ -182,17 +245,117 @@ async function runSerperSearch(query, apiKey) {
             url: String(item.link || '').trim()
         });
     }
-    return {
-        query: q,
-        source: 'serper_google_search',
-        results: results.filter(item => item.snippet || item.url).slice(0, 10),
-        fetched_at: nowIso()
-    };
+    return normalizeSearchResults(q, 'serper_google_search', results);
+}
+
+async function runTavilySearch(query, apiKey) {
+    const q = safeText(query, 300);
+    const response = await fetchWithTimeout('https://api.tavily.com/search', {
+        method: 'POST',
+        timeoutMs: 15000,
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            api_key: apiKey,
+            query: q,
+            search_depth: 'basic',
+            max_results: 8,
+            include_answer: true
+        })
+    });
+    const text = await response.text();
+    const data = text ? JSON.parse(text) : {};
+    if (!response.ok) throw new Error(data?.detail || data?.error || text || `Tavily search failed with HTTP ${response.status}`);
+    const results = [];
+    if (data.answer) results.push({ title: 'Tavily Answer', snippet: data.answer, url: '' });
+    for (const item of Array.isArray(data.results) ? data.results : []) {
+        results.push({ title: item.title, snippet: item.content || item.snippet, url: item.url });
+    }
+    return normalizeSearchResults(q, 'tavily_search', results);
+}
+
+async function runBraveSearch(query, apiKey) {
+    const q = safeText(query, 300);
+    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(q)}&count=8&country=CN&search_lang=zh-hans`;
+    const response = await fetchWithTimeout(url, {
+        timeoutMs: 12000,
+        headers: {
+            'X-Subscription-Token': apiKey,
+            accept: 'application/json'
+        }
+    });
+    const text = await response.text();
+    const data = text ? JSON.parse(text) : {};
+    if (!response.ok) throw new Error(data?.message || data?.error || text || `Brave search failed with HTTP ${response.status}`);
+    const results = (data?.web?.results || []).map(item => ({
+        title: item.title,
+        snippet: item.description || item.extra_snippets?.join(' '),
+        url: item.url
+    }));
+    return normalizeSearchResults(q, 'brave_search', results);
+}
+
+async function runBingSearch(query, apiKey) {
+    const q = safeText(query, 300);
+    const url = `https://api.bing.microsoft.com/v7.0/search?q=${encodeURIComponent(q)}&count=8&mkt=zh-CN`;
+    const response = await fetchWithTimeout(url, {
+        timeoutMs: 12000,
+        headers: {
+            'Ocp-Apim-Subscription-Key': apiKey,
+            accept: 'application/json'
+        }
+    });
+    const text = await response.text();
+    const data = text ? JSON.parse(text) : {};
+    if (!response.ok) throw new Error(data?.message || data?.error?.message || text || `Bing search failed with HTTP ${response.status}`);
+    const results = (data?.webPages?.value || []).map(item => ({
+        title: item.name,
+        snippet: item.snippet,
+        url: item.url
+    }));
+    return normalizeSearchResults(q, 'bing_web_search', results);
+}
+
+function getWebSearchConfig(db) {
+    const profile = db?.getUserProfile?.() || {};
+    const storedKeys = safeParseJson(profile.web_search_keys_json, {});
+    if (!storedKeys.serper && profile.serper_api_key) storedKeys.serper = profile.serper_api_key;
+    const provider = String(profile.web_search_provider || 'auto').trim() || 'auto';
+    const providers = WEB_SEARCH_PROVIDERS.map(item => {
+        const profileKey = String(storedKeys[item.id] || '').trim();
+        const envKey = String(process.env[item.env] || '').trim();
+        const key = profileKey || envKey;
+        return {
+            ...item,
+            has_key: !!key,
+            masked: maskSecret(key),
+            source: profileKey ? 'user_profile' : (envKey ? 'env' : 'none')
+        };
+    });
+    return { provider, providers, keys: storedKeys };
+}
+
+function resolveSearchProvider(db, preferredProvider = '') {
+    const config = getWebSearchConfig(db);
+    const requested = String(preferredProvider || config.provider || 'auto').trim();
+    if (requested === 'duckduckgo' || requested === 'duckduckgo_instant_answer') {
+        return { id: 'duckduckgo', label: 'DuckDuckGo Instant Answer', key: '', config };
+    }
+    const orderedIds = requested && requested !== 'auto'
+        ? [requested, ...WEB_SEARCH_PROVIDERS.map(item => item.id).filter(id => id !== requested)]
+        : WEB_SEARCH_PROVIDERS.map(item => item.id);
+    for (const id of orderedIds) {
+        const provider = config.providers.find(item => item.id === id);
+        const key = String(config.keys[id] || process.env[provider?.env] || '').trim();
+        if (provider && key) return { id, label: provider.label, key, config };
+    }
+    return { id: 'duckduckgo', label: 'DuckDuckGo Instant Answer', key: '', config };
 }
 
 function getSerperApiKey(db) {
-    const profileKey = String(db?.getUserProfile?.()?.serper_api_key || '').trim();
-    return profileKey || String(process.env.SERPER_API_KEY || '').trim();
+    const resolved = resolveSearchProvider(db, 'serper');
+    return resolved.id === 'serper' ? resolved.key : '';
 }
 
 function maskSecret(value) {
@@ -224,8 +387,10 @@ async function runTask(task, context = {}) {
     task.error = '';
     try {
         if (task.kind === 'web_search') {
+            const resolved = resolveSearchProvider(context.db, input.provider);
             task.output = await runWebSearch(input.query || task.title, {
-                serperKey: getSerperApiKey(context.db)
+                provider: resolved.id,
+                apiKey: resolved.key
             });
         } else if (task.kind === 'fetch_url') {
             task.output = await runFetchUrl(input.url);
@@ -322,14 +487,18 @@ module.exports = function initMcpLab(app, context) {
     const { authMiddleware } = context;
 
     app.get('/api/mcp-lab/status', authMiddleware, (req, res) => {
-        const serperKey = getSerperApiKey(req.db);
+        const resolved = resolveSearchProvider(req.db);
+        const config = getWebSearchConfig(req.db);
         res.json({
             success: true,
             name: 'mcpLab',
             stage: 'experimental',
-            search_provider: serperKey ? 'serper' : 'duckduckgo_instant_answer',
-            has_serper_key: !!serperKey,
-            serper_key_masked: maskSecret(serperKey),
+            search_provider: resolved.id,
+            search_provider_label: resolved.label,
+            preferred_search_provider: config.provider,
+            web_search_providers: config.providers.map(({ id, label, env, docs, has_key, masked, source }) => ({ id, label, env, docs, has_key, masked, source })),
+            has_serper_key: !!getSerperApiKey(req.db),
+            serper_key_masked: maskSecret(getSerperApiKey(req.db)),
             tools: [
                 { id: 'web_search', label: 'Web Search', input_schema: { query: 'string' } },
                 { id: 'fetch_url', label: 'Fetch URL', input_schema: { url: 'string' } },
@@ -357,10 +526,12 @@ module.exports = function initMcpLab(app, context) {
 
     app.post('/api/mcp-lab/search', authMiddleware, async (req, res) => {
         try {
+            const resolved = resolveSearchProvider(req.db, req.body?.provider);
             res.json({
                 success: true,
                 result: await runWebSearch(req.body?.query, {
-                    serperKey: getSerperApiKey(req.db)
+                    provider: resolved.id,
+                    apiKey: resolved.key
                 })
             });
         } catch (e) {
@@ -370,14 +541,13 @@ module.exports = function initMcpLab(app, context) {
 
     app.get('/api/mcp-lab/serper-config', authMiddleware, (req, res) => {
         try {
-            const profileKey = String(req.db.getUserProfile?.()?.serper_api_key || '').trim();
-            const envKey = String(process.env.SERPER_API_KEY || '').trim();
-            const effectiveKey = profileKey || envKey;
+            const config = getWebSearchConfig(req.db);
+            const serper = config.providers.find(item => item.id === 'serper') || {};
             res.json({
                 success: true,
-                has_key: !!effectiveKey,
-                source: profileKey ? 'user_profile' : (envKey ? 'env' : 'none'),
-                masked: maskSecret(effectiveKey)
+                has_key: !!serper.has_key,
+                source: serper.source || 'none',
+                masked: serper.masked || ''
             });
         } catch (e) {
             res.status(500).json({ success: false, error: e.message });
@@ -387,12 +557,76 @@ module.exports = function initMcpLab(app, context) {
     app.put('/api/mcp-lab/serper-config', authMiddleware, (req, res) => {
         try {
             const nextKey = String(req.body?.serper_api_key || '').trim();
-            req.db.updateUserProfile?.({ serper_api_key: nextKey });
+            const profile = req.db.getUserProfile?.() || {};
+            const keys = safeParseJson(profile.web_search_keys_json, {});
+            keys.serper = nextKey;
+            req.db.updateUserProfile?.({
+                serper_api_key: nextKey,
+                web_search_keys_json: JSON.stringify(keys),
+                web_search_provider: nextKey ? 'serper' : (profile.web_search_provider || 'auto')
+            });
+            const config = getWebSearchConfig(req.db);
+            const serper = config.providers.find(item => item.id === 'serper') || {};
             res.json({
                 success: true,
-                has_key: !!nextKey || !!String(process.env.SERPER_API_KEY || '').trim(),
-                source: nextKey ? 'user_profile' : (process.env.SERPER_API_KEY ? 'env' : 'none'),
-                masked: maskSecret(nextKey || process.env.SERPER_API_KEY || '')
+                has_key: !!serper.has_key,
+                source: serper.source || 'none',
+                masked: serper.masked || ''
+            });
+        } catch (e) {
+            res.status(500).json({ success: false, error: e.message });
+        }
+    });
+
+    app.get('/api/mcp-lab/web-config', authMiddleware, (req, res) => {
+        try {
+            const config = getWebSearchConfig(req.db);
+            const resolved = resolveSearchProvider(req.db);
+            res.json({
+                success: true,
+                preferred_provider: config.provider,
+                active_provider: resolved.id,
+                active_provider_label: resolved.label,
+                providers: config.providers.map(({ id, label, env, docs, has_key, masked, source }) => ({ id, label, env, docs, has_key, masked, source }))
+            });
+        } catch (e) {
+            res.status(500).json({ success: false, error: e.message });
+        }
+    });
+
+    app.put('/api/mcp-lab/web-config', authMiddleware, (req, res) => {
+        try {
+            const profile = req.db.getUserProfile?.() || {};
+            const keys = safeParseJson(profile.web_search_keys_json, {});
+            const incomingKeys = req.body?.keys || {};
+            const clearIds = new Set(Array.isArray(req.body?.clear_ids) ? req.body.clear_ids.map(String) : []);
+            for (const provider of WEB_SEARCH_PROVIDERS) {
+                if (clearIds.has(provider.id)) {
+                    delete keys[provider.id];
+                    continue;
+                }
+                if (Object.prototype.hasOwnProperty.call(incomingKeys, provider.id)) {
+                    const value = String(incomingKeys[provider.id] || '').trim();
+                    if (value) keys[provider.id] = value;
+                }
+            }
+            const preferred = String(req.body?.preferred_provider || profile.web_search_provider || 'auto').trim();
+            const validProvider = preferred === 'auto' || preferred === 'duckduckgo' || WEB_SEARCH_PROVIDERS.some(item => item.id === preferred)
+                ? preferred
+                : 'auto';
+            req.db.updateUserProfile?.({
+                serper_api_key: String(keys.serper || ''),
+                web_search_keys_json: JSON.stringify(keys),
+                web_search_provider: validProvider
+            });
+            const config = getWebSearchConfig(req.db);
+            const resolved = resolveSearchProvider(req.db);
+            res.json({
+                success: true,
+                preferred_provider: config.provider,
+                active_provider: resolved.id,
+                active_provider_label: resolved.label,
+                providers: config.providers.map(({ id, label, env, docs, has_key, masked, source }) => ({ id, label, env, docs, has_key, masked, source }))
             });
         } catch (e) {
             res.status(500).json({ success: false, error: e.message });
@@ -426,7 +660,9 @@ module.exports = function initMcpLab(app, context) {
                 started_at: '',
                 finished_at: ''
             };
-            getUserTasks(req.user?.id).unshift(task);
+            const tasks = getUserTasks(req.user?.id);
+            tasks.unshift(task);
+            if (tasks.length > 80) tasks.splice(80);
             if (req.body?.run_now !== false) await runTask(task, { db: req.db });
             res.json({ success: true, task });
         } catch (e) {

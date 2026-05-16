@@ -367,7 +367,7 @@ function getMemory(userId) {
         if (looksLikeCityMemory(memoryData) && looksLikeReplyDrivenCityNarration(memoryData)) return false;
         if (emotion && emotion.length >= 2 && !looksLikeCityMemory(memoryData)) return true;
         if (looksLikeCityMemory(memoryData)) {
-            return /(鐢ㄦ埛|nana|user|鍛婄櫧|鎵胯|绾﹀畾|鍚垫灦|鍐茬獊|鍜屽ソ|绉樺瘑|瀵嗙爜|娌￠挶|鍙墿|宕╂簝|浣忛櫌|鍙椾激|濒死|透支|极限|昏倒|发烧|还债|还不起|破产)/i.test(text);
+            return /(用户|nana|user|告白|承诺|约定|吵架|冲突|和好|吃醋|嫉妒|委屈|喜欢|讨厌|秘密|密码|没钱|只剩|崩溃|住院|受伤|濒死|透支|极限|昏倒|发烧|还债|还不起|破产)/i.test(text);
         }
         return /(用户|nana|user|告白|承诺|约定|吵架|冲突|和好|吃醋|嫉妒|委屈|喜欢|讨厌|秘密|密码|没钱|只剩|崩溃|住院|受伤)/i.test(text);
     }

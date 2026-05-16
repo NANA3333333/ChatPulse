@@ -94,6 +94,24 @@ module.exports = function initCityPlugin(app, context) {
         ].join('\n');
     }
 
+    const socialService = createSocialService({
+        buildUniversalContext,
+        callLLM,
+        recordCityLlmDebug,
+        buildQuestCompetitionContext,
+        buildCollapsedCityLog,
+        logEmotionTransition,
+        applyEmotionEvent,
+        broadcastCityEvent,
+        broadcastCityToChat,
+        getEngineContextWrapper: (userId) => ({
+            getUserDb: context.getUserDb,
+            getMemory: context.getMemory,
+            userId,
+            forceCityDetail: true
+        })
+    });
+
     async function triggerAdminGrantChat(userId, char, grantKind, details = {}) {
         if (!char?.id) return null;
         const db = ensureCityDb(getUserDb(userId));
