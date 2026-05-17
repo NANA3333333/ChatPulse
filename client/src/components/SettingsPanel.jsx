@@ -166,6 +166,14 @@ function isCustomTtsValue(value, options = []) {
     return getTtsSelectValue(value, options) === '__custom';
 }
 
+function inferTencentModelTier(option) {
+    const text = `${option?.type || ''} ${option?.label || ''}`.toLowerCase();
+    if (!text.trim()) return '';
+    if (text.includes('精品')) return 'premium';
+    if (text.includes('大模型') || text.includes('超自然')) return 'large';
+    return '';
+}
+
 function getLocalFallbackProfile() {
     let localUser = null;
     try {
@@ -515,7 +523,10 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
             if (!voices.length) throw new Error('没有拉到腾讯云音色列表');
             setTencentVoiceOptions(voices.map(voice => ({
                 value: String(voice.value || voice.id || '').trim(),
-                label: voice.label || `${voice.id || voice.value} ${voice.name || ''} - ${voice.scene || ''}`.trim()
+                label: voice.label || `${voice.id || voice.value} ${voice.name || ''} - ${voice.scene || ''}`.trim(),
+                type: voice.type || '',
+                name: voice.name || '',
+                scene: voice.scene || ''
             })).filter(voice => voice.value));
             setTencentVoiceSource(data.source || '');
         } catch (e) {
@@ -1990,8 +2001,8 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                                 )}
                             </label>
 
-                            <div style={{ display: 'flex', gap: '10px' }}>
-                                <label style={{ flex: 1, display: 'flex', flexDirection: 'column', fontSize: '14px', color: '#666' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                <label style={{ display: 'flex', flexDirection: 'column', fontSize: '14px', color: '#666', minWidth: 0 }}>
                                     {lang === 'en' ? 'Voice' : '音色'}:
                                     {getEditingTtsProviderConfig(editingContact.tts_provider).voiceOptions?.length > 0 ? (
                                         <>
@@ -2005,7 +2016,13 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                                                             return;
                                                         }
                                                         setCustomTtsVoiceOpen(false);
-                                                        setEditingContact({ ...editingContact, tts_voice: e.target.value });
+                                                        const selectedVoice = getEditingTtsProviderConfig(editingContact.tts_provider).voiceOptions.find(option => option.value === e.target.value);
+                                                        const inferredModel = editingContact.tts_provider === 'tencent' ? inferTencentModelTier(selectedVoice) : '';
+                                                        setEditingContact({
+                                                            ...editingContact,
+                                                            tts_voice: e.target.value,
+                                                            ...(inferredModel ? { tts_model: inferredModel } : {})
+                                                        });
                                                     }}
                                                     style={{ flex: 1, minWidth: 0, padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
                                                 >
@@ -2051,7 +2068,7 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                                         />
                                     )}
                                 </label>
-                                <label style={{ flex: 1, display: 'flex', flexDirection: 'column', fontSize: '14px', color: '#666' }}>
+                                <label style={{ display: 'flex', flexDirection: 'column', fontSize: '14px', color: '#666', minWidth: 0 }}>
                                     {lang === 'en' ? 'Model / Tier' : '模型 / 档位'}:
                                     {getEditingTtsProviderConfig(editingContact.tts_provider).modelOptions?.length > 0 ? (
                                         <>
