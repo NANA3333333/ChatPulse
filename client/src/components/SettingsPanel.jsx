@@ -2037,9 +2037,43 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
 
                             <button
                                 type="button"
-                                disabled
-                                title={lang === 'en' ? 'Preview requires the TTS synthesis API to be connected first.' : '试听需要先接入 TTS 合成接口。'}
-                                style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 12px', border: '1px solid #d8dee8', borderRadius: '6px', background: '#eef2f7', color: '#94a3b8', cursor: 'not-allowed', fontSize: '13px' }}
+                                disabled={editingContact.tts_enabled !== 1}
+                                onClick={async () => {
+                                    try {
+                                        const res = await fetch(`${apiUrl}/tts/preview/${editingContact.id}`, {
+                                            method: 'POST',
+                                            headers: {
+                                                'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`,
+                                                'Content-Type': 'application/json'
+                                            },
+                                            body: JSON.stringify({
+                                                text: `你好，我是${editingContact.name || '这个角色'}。这是一段语音试听。`,
+                                                config: {
+                                                    tts_provider: editingContact.tts_provider || 'tencent',
+                                                    tts_api_key: editingContact.tts_api_key || '',
+                                                    tts_voice: editingContact.tts_voice || '',
+                                                    tts_model: editingContact.tts_model || '',
+                                                    tts_endpoint: editingContact.tts_endpoint || '',
+                                                    tts_enabled: editingContact.tts_enabled === 1 ? 1 : 0
+                                                }
+                                            })
+                                        });
+                                        if (!res.ok) {
+                                            const data = await res.json().catch(() => ({}));
+                                            throw new Error(data.error || `HTTP ${res.status}`);
+                                        }
+                                        const blob = await res.blob();
+                                        const objectUrl = URL.createObjectURL(blob);
+                                        const audio = new Audio(objectUrl);
+                                        audio.onended = () => URL.revokeObjectURL(objectUrl);
+                                        audio.onerror = () => URL.revokeObjectURL(objectUrl);
+                                        await audio.play();
+                                    } catch (e) {
+                                        alert((lang === 'en' ? 'Preview failed: ' : '试听失败：') + (e.message || e));
+                                    }
+                                }}
+                                title={editingContact.tts_enabled === 1 ? (lang === 'en' ? 'Preview this voice' : '试听当前音色') : (lang === 'en' ? 'Enable TTS first' : '请先启用 TTS')}
+                                style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 12px', border: '1px solid #d8dee8', borderRadius: '6px', background: editingContact.tts_enabled === 1 ? '#fff' : '#eef2f7', color: editingContact.tts_enabled === 1 ? '#475569' : '#94a3b8', cursor: editingContact.tts_enabled === 1 ? 'pointer' : 'not-allowed', fontSize: '13px' }}
                             >
                                 <Volume2 size={14} /> {lang === 'en' ? 'Preview voice' : '试听'}
                             </button>

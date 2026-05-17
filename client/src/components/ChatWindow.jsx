@@ -257,6 +257,34 @@ function ChatWindow({
     }, [fetchLatestMessages]);
 
     useEffect(() => {
+        const handleTtsReady = (event) => {
+            const data = event?.detail || {};
+            if (!data.message_id || data.character_id !== contactRef.current?.id) return;
+            setMessages(prev => normalizeMessages(prev.map(msg => {
+                if (String(msg.id) !== String(data.message_id)) return msg;
+                return {
+                    ...msg,
+                    metadata: {
+                        ...(msg.metadata || {}),
+                        tts: {
+                            ...(msg.metadata?.tts || {}),
+                            status: data.status || 'ready',
+                            audio_url: data.audio_url || msg.metadata?.tts?.audio_url || '',
+                            provider: data.provider || msg.metadata?.tts?.provider || '',
+                            voice: data.voice || msg.metadata?.tts?.voice || '',
+                            model: data.model || msg.metadata?.tts?.model || '',
+                            autoplay: data.autoplay === true,
+                            error: data.error || ''
+                        }
+                    }
+                };
+            })));
+        };
+        window.addEventListener('tts_ready', handleTtsReady);
+        return () => window.removeEventListener('tts_ready', handleTtsReady);
+    }, []);
+
+    useEffect(() => {
         const handleCharacterDataWiped = (event) => {
             if (event.detail?.characterId !== contactRef.current?.id) return;
             setMessages([]);

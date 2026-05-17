@@ -4,6 +4,7 @@ const { buildUniversalContext, formatTypedAntiRepeatBlock } = require('./context
 const { applyEmotionEvent, buildEmotionLogEntry, getExplicitEmotionStatePatch } = require('./emotion');
 const { getTokenCount } = require('./utils/tokenizer');
 const { enqueueBackgroundTask } = require('./backgroundQueue');
+const { parseTtsIntentTag, stripTtsIntentTags, shouldSynthesizePrivateTts, synthesizeAndStoreMessage } = require('./tts');
 const crypto = require('crypto');
 
 const engineCache = new Map();
@@ -32,6 +33,7 @@ function getDefaultGuidelines() {
    - emotion: optional [EMOTION_REASON:short text]; if the reply itself clearly sounds jealous|hurt|angry|lonely|happy|sad|cautious|guarded|shy|hopeful|playful|disappointed|relieved|affectionate|reassured|yearning|flustered|guilty|frustrated|wistful|proud|secure|tender|helpless|tense|calm, output exactly one [EMOTION_STATE:value] in the same reply
    - emotion whitelist: when you output [EMOTION_STATE:value], value MUST be chosen from exactly this library and nothing else: jealous, hurt, angry, lonely, happy, sad, cautious, guarded, shy, hopeful, playful, disappointed, relieved, affectionate, reassured, yearning, flustered, guilty, frustrated, wistful, proud, secure, tender, helpless, tense, calm
    - never invent a new emotion word, synonym, translation variant, or nuanced label outside the library. If none fits well enough, omit [EMOTION_STATE] instead of improvising
+   - tts: optional private-chat speech request. Use [TTS_INTENT:{"style":"soft|playful|comforting|serious","reason":"short reason","priority":1}] only when hearing this exact reply in your voice would materially improve the emotional effect. Use it rarely. Do not use it for routine acknowledgements, factual answers, system/event replies, or every affectionate line.
    - city: prefer [CITY_ACTION:{"district_id":"","district_type":"","log":"","chat":"","moment":"","diary":""}] for any private-chat-triggered commercial-street action signal
    - city: [CITY_INTENT:...] is legacy compatibility only; if you use it, write only an explicit district id/name/type signal such as home / restaurant / convenience / factory / school / hospital / park / mall / casino / street / hacker_space / rest / food / work / education / medical / leisure / shopping / gambling / wander, never a full sentence
 6. Emotion judgement:
@@ -3368,9 +3370,12 @@ ${dynamicPromptBase}`;
                     }
                 }
 
+                const ttsIntent = parseTtsIntentTag(generatedText);
+
                 // Strip all tags from the final text message using a global regex
-                const globalStripRegex = /\[(?:TIMER|TRANSFER|MOMENT|MOMENT_LIKE|MOMENT_COMMENT|DIARY|UNLOCK_DIARY|AFFINITY|CHAR_AFFINITY|PRESSURE|PRESSURE_DELTA|JEALOUSY|MOOD_DELTA|EMOTION_REASON|EMOTION_STATE|CITY_INTENT|CITY_ACTION|DIARY_PASSWORD|REDPACKET_SEND|Red Packet)[^\]]*\]/gi;
+                const globalStripRegex = /\[(?:TIMER|TRANSFER|MOMENT|MOMENT_LIKE|MOMENT_COMMENT|DIARY|UNLOCK_DIARY|AFFINITY|CHAR_AFFINITY|PRESSURE|PRESSURE_DELTA|JEALOUSY|MOOD_DELTA|EMOTION_REASON|EMOTION_STATE|CITY_INTENT|CITY_ACTION|TTS_INTENT|DIARY_PASSWORD|REDPACKET_SEND|Red Packet)[^\]]*\]/gi;
                 generatedText = generatedText.replace(globalStripRegex, '').replace(/\[\s*\]/g, '').replace(/\n{3,}/g, '\n\n').trim();
+                generatedText = stripTtsIntentTags(generatedText);
                 generatedText = stripHistoryMetadataPrefixFromOutput(generatedText);
 
                 if (generatedText.length > 0 && cityReplyStateSyncCallback && !cityIntentHandled) {
@@ -3474,6 +3479,21 @@ ${dynamicPromptBase}`;
 
                         // Save to DB
                         const { id: messageId, timestamp: messageTs } = db.addMessage(character.id, 'character', bubbleString, msgMetadata);
+                        const shouldTts = shouldSynthesizePrivateTts({
+                            character: charCheck,
+                            text: bubbleString,
+                            intent: ttsIntent,
+                            isUserReply
+                        });
+                        const ttsMetadata = shouldTts ? {
+                            ...(msgMetadata || {}),
+                            tts: {
+                                status: 'pending',
+                                provider: charCheck.tts_provider || 'tencent',
+                                voice: charCheck.tts_voice || '',
+                                model: charCheck.tts_model || ''
+                            }
+                        } : msgMetadata;
                         const newMessage = {
                             id: messageId,
                             character_id: character.id,
@@ -3481,11 +3501,23 @@ ${dynamicPromptBase}`;
                             content: bubbleString,
                             timestamp: messageTs + i, // slight increment to ensure ordering
                             read: 0,
-                            metadata: msgMetadata
+                            metadata: ttsMetadata
                         };
 
                         // Push to any connected websockets
                         broadcastNewMessage(wsClients, newMessage);
+                        if (shouldTts) {
+                            synthesizeAndStoreMessage({
+                                db,
+                                userId,
+                                character: charCheck,
+                                messageId,
+                                text: bubbleString,
+                                intent: ttsIntent,
+                                broadcastEvent,
+                                wsClients
+                            }).catch(err => console.error('[TTS] Background synthesis error:', err.message));
+                        }
                     }
 
                     if (isUserReply) {

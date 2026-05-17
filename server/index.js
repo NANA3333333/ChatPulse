@@ -40,6 +40,7 @@ const { getEngine } = require('./engine');
 const { getMemory, extractMemoryFromContext, setWsClientsResolver, getEmbeddingDebugStatus } = require('./memory');
 const { getTokenCount } = require('./utils/tokenizer');
 const { getBackgroundQueueStats } = require('./backgroundQueue');
+const { synthesizeSpeech } = require('./tts');
 const qdrant = require('./qdrant');
 const crypto = require('crypto');
 
@@ -1078,6 +1079,60 @@ app.post('/api/messages/:characterId/retry', authMiddleware, (req, res) => {
         });
 
         res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/tts/audio/:messageId', authMiddleware, (req, res) => {
+    const db = req.db;
+    try {
+        const row = db.getMessageTts?.(req.params.messageId);
+        if (!row || row.status !== 'ready' || !row.audio_path) {
+            return res.status(404).json({ error: 'TTS audio not found.' });
+        }
+        const messageCharId = db.getMessageCharacterId?.(req.params.messageId);
+        if (messageCharId && String(messageCharId) !== String(row.character_id)) {
+            return res.status(403).json({ error: 'TTS audio does not match message.' });
+        }
+        if (!fs.existsSync(row.audio_path)) {
+            return res.status(404).json({ error: 'TTS audio file is missing.' });
+        }
+        res.setHeader('Content-Type', row.mime_type || 'audio/mpeg');
+        res.setHeader('Cache-Control', 'private, max-age=86400');
+        res.sendFile(path.resolve(row.audio_path));
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/tts/preview/:characterId', authMiddleware, async (req, res) => {
+    const db = req.db;
+    try {
+        const character = db.getCharacter(req.params.characterId);
+        if (!character) return res.status(404).json({ error: 'Character not found.' });
+        const overrides = req.body?.config && typeof req.body.config === 'object' ? req.body.config : req.body || {};
+        const enabled = overrides.tts_enabled !== undefined ? Number(overrides.tts_enabled || 0) === 1 : Number(character.tts_enabled || 0) === 1;
+        if (!enabled) {
+            return res.status(400).json({ error: 'TTS is not enabled for this character.' });
+        }
+        const previewCharacter = {
+            ...character,
+            tts_provider: overrides.tts_provider ?? character.tts_provider,
+            tts_api_key: overrides.tts_api_key ?? character.tts_api_key,
+            tts_voice: overrides.tts_voice ?? character.tts_voice,
+            tts_model: overrides.tts_model ?? character.tts_model,
+            tts_endpoint: overrides.tts_endpoint ?? character.tts_endpoint
+        };
+        const text = String(req.body?.text || `你好，我是${character.name || '这个角色'}。这是一段试听。`).trim().slice(0, 160);
+        const audio = await synthesizeSpeech({
+            character: previewCharacter,
+            text,
+            intent: { style: 'preview', reason: 'settings preview', priority: 1 }
+        });
+        res.setHeader('Content-Type', audio.mimeType || 'audio/mpeg');
+        res.setHeader('Cache-Control', 'no-store');
+        res.send(audio.buffer);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }

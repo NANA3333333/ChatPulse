@@ -223,6 +223,22 @@ function getUserDb(userId) {
             FOREIGN KEY (character_id) REFERENCES characters(id)
         );
 
+        CREATE TABLE IF NOT EXISTS message_tts (
+            message_id INTEGER PRIMARY KEY,
+            character_id TEXT NOT NULL,
+            provider TEXT DEFAULT '',
+            voice TEXT DEFAULT '',
+            model TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            audio_path TEXT DEFAULT '',
+            mime_type TEXT DEFAULT 'audio/mpeg',
+            duration_ms INTEGER DEFAULT 0,
+            error TEXT DEFAULT '',
+            intent_json TEXT DEFAULT '{}',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS memories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             character_id TEXT NOT NULL,
@@ -1174,7 +1190,79 @@ function getUserDb(userId) {
                 metadata = null;
             }
         }
-        return { ...row, metadata: metadata || null };
+        const normalizedMetadata = metadata || {};
+        try {
+            const tts = db.prepare('SELECT * FROM message_tts WHERE message_id = ?').get(row.id);
+            if (tts) {
+                normalizedMetadata.tts = {
+                    status: tts.status || 'pending',
+                    audio_url: tts.status === 'ready' ? `/api/tts/audio/${row.id}` : '',
+                    provider: tts.provider || '',
+                    voice: tts.voice || '',
+                    model: tts.model || '',
+                    error: tts.error || '',
+                    duration_ms: Number(tts.duration_ms || 0)
+                };
+            }
+        } catch (e) {
+            // Older in-flight databases may not have the TTS table until initDb completes.
+        }
+        return { ...row, metadata: Object.keys(normalizedMetadata).length > 0 ? normalizedMetadata : null };
+    }
+
+    function normalizeMessageTtsRow(row) {
+        if (!row) return null;
+        let intent = {};
+        try {
+            intent = row.intent_json ? JSON.parse(row.intent_json) : {};
+        } catch (e) {
+            intent = {};
+        }
+        return { ...row, intent };
+    }
+
+    function upsertMessageTts(entry = {}) {
+        const now = Date.now();
+        const messageId = Number(entry.message_id || 0);
+        if (!messageId) return null;
+        const existing = db.prepare('SELECT created_at FROM message_tts WHERE message_id = ?').get(messageId);
+        db.prepare(`
+            INSERT INTO message_tts (
+                message_id, character_id, provider, voice, model, status, audio_path, mime_type,
+                duration_ms, error, intent_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(message_id) DO UPDATE SET
+                character_id = excluded.character_id,
+                provider = excluded.provider,
+                voice = excluded.voice,
+                model = excluded.model,
+                status = excluded.status,
+                audio_path = excluded.audio_path,
+                mime_type = excluded.mime_type,
+                duration_ms = excluded.duration_ms,
+                error = excluded.error,
+                intent_json = excluded.intent_json,
+                updated_at = excluded.updated_at
+        `).run(
+            messageId,
+            String(entry.character_id || ''),
+            String(entry.provider || ''),
+            String(entry.voice || ''),
+            String(entry.model || ''),
+            String(entry.status || 'pending'),
+            String(entry.audio_path || ''),
+            String(entry.mime_type || 'audio/mpeg'),
+            Number(entry.duration_ms || 0),
+            String(entry.error || ''),
+            typeof entry.intent_json === 'string' ? entry.intent_json : JSON.stringify(entry.intent_json || {}),
+            Number(existing?.created_at || entry.created_at || now),
+            Number(entry.updated_at || now)
+        );
+        return getMessageTts(messageId);
+    }
+
+    function getMessageTts(messageId) {
+        return normalizeMessageTtsRow(db.prepare('SELECT * FROM message_tts WHERE message_id = ?').get(Number(messageId || 0)));
     }
 
     // ─── Message Queries ────────────────────────────────────────────────────
@@ -3034,6 +3122,8 @@ function getUserDb(userId) {
         hideMessagesByIds,
         unhideMessages,
         addMessage,
+        upsertMessageTts,
+        getMessageTts,
         deleteMessage,
         markMessagesRead,
         getUnreadCount,

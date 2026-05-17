@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect } from 'react';
-import { AlertCircle, ArrowRightLeft } from 'lucide-react';
+import { AlertCircle, ArrowRightLeft, Volume2 } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 import { resolveAvatarUrl } from '../utils/avatar';
 
@@ -211,6 +211,37 @@ function MessageBubble({ message, avatar, characterName, apiUrl, onRetry, contac
         ? message.metadata.retrievedMemories
         : [];
     const hasRecalledMemories = recalledMemories.length > 0;
+    const tts = !isUser ? message.metadata?.tts : null;
+    const [ttsPlaying, setTtsPlaying] = useState(false);
+    const [ttsError, setTtsError] = useState('');
+
+    const playTts = async () => {
+        if (!tts?.audio_url || ttsPlaying) return;
+        setTtsError('');
+        setTtsPlaying(true);
+        try {
+            const res = await fetch(`${apiUrl}${tts.audio_url}`, {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` }
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const blob = await res.blob();
+            const objectUrl = URL.createObjectURL(blob);
+            const audio = new Audio(objectUrl);
+            audio.onended = () => {
+                URL.revokeObjectURL(objectUrl);
+                setTtsPlaying(false);
+            };
+            audio.onerror = () => {
+                URL.revokeObjectURL(objectUrl);
+                setTtsPlaying(false);
+                setTtsError(lang === 'en' ? 'Playback failed' : '播放失败');
+            };
+            await audio.play();
+        } catch (e) {
+            setTtsPlaying(false);
+            setTtsError(e.message || (lang === 'en' ? 'Playback failed' : '播放失败'));
+        }
+    };
 
     useEffect(() => {
         if (!memoryDisclosureKey || typeof window === 'undefined') return;
@@ -220,6 +251,13 @@ function MessageBubble({ message, avatar, characterName, apiUrl, onRetry, contac
             // Ignore storage failures; the disclosure can still work in-memory.
         }
     }, [memoryDisclosureKey, showMemories]);
+
+    useEffect(() => {
+        if (tts?.status === 'ready' && tts?.autoplay && tts?.audio_url) {
+            playTts();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tts?.status, tts?.audio_url, tts?.autoplay]);
 
     if (message.role === 'system') {
         const isApiError = content.includes('API Error');
@@ -319,7 +357,26 @@ function MessageBubble({ message, avatar, characterName, apiUrl, onRetry, contac
                             justifyContent: isUser ? 'flex-end' : 'flex-start'
                         }}>
                             <span>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                            {tts?.status === 'pending' && (
+                                <span title={lang === 'en' ? 'Generating voice' : '正在生成语音'}>{lang === 'en' ? 'voice...' : '语音中...'}</span>
+                            )}
+                            {tts?.status === 'ready' && tts.audio_url && (
+                                <button
+                                    onClick={playTts}
+                                    disabled={ttsPlaying}
+                                    title={lang === 'en' ? 'Play voice' : '播放语音'}
+                                    style={{ border: 'none', background: 'transparent', padding: 0, color: '#9aa6b8', cursor: ttsPlaying ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center' }}
+                                >
+                                    <Volume2 size={13} />
+                                </button>
+                            )}
+                            {tts?.status === 'error' && (
+                                <span title={tts.error || ''} style={{ color: '#d18b8b' }}>{lang === 'en' ? 'voice failed' : '语音失败'}</span>
+                            )}
                         </div>
+                    )}
+                    {ttsError && (
+                        <div style={{ fontSize: '10px', color: '#d18b8b', marginTop: '2px' }}>{ttsError}</div>
                     )}
                     {hasRecalledMemories && (
                         <div style={{

@@ -273,6 +273,8 @@ function App() {
           if (msg.type === 'new_message') {
             setIncomingMessageQueue(prev => [...prev, msg.data]);
             scheduleContactsRefresh();
+          } else if (msg.type === 'tts_ready') {
+            window.dispatchEvent(new CustomEvent('tts_ready', { detail: msg.data }));
           } else if (msg.type === 'engine_state') {
             setEngineState(msg.data);
           } else if (msg.type === 'group_message') {
