@@ -3,14 +3,35 @@ import { AlertCircle, ArrowRightLeft, Volume2 } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 import { resolveAvatarUrl } from '../utils/avatar';
 
-let ttsPlaybackQueue = Promise.resolve();
+const ttsPlaybackPending = [];
+let ttsPlaybackDraining = false;
+let ttsPlaybackFlushTimer = null;
 const ttsQueuedKeys = new Set();
 const ttsAutoplayKeys = new Set();
 
 function enqueueTtsPlayback(task) {
-    const run = ttsPlaybackQueue.catch(() => { }).then(task);
-    ttsPlaybackQueue = run.catch(() => { });
-    return run;
+    return new Promise((resolve, reject) => {
+        ttsPlaybackPending.push({ task, resolve, reject });
+        ttsPlaybackPending.sort((a, b) => (a.task.order || 0) - (b.task.order || 0));
+        clearTimeout(ttsPlaybackFlushTimer);
+        ttsPlaybackFlushTimer = setTimeout(drainTtsPlaybackQueue, 120);
+    });
+}
+
+async function drainTtsPlaybackQueue() {
+    if (ttsPlaybackDraining) return;
+    ttsPlaybackDraining = true;
+    while (ttsPlaybackPending.length > 0) {
+        ttsPlaybackPending.sort((a, b) => (a.task.order || 0) - (b.task.order || 0));
+        const item = ttsPlaybackPending.shift();
+        try {
+            await item.task();
+            item.resolve();
+        } catch (e) {
+            item.reject(e);
+        }
+    }
+    ttsPlaybackDraining = false;
 }
 
 function MemoryRecallDisclosure({ memories = [], expanded = false }) {
@@ -240,7 +261,7 @@ function MessageBubble({ message, avatar, characterName, apiUrl, onRetry, contac
         if (ttsQueuedKeys.has(ttsKey)) return;
         ttsQueuedKeys.add(ttsKey);
         setTtsError('');
-        await enqueueTtsPlayback(async () => {
+        const task = async () => {
             setTtsPlaying(true);
             let objectUrl = '';
             const res = await fetch(resolveTtsAudioUrl(tts.audio_url), {
@@ -260,7 +281,9 @@ function MessageBubble({ message, avatar, characterName, apiUrl, onRetry, contac
                 if (objectUrl) URL.revokeObjectURL(objectUrl);
                 setTtsPlaying(false);
             }
-        }).catch((e) => {
+        };
+        task.order = Number(message.id || message.timestamp || Date.now()) || Date.now();
+        await enqueueTtsPlayback(task).catch((e) => {
             setTtsError(e.message || (lang === 'en' ? 'Playback failed' : '播放失败'));
         }).finally(() => {
             ttsQueuedKeys.delete(ttsKey);
