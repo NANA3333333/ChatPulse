@@ -66,6 +66,23 @@ function initMcpLabDb(rawDb) {
             ON external_knowledge_docs(character_id, updated_at);
         CREATE INDEX IF NOT EXISTS idx_external_knowledge_chunks_doc
             ON external_knowledge_chunks(doc_id, chunk_index);
+
+        CREATE TABLE IF NOT EXISTS mcp_lab_tasks (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT DEFAULT '',
+            title TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            input_json TEXT DEFAULT '{}',
+            status TEXT DEFAULT 'queued',
+            output_json TEXT DEFAULT 'null',
+            error TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            started_at TEXT DEFAULT '',
+            finished_at TEXT DEFAULT ''
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mcp_lab_tasks_owner
+            ON mcp_lab_tasks(owner_id, created_at);
     `);
 
     const createDocStmt = rawDb.prepare(`
@@ -80,6 +97,38 @@ function initMcpLabDb(rawDb) {
         VALUES
             (@id, @doc_id, @chunk_index, @content, @created_at)
     `);
+    const upsertTaskStmt = rawDb.prepare(`
+        INSERT INTO mcp_lab_tasks
+            (id, owner_id, title, kind, input_json, status, output_json, error, created_at, started_at, finished_at)
+        VALUES
+            (@id, @owner_id, @title, @kind, @input_json, @status, @output_json, @error, @created_at, @started_at, @finished_at)
+        ON CONFLICT(id) DO UPDATE SET
+            title = excluded.title,
+            kind = excluded.kind,
+            input_json = excluded.input_json,
+            status = excluded.status,
+            output_json = excluded.output_json,
+            error = excluded.error,
+            started_at = excluded.started_at,
+            finished_at = excluded.finished_at
+    `);
+
+    function normalizeTask(row) {
+        if (!row) return null;
+        return {
+            id: row.id,
+            owner_id: row.owner_id,
+            title: row.title,
+            kind: row.kind,
+            input: safeParseJson(row.input_json, {}),
+            status: row.status,
+            output: safeParseJson(row.output_json, null),
+            error: row.error || '',
+            created_at: row.created_at,
+            started_at: row.started_at || '',
+            finished_at: row.finished_at || ''
+        };
+    }
 
     function saveExternalKnowledge(doc, chunks, makeId) {
         const now = Date.now();
@@ -201,11 +250,54 @@ function initMcpLabDb(rawDb) {
         }));
     }
 
+    function saveTask(task) {
+        upsertTaskStmt.run({
+            id: String(task.id || ''),
+            owner_id: String(task.owner_id || ''),
+            title: String(task.title || task.kind || 'MCP task').slice(0, 160),
+            kind: String(task.kind || 'web_search').slice(0, 80),
+            input_json: stringifyJson(task.input || {}, '{}'),
+            status: String(task.status || 'queued').slice(0, 40),
+            output_json: stringifyJson(task.output ?? null, 'null'),
+            error: String(task.error || '').slice(0, 2000),
+            created_at: String(task.created_at || new Date().toISOString()),
+            started_at: String(task.started_at || ''),
+            finished_at: String(task.finished_at || '')
+        });
+        return getTask(task.id, task.owner_id);
+    }
+
+    function getTask(taskId, ownerId = '') {
+        return normalizeTask(rawDb.prepare(`
+            SELECT * FROM mcp_lab_tasks
+            WHERE id = ? AND (? = '' OR owner_id = ?)
+        `).get(String(taskId || ''), String(ownerId || ''), String(ownerId || '')));
+    }
+
+    function listTasks(ownerId = '', limit = 80) {
+        const normalizedLimit = Math.max(1, Math.min(200, Number(limit || 80) || 80));
+        return rawDb.prepare(`
+            SELECT * FROM mcp_lab_tasks
+            WHERE owner_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+        `).all(String(ownerId || ''), normalizedLimit).map(normalizeTask);
+    }
+
+    function deleteTask(taskId, ownerId = '') {
+        const result = rawDb.prepare('DELETE FROM mcp_lab_tasks WHERE id = ? AND owner_id = ?').run(String(taskId || ''), String(ownerId || ''));
+        return result.changes > 0;
+    }
+
     return {
         saveExternalKnowledge,
         getExternalKnowledgeDoc,
         searchExternalKnowledge,
         listExternalKnowledgeDocs,
+        saveTask,
+        getTask,
+        listTasks,
+        deleteTask,
         chunkText
     };
 }

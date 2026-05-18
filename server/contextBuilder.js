@@ -473,6 +473,29 @@ function buildRecentCityRouteContext(db, character, maxItems = 5) {
     }
 }
 
+function formatOtherCityLogForContext(log, currentCharacter) {
+    const message = String(log?.message || log?.content || '').replace(/\s+/g, ' ').trim();
+    if (!message) return '';
+
+    const actorId = String(log?.character_id || '').trim();
+    const currentId = String(currentCharacter?.id || '').trim();
+    const actorName = String(log?.char_name || log?.character_name || '').trim();
+    const actionType = String(log?.action_type || '').trim();
+    const location = String(log?.location || '').trim();
+    const meta = [actionType ? `类型=${actionType}` : '', location ? `地点=${location}` : ''].filter(Boolean).join(' | ');
+
+    if (!actorId || actorId.toLowerCase() === 'system') {
+        return `${meta ? `[${meta}] ` : ''}${message}`;
+    }
+
+    const resolvedActor = actorName || actorId;
+    if (actorId === currentId) {
+        return `${meta ? `[${meta}] ` : ''}${message}`;
+    }
+
+    return `【${resolvedActor} 的经历，不是你；下面原文里的“我”都指 ${resolvedActor}】${meta ? `[${meta}] ` : ''}${message}`;
+}
+
 async function routeContextModules(db, character, recentInput = '', topicSwitchState = null) {
     const text = String(recentInput || '').trim();
     const defaultRoutes = {
@@ -1297,7 +1320,7 @@ async function buildUniversalContext(context, character, recentInput = '', isGro
                 cityDetailEnabled
                     ? (userAskedAboutCity ? 'city_rules_asked' : 'city_rules_base')
                     : 'city_rules_presence_only',
-                { template_version: 5, cityDetailEnabled, userAskedAboutCity },
+                { template_version: 6, cityDetailEnabled, userAskedAboutCity },
                 () => {
                     if (!cityDetailEnabled) {
                         let staticBlock = '[商业街存在性提示]\n';
@@ -1328,6 +1351,7 @@ async function buildUniversalContext(context, character, recentInput = '', isGro
                     staticBlock += '- 当“现在在家/休息”和“之前路过某地/刚从外面回来”同时出现时，这两者通常是时间先后关系，不是互相否定。\n';
                     staticBlock += '- 就算用户提到 token、缓存、prompt、AI、测试这些词，也不要把商业街和身体状态解释成后台机制；先按对方在乱讲话、试探你、拿奇怪说法描述现实来理解。\n';
                     staticBlock += '- 亲身经历只认【本人亲历记录】；公共事件只能说成听说/看见。\n';
+                    staticBlock += '- 【公共事件 / 传闻】里如果标了“某某的经历，不是你”，即使原文用了“我”，那个“我”也只指该角色，不是你。\n';
                     staticBlock += '- 允许补主观感受，不允许补没给出的客观事实。\n';
                     staticBlock += '- 没有亲历记录时，只能说最近没出门、没新经历或记不清细节。\n';
                     if (districtSignalGuide) staticBlock += `${districtSignalGuide}\n`;
@@ -1365,11 +1389,18 @@ async function buildUniversalContext(context, character, recentInput = '', isGro
                     character.id,
                     userAskedAboutCity ? 'city_runtime_asked' : 'city_runtime_base',
                     {
-                        template_version: 5,
+                        template_version: 6,
                         userAskedAboutCity,
                         announcements: announcements.map(a => ({ timestamp: a.timestamp, title: a.title || '', content: a.content || '' })),
                         self_logs: recentLogs.map(l => ({ timestamp: l.timestamp, message: l.message || '' })),
-                        global_logs: globalLogs.map(l => ({ timestamp: l.timestamp, message: l.message || l.content || '' }))
+                        global_logs: globalLogs.map(l => ({
+                            timestamp: l.timestamp,
+                            character_id: l.character_id || '',
+                            char_name: l.char_name || '',
+                            action_type: l.action_type || '',
+                            location: l.location || '',
+                            message: l.message || l.content || ''
+                        }))
                     },
                     () => {
                         let runtimeBlock = '';
@@ -1400,9 +1431,9 @@ async function buildUniversalContext(context, character, recentInput = '', isGro
                         if (limitY > 0 && globalLogs.length > 0) {
                             hasCityData = true;
                             runtimeBlock += '\n【公共事件 / 传闻】\n';
-                            runtimeBlock += '下面这些只能当成听说/看见，不能说成“我做过”。\n';
+                            runtimeBlock += '下面这些只能当成听说/看见，不能说成“我做过”。如果某条写着“某某的经历，不是你”，那条原文里的“我”也只指该角色。\n';
                             for (const l of globalLogs) {
-                                const globalMsg = l.message || l.content;
+                                const globalMsg = formatOtherCityLogForContext(l, character);
                                 if (globalMsg) runtimeBlock += `- [${new Date(l.timestamp).toLocaleString()}] ${globalMsg}\n`;
                             }
                         }

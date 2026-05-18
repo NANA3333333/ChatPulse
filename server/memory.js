@@ -367,7 +367,7 @@ function getMemory(userId) {
         if (looksLikeCityMemory(memoryData) && looksLikeReplyDrivenCityNarration(memoryData)) return false;
         if (emotion && emotion.length >= 2 && !looksLikeCityMemory(memoryData)) return true;
         if (looksLikeCityMemory(memoryData)) {
-            return /(用户|nana|user|告白|承诺|约定|吵架|冲突|和好|吃醋|嫉妒|委屈|喜欢|讨厌|秘密|密码|没钱|只剩|崩溃|住院|受伤|濒死|透支|极限|昏倒|发烧|还债|还不起|破产)/i.test(text);
+            return /(告白|承诺|约定|吵架|冲突|和好|吃醋|嫉妒|委屈|喜欢|讨厌|秘密|密码|没钱|只剩|崩溃|住院|受伤|濒死|透支|极限|昏倒|发烧|还债|还不起|破产|Nana\s*(给|送|转|说|问|要求|答应|拒绝|安慰|哄|骂|亲|抱)|用户\s*(给|送|转|说|问|要求|答应|拒绝|安慰|哄|骂|亲|抱)|user\s*(gave|said|asked|promised|refused|comforted))/i.test(text);
         }
         return /(用户|nana|user|告白|承诺|约定|吵架|冲突|和好|吃醋|嫉妒|委屈|喜欢|讨厌|秘密|密码|没钱|只剩|崩溃|住院|受伤)/i.test(text);
     }
@@ -1391,7 +1391,7 @@ function getMemory(userId) {
         const needle = normalizeSearchText(variant);
         if (!haystack || !needle || needle.length < 2) return 0;
         if (haystack.includes(needle)) {
-            return needle.length >= 6 ? 0.16 : 0.08;
+            return needle.length >= 6 ? 1.25 : 0.55;
         }
 
         const tokens = extractLexicalQueryTokens(variant);
@@ -1399,7 +1399,7 @@ function getMemory(userId) {
         const hitCount = tokens.filter(token => haystack.includes(token)).length;
         const coverage = hitCount / tokens.length;
         if (hitCount < 2 || coverage < 0.35) return 0;
-        return Math.min(0.14, 0.04 + (hitCount * 0.035) + (coverage * 0.04));
+        return Math.min(0.55, 0.12 + (hitCount * 0.12) + (coverage * 0.12));
     }
 
     function computeLexicalBoost(memoryRow, queryVariants = []) {
@@ -1417,7 +1417,7 @@ function getMemory(userId) {
         for (const variant of queryVariants) {
             boost += computeLexicalVariantBoost(haystack, variant);
         }
-        return Math.min(boost, 0.32);
+        return Math.min(boost, 2.5);
     }
 
     function computeAliasBridgeBoost(memoryRow, queryVariants = []) {
@@ -1933,6 +1933,26 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
                         }
                     }
 
+                    const lexicalSupplement = runLexicalMemoryFallback(
+                        db,
+                        characterId,
+                        queryVariants,
+                        Math.max(resultLimit * 2, 8)
+                    ).filter(memRow => memoryMatchesSearchFilters(memRow, normalizedRequest.filters, temporalRange));
+                    for (const memRow of lexicalSupplement) {
+                        if (!memRow?.id) continue;
+                        const lexicalScore = (Number(memRow._search_score || 0) || 0) + 0.45;
+                        const existing = aggregate.get(memRow.id);
+                        if (!existing || lexicalScore > existing.finalScore) {
+                            aggregate.set(memRow.id, {
+                                memRow,
+                                finalScore: lexicalScore,
+                                rawScore: lexicalScore,
+                                matchedQuery: memRow._matched_query || 'lexical_exact'
+                            });
+                        }
+                    }
+
                     const memories = Array.from(aggregate.values())
                         .sort((a, b) => b.finalScore - a.finalScore)
                         .slice(0, resultLimit)
@@ -2012,6 +2032,26 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
                         }
                     }
                 }
+
+                const lexicalSupplement = runLexicalMemoryFallback(
+                    db,
+                    characterId,
+                    queryVariants,
+                    Math.max(resultLimit * 2, 8)
+                ).filter(memRow => memoryMatchesSearchFilters(memRow, normalizedRequest.filters, temporalRange));
+                for (const memRow of lexicalSupplement) {
+                    if (!memRow?.id) continue;
+                    const lexicalScore = (Number(memRow._search_score || 0) || 0) + 0.45;
+                    const existing = aggregate.get(memRow.id);
+                    if (!existing || lexicalScore > existing.finalScore) {
+                        aggregate.set(memRow.id, {
+                            memRow,
+                            finalScore: lexicalScore,
+                            matchedQuery: memRow._matched_query || 'lexical_exact'
+                        });
+                    }
+                }
+
                 const memories = Array.from(aggregate.values())
                     .sort((a, b) => b.finalScore - a.finalScore)
                     .slice(0, resultLimit)
@@ -2973,6 +3013,7 @@ Output exactly in this JSON format (and nothing else):
         const db = getDb();
         const privateMsgs = db.getOverflowMessages(character.id, privateWindow, sweepLimit);
         const groupMsgIds = [];
+        const cityLogIds = [];
         const activityEntries = [];
         const groups = db.getGroups().filter(g => g.members.some(m => m.member_id === character.id));
 
@@ -3005,6 +3046,21 @@ Output exactly in this JSON format (and nothing else):
             }
         }
 
+        if (db.city && typeof db.city.getOverflowCityLogs === 'function') {
+            const cityLogs = db.city.getOverflowCityLogs(character.id, 0, sweepLimit);
+            for (const log of cityLogs) {
+                cityLogIds.push(log.id);
+                activityEntries.push({
+                    id: `city:${log.id}`,
+                    timestamp: Number(log.timestamp || 0),
+                    kind: 'city',
+                    role: 'character',
+                    text: `[City:${String(log.action_type || 'ACTION')}][${formatAbsoluteTimestamp(log.timestamp)}][location=${log.location || ''}] ${character.name}: ${log.content}`,
+                    source_message_ids_json: [`city:${log.id}`]
+                });
+            }
+        }
+
         activityEntries.sort((a, b) => {
             const tsDelta = Number(a.timestamp || 0) - Number(b.timestamp || 0);
             if (tsDelta !== 0) return tsDelta;
@@ -3029,7 +3085,7 @@ Output exactly in this JSON format (and nothing else):
                 const batchEntries = activityEntries.slice(batchIndex * batchSize, (batchIndex + 1) * batchSize);
                 const batchTimeMeta = buildSourceTimeMeta(batchEntries);
                 const batchText = batchEntries.map(entry => entry.text).join('\n') || 'No messages.';
-                const extractionPrompt = `You are a memory aggregation assistant. Analyze batch ${batchIndex + 1} of ${totalBatches} from ${character.name}'s overflowed chat logs.
+                const extractionPrompt = `You are a memory aggregation assistant. Analyze batch ${batchIndex + 1} of ${totalBatches} from ${character.name}'s overflowed private chats, group chats, and city activity logs.
 Carry forward the important context from previous batches using the rolling summary, then refine it with the current batch.
 Return a structured JSON object with both an updated rolling summary and 0 to 4 strong memory candidates.
 
@@ -3057,6 +3113,9 @@ CRITICAL:
 - Write each memory "content" as 1 to 2 fuller Chinese sentences with the key detail.
 - Treat "event" as an internal short tag only.
 - Avoid bland labels in "summary" such as "Financial transfer", "Meta-commentary conflict", "Preference update".
+- City activity logs are routine life traces. Do not store them verbatim.
+- Only extract a city-derived memory if several logs together reveal a durable arc, major consequence, unusual event, relationship-relevant action, severe health/money risk, or a plan that should affect future behavior.
+- If a city log merely describes eating, walking, working, going home, browsing, or resting, keep it in the rolling summary at most; do not emit it as a memory candidate.
 
 [Previous Rolling Summary]
 ${rollingSummary || 'None yet.'}
@@ -3188,6 +3247,9 @@ Output exactly in this JSON format (and nothing else):
 
             if (privateMsgs.length > 0) db.markMessagesSummarized(privateMsgs.map(m => m.id));
             if (groupMsgIds.length > 0) db.markGroupMessagesSummarized(groupMsgIds);
+            if (cityLogIds.length > 0 && db.city && typeof db.city.markCityLogsSummarized === 'function') {
+                db.city.markCityLogsSummarized(cityLogIds);
+            }
 
             updateSweepStatus(character.id, {
                 sweep_last_error: savedCount > 0 ? '' : 'Sweep completed but no strong memories were extracted.',

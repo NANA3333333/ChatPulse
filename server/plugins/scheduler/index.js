@@ -156,18 +156,21 @@ function init(app, context) {
                                 continue;
                             }
 
-                            let unsummarizedCount = userDb.countOverflowMessages(char.id, privateWindow);
+                            const privateUnsummarizedCount = userDb.countOverflowMessages(char.id, privateWindow);
+                            let groupUnsummarizedCount = 0;
 
-                            if (unsummarizedCount < sweepLimit) {
-                                for (const g of groups) {
-                                    const groupWindow = g.inject_limit ?? 5;
-                                    unsummarizedCount += userDb.countOverflowGroupMessages(g.id, groupWindow);
-                                    if (unsummarizedCount >= sweepLimit) break;
-                                }
+                            for (const g of groups) {
+                                const groupWindow = g.inject_limit ?? 5;
+                                groupUnsummarizedCount += userDb.countOverflowGroupMessages(g.id, groupWindow);
                             }
 
-                            if (unsummarizedCount >= sweepLimit) {
-                                console.log(`[Scheduler] Threshold reached (${unsummarizedCount} >= ${sweepLimit}) for ${char.name}. Triggering memory sweep.`);
+                            const cityUnsummarizedCount = userDb.city && typeof userDb.city.countOverflowCityLogs === 'function'
+                                ? userDb.city.countOverflowCityLogs(char.id, 0)
+                                : 0;
+                            const maxPoolCount = Math.max(privateUnsummarizedCount, groupUnsummarizedCount, cityUnsummarizedCount);
+
+                            if (maxPoolCount >= sweepLimit) {
+                                console.log(`[Scheduler] Threshold reached for ${char.name}. private=${privateUnsummarizedCount}, group=${groupUnsummarizedCount}, city=${cityUnsummarizedCount}, limit=${sweepLimit}. Triggering memory sweep.`);
                                 memory.sweepOverflowMemories(char).catch(err => {
                                     console.error(`[Scheduler] Overflow sweep failed for ${char.name}:`, err);
                                 });

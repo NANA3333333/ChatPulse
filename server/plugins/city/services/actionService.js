@@ -23,7 +23,8 @@ function createActionService(deps = {}) {
         buildHackerIntelAppendix,
         triggerHackerIntelReply,
         getMedicalStayMinutes,
-        getCityNowMs
+        getCityNowMs,
+        maybeRunCityWebSearchActivity
     } = deps;
 
     async function applyDecision(district, char, db, userId, currentCals, config, activeEvents, richNarrations = null, options = {}) {
@@ -330,12 +331,33 @@ function createActionService(deps = {}) {
             }
         }
 
+        let webActivityOutcome = null;
+        if (primaryActionLogId && typeof maybeRunCityWebSearchActivity === 'function') {
+            try {
+                webActivityOutcome = await maybeRunCityWebSearchActivity({
+                    db,
+                    userId,
+                    char,
+                    district,
+                    config,
+                    baseLog: getLogText(buildCollapsedCityLog(char, '行动文案生成失败', { district }), { forceDefault: false })
+                });
+            } catch (webErr) {
+                console.warn(`[City/Web] ${char.name} 联网活动失败: ${webErr.message}`);
+            }
+        }
+
         const questOutcome = await handleQuestLifecycleAfterAction(db, char, district, richNarrations, { actionLogId: primaryActionLogId });
-        const totalCalDelta = dCal + Number(questOutcome.bonusCalories || 0);
-        const totalMoneyDelta = dMoney + Number(questOutcome.bonusMoney || 0);
+        const totalCalDelta = dCal + Number(questOutcome.bonusCalories || 0) + Number(webActivityOutcome?.calorieDelta || 0);
+        const totalMoneyDelta = dMoney + Number(questOutcome.bonusMoney || 0) + Number(webActivityOutcome?.moneyDelta || 0);
         const newCals = Math.min(4000, Math.max(0, currentCals + totalCalDelta));
         const newWallet = Math.max(0, (char.wallet || 0) + totalMoneyDelta);
-        const nextState = applyStateEffectsToCharacter(char, stateEffects);
+        const webStateEffects = webActivityOutcome?.stateEffects || {};
+        const mergedStateEffects = { ...stateEffects };
+        for (const [key, value] of Object.entries(webStateEffects)) {
+            mergedStateEffects[key] = Number(mergedStateEffects[key] || 0) + Number(value || 0);
+        }
+        const nextState = applyStateEffectsToCharacter(char, mergedStateEffects);
         const newCityStatus = district.type === 'medical' && currentCals < 800
             ? 'medical'
             : district.duration_ticks > 1

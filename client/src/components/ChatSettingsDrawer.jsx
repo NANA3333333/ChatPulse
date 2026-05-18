@@ -734,7 +734,28 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Cache Hit Rate (No RAG)' : '排除 RAG 的缓存命中率'}</span><span style={{ fontWeight: '500', color: '#2563eb' }}>{cacheOnlyHitRatePercent}%</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Cache Saved (No RAG)' : '排除 RAG 的缓存节约 token'}</span><span style={{ fontWeight: '500', color: '#2563eb' }}>{cacheOnlySavedTokens} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Cache + RAG Saved' : '缓存库 + RAG 总节约 token'}</span><span style={{ fontWeight: '500', color: '#16a34a' }}>{totalSavedIncludingRagTokens} T ({totalSavedIncludingRagRatePercent}%)</span></div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed #eee', paddingTop: '8px', marginTop: '4px' }}><span style={{ color: '#666', fontWeight: '600' }}>{lang === 'en' ? 'Memory Sweep Progress (W)' : '长时记忆消化积攒 (W参数)'}</span><span style={{ fontWeight: '500', color: (contextStats?.w_unsummarized_count ?? 0) >= (contextStats?.w_sweep_limit ?? 0) ? '#c0392b' : '#34495e' }}>{contextStats?.w_unsummarized_count ?? 0} / {contextStats?.w_sweep_limit ?? 0} {lang === 'en' ? 'msgs' : '条'}</span></div>
+                            {(() => {
+                                const wLimit = contextStats?.w_sweep_limit ?? 0;
+                                const wPrivate = contextStats?.w_private_unsummarized_count ?? 0;
+                                const wGroup = contextStats?.w_group_unsummarized_count ?? 0;
+                                const wCity = contextStats?.w_city_unsummarized_count ?? 0;
+                                const wTotal = contextStats?.w_unsummarized_count ?? (wPrivate + wGroup + wCity);
+                                const wReady = Math.max(wPrivate, wGroup, wCity) >= wLimit;
+                                const row = (label, value) => (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', paddingLeft: '10px' }}>
+                                        <span style={{ color: '#777' }}>{label}</span>
+                                        <span style={{ fontWeight: '500', color: value >= wLimit ? '#c0392b' : '#34495e' }}>{value} / {wLimit} {lang === 'en' ? 'items' : '条'}</span>
+                                    </div>
+                                );
+                                return (
+                                    <>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed #eee', paddingTop: '8px', marginTop: '4px' }}><span style={{ color: '#666', fontWeight: '600' }}>{lang === 'en' ? 'Memory Sweep Progress (W)' : '长时记忆消化积攒 (W参数)'}</span><span style={{ fontWeight: '500', color: wReady ? '#c0392b' : '#34495e' }}>{wTotal} {lang === 'en' ? 'total' : '总计'}</span></div>
+                                        {row(lang === 'en' ? 'Private chat' : '私聊', wPrivate)}
+                                        {row(lang === 'en' ? 'Group chat' : '群聊', wGroup)}
+                                        {row(lang === 'en' ? 'City logs' : '商业街', wCity)}
+                                    </>
+                                );
+                            })()}
                             {!!contextStats?.w_last_error && <div style={{ marginTop: '6px', padding: '8px 10px', background: '#fff1f1', border: '1px solid #ffc0c0', borderRadius: '6px', color: '#c0392b', fontSize: '12px', lineHeight: 1.5 }}><strong>{lang === 'en' ? 'Sweep Error: ' : '整理失败：'}</strong>{contextStats.w_last_error}</div>}
                             {(contextStats?.w_last_run_at ?? 0) > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Last Sweep Attempt' : '上次整理尝试'}</span><span style={{ fontWeight: '500', color: '#555' }}>{new Date(contextStats.w_last_run_at).toLocaleString()}</span></div>}
                             {(contextStats?.w_last_success_at ?? 0) > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Last Sweep Success' : '上次整理成功'}</span><span style={{ fontWeight: '500', color: '#2e7d32' }}>{new Date(contextStats.w_last_success_at).toLocaleString()}</span></div>}

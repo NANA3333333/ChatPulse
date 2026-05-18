@@ -13,13 +13,14 @@ const GROUP_AUTONOMY_DISABLED = process.env.CP_GROUP_AUTONOMY === '0';
 let loggedPrivateAutonomyDisabled = false;
 let loggedGroupAutonomyDisabled = false;
 
-function getDefaultGuidelines() {
+function getDefaultGuidelines(userName = '用户') {
+    const safeUserName = String(userName || '用户').trim() || '用户';
     return `Guidelines:
 1. Stay fully in persona. Mobile chat only. Keep replies short, casual, conversational. Never act like an AI assistant.
 2. Treat body state, hunger, fatigue, work, money pressure, city/life activities, and scene context as in-world reality, never as backend/UI/log/prompt mechanics. If the user uses meta words like token/cache/prompt/AI/system/backend/testing, reinterpret them inside the relationship and scene.
-2.5. Any system-provided runtime state block about wallet, hunger, fatigue, sleep debt, current emotion, physical condition, location, or pressure describes YOU the character, not the user Nana. Never mirror those values back as if they belong to Nana unless Nana explicitly says they are hers.
-2.6. In chat history, role=assistant means things YOU the character previously said. role=user means things Nana said. Never treat assistant history as if it were a new user message.
-2.7. Some history lines may include timestamp/speaker metadata like [2026/4/27 22:50:32] Nana:. These labels are context metadata only. Never copy that bracketed timestamp/name prefix into your reply; reply as plain chat text.
+2.5. Any system-provided runtime state block about wallet, hunger, fatigue, sleep debt, current emotion, physical condition, location, or pressure describes YOU the character, not the user ${safeUserName}. Never mirror those values back as if they belong to ${safeUserName} unless ${safeUserName} explicitly says they are theirs.
+2.6. In chat history, role=assistant means things YOU the character previously said. role=user means things ${safeUserName} said. Never treat assistant history as if it were a new user message.
+2.7. Some history lines may include timestamp/speaker metadata like [2026/4/27 22:50:32] ${safeUserName}:. These labels are context metadata only. Never copy that bracketed timestamp/name prefix into your reply; reply as plain chat text.
 3. Mention time-of-day or what you are doing only when it fits. Vary response moves; do not lock into one habitual opener, pacing, or emotional pattern.
 3.5. Current time-of-day outranks conversational inertia. If it is daytime / morning / noon / afternoon, do not keep talking as if it were late-night by habit, and do not casually urge the user to sleep unless the live scene clearly supports it.
 4. Output rule: never output only tags. Always include at least one sentence of dialogue.
@@ -33,7 +34,9 @@ function getDefaultGuidelines() {
    - emotion: optional [EMOTION_REASON:short text]; if the reply itself clearly sounds jealous|hurt|angry|lonely|happy|sad|cautious|guarded|shy|hopeful|playful|disappointed|relieved|affectionate|reassured|yearning|flustered|guilty|frustrated|wistful|proud|secure|tender|helpless|tense|calm, output exactly one [EMOTION_STATE:value] in the same reply
    - emotion whitelist: when you output [EMOTION_STATE:value], value MUST be chosen from exactly this library and nothing else: jealous, hurt, angry, lonely, happy, sad, cautious, guarded, shy, hopeful, playful, disappointed, relieved, affectionate, reassured, yearning, flustered, guilty, frustrated, wistful, proud, secure, tender, helpless, tense, calm
    - never invent a new emotion word, synonym, translation variant, or nuanced label outside the library. If none fits well enough, omit [EMOTION_STATE] instead of improvising
-   - tts: optional private-chat speech request. Use [TTS_INTENT:{"style":"soft|playful|comforting|serious","reason":"short reason","priority":1}] only when hearing this exact reply in your voice would materially improve the emotional effect. Use it rarely. Do not use it for routine acknowledgements, factual answers, system/event replies, or every affectionate line.
+   - web: optional realism protocol. If, as the character, you feel this specific reply would be more natural, vivid, or higher-quality after checking something online, first say a brief in-character line and append [WEB_SEARCH_INTENT:{"reason":"","query_hint":""}]. The system will search and let you continue with the results. Omit this tag whenever you can reply naturally without extra online context.
+   - web: query_hint should be a concise real search phrase. Use this for believable phone/web-check behavior, not for every factual question. Never mention backend/API/key/tooling.
+   - tts: optional private-chat speech request. Use [TTS_INTENT:{"style":"soft|playful|comforting|serious","reason":"short reason","priority":1}] only when hearing this exact reply in your voice would materially improve the emotional effect. Use it rarely. Do not use it for routine acknowledgements, factual answers, web-search drafts, system/event replies, or every affectionate line.
    - city: prefer [CITY_ACTION:{"district_id":"","district_type":"","log":"","chat":"","moment":"","diary":""}] for any private-chat-triggered commercial-street action signal
    - city: [CITY_INTENT:...] is legacy compatibility only; if you use it, write only an explicit district id/name/type signal such as home / restaurant / convenience / factory / school / hospital / park / mall / casino / street / hacker_space / rest / food / work / education / medical / leisure / shopping / gambling / wander, never a full sentence
 6. Emotion judgement:
@@ -854,7 +857,7 @@ function deriveRagRetrievalSlots({ retrievalRequest, plannerTopics = [], retriev
             queries: slot.queries.slice(0, 6),
             filters: slot.filters || {},
             temporal_hint: slot.temporal_hint || retrievalRequest?.temporal_hint || {},
-            limit: Math.max(1, Math.min(12, Number(slot.limit || 4) || 4))
+            limit: Math.max(6, Math.min(12, Number(slot.limit || 6) || 6))
         });
     };
 
@@ -872,7 +875,7 @@ function deriveRagRetrievalSlots({ retrievalRequest, plannerTopics = [], retriev
                     ...(retrievalRequest?.filters || {})
                 },
                 temporal_hint: retrievalRequest?.temporal_hint || {},
-                limit: Math.max(1, Math.min(12, Number(plan?.limit || retrievalRequest?.limit || 4) || 4))
+                limit: Math.max(6, Math.min(12, Number(plan?.limit || retrievalRequest?.limit || 6) || 6))
             });
         });
         if (slots.length > 0) {
@@ -885,7 +888,7 @@ function deriveRagRetrievalSlots({ retrievalRequest, plannerTopics = [], retriev
         queries: buildSlotQueries(baseQueries, [retrievalLabel || latestUserMessage || '用户近况']),
         filters: retrievalRequest?.filters || {},
         temporal_hint: retrievalRequest?.temporal_hint || {},
-        limit: Math.max(1, Math.min(12, Number(retrievalRequest?.limit || 5) || 5))
+        limit: Math.max(8, Math.min(12, Number(retrievalRequest?.limit || 8) || 8))
     });
 
     return slots;
@@ -899,7 +902,7 @@ async function executeMultiSlotMemorySearch(memory, characterId, retrievalReques
             queries: Array.isArray(retrievalRequest?.queries) ? retrievalRequest.queries : [],
             filters: retrievalRequest?.filters || {},
             temporal_hint: retrievalRequest?.temporal_hint || {},
-            limit: Math.max(1, Math.min(12, Number(retrievalRequest?.limit || 5) || 5))
+            limit: Math.max(8, Math.min(12, Number(retrievalRequest?.limit || 8) || 8))
         }];
 
     const slotResults = [];
@@ -976,8 +979,8 @@ async function executeMultiSlotMemorySearch(memory, characterId, retrievalReques
     }
 
     const finalLimit = Math.max(
-        Number(retrievalRequest?.limit || 5) || 5,
-        Math.min(20, slots.length * 4)
+        Number(retrievalRequest?.limit || 8) || 8,
+        Math.min(24, slots.length * 6)
     );
 
     const finalMemories = Array.from(aggregate.values())
@@ -1500,6 +1503,386 @@ function getEngine(userId) {
         return clamp(parsed, min, max);
     }
 
+    function addUsageTotals(baseUsage, extraUsage) {
+        if (!extraUsage) return baseUsage || null;
+        const next = baseUsage ? { ...baseUsage } : { prompt_tokens: 0, completion_tokens: 0 };
+        next.prompt_tokens = (next.prompt_tokens || 0) + (extraUsage.prompt_tokens || 0);
+        next.completion_tokens = (next.completion_tokens || 0) + (extraUsage.completion_tokens || 0);
+        return next;
+    }
+
+    function parseWebSearchIntentTag(text) {
+        const raw = String(text || '');
+        const tagMatch = raw.match(/\[WEB_SEARCH_INTENT:\s*([\s\S]*?)\]/i);
+        if (!tagMatch) return null;
+        const payload = String(tagMatch[1] || '').trim();
+        if (!payload) return { reason: '', query_hint: '' };
+        try {
+            const parsed = JSON.parse(extractBalancedJsonPayload(payload, '{', '}'));
+            return {
+                reason: String(parsed?.reason || '').trim(),
+                query_hint: String(parsed?.query_hint || parsed?.query || parsed?.keyword || '').trim(),
+                tone: String(parsed?.tone || '').trim()
+            };
+        } catch (e) {
+            return {
+                reason: payload.replace(/[{}"']/g, '').slice(0, 120),
+                query_hint: payload.replace(/[{}"']/g, '').slice(0, 160)
+            };
+        }
+    }
+
+    function stripWebSearchIntentTag(text) {
+        return String(text || '')
+            .replace(/\[WEB_SEARCH_INTENT:\s*[\s\S]*?\]/gi, '')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+    }
+
+    function stripHiddenTagsForVisibleMessage(text) {
+        return String(text || '')
+            .replace(/\[(?:TIMER|TRANSFER|MOMENT|MOMENT_LIKE|MOMENT_COMMENT|DIARY|UNLOCK_DIARY|AFFINITY|CHAR_AFFINITY|PRESSURE|PRESSURE_DELTA|JEALOUSY|MOOD_DELTA|EMOTION_REASON|EMOTION_STATE|CITY_INTENT|CITY_ACTION|WEB_SEARCH_INTENT|DIARY_PASSWORD|REDPACKET_SEND|Red Packet)[^\]]*\]/gi, '')
+            .replace(/\[TTS_INTENT:\s*[\s\S]*?\]/gi, '')
+            .replace(/\[\s*\]/g, '')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+    }
+
+    function persistVisibleCharacterText({ characterId, text, wsClients, metadata = null }) {
+        const clean = stripHistoryMetadataPrefixFromOutput(stripHiddenTagsForVisibleMessage(text));
+        if (!clean) return [];
+        const bubbles = clean.split('\n').map(msg => msg.trim()).filter(Boolean);
+        const saved = [];
+        bubbles.forEach((bubble, index) => {
+            const messageMetadata = metadata && index === 0 ? metadata : null;
+            const { id: messageId, timestamp: messageTs } = db.addMessage(characterId, 'character', bubble, messageMetadata);
+            const message = {
+                id: messageId,
+                character_id: characterId,
+                role: 'character',
+                content: bubble,
+                timestamp: messageTs + index
+            };
+            saved.push(message);
+            broadcastNewMessage(wsClients, message);
+        });
+        return saved;
+    }
+
+    function formatWebSearchResultsForKnowledge(searchResult) {
+        const results = Array.isArray(searchResult?.results) ? searchResult.results.slice(0, 3) : [];
+        return [
+            `查询: ${searchResult?.query || ''}`,
+            `来源: ${searchResult?.source || ''}`,
+            `时间: ${searchResult?.fetched_at || new Date().toISOString()}`,
+            '',
+            ...results.map((item, index) => [
+                `${index + 1}. ${item.title || item.url || 'Result'}`,
+                item.snippet ? `摘要: ${item.snippet}` : '',
+                item.page_text ? `来源正文: ${String(item.page_text).slice(0, 4000)}` : '',
+                item.url ? `链接: ${item.url}` : ''
+            ].filter(Boolean).join('\n'))
+        ].join('\n').trim();
+    }
+
+    function formatWebSearchBlock({ intent, plan, searchResult, error }) {
+        if (error) {
+            return [
+                '[你刚刚尝试联网查询，但没有成功]',
+                `想查的原因: ${intent?.reason || '想确认一下公开信息'}`,
+                `准备查的方向: ${plan?.queries?.[0] || intent?.query_hint || ''}`,
+                `失败原因: ${error}`,
+                '',
+                '[使用规则]',
+                '- 像真人一样继续对话，可以自然说“我这边没刷出来/网有点卡”。',
+                '- 不要提后端、API、key、工具或系统。'
+            ].join('\n');
+        }
+        const results = Array.isArray(searchResult?.results) ? searchResult.results.slice(0, 3) : [];
+        return [
+            '[你刚刚联网查询到的信息]',
+            `你刚才因为“${intent?.reason || '想确认一下'}”而查了一下。`,
+            `查询词: ${searchResult?.query || plan?.queries?.[0] || intent?.query_hint || ''}`,
+            `来源: ${searchResult?.source || ''}`,
+            `时间: ${searchResult?.fetched_at || new Date().toLocaleString()}`,
+            '',
+            '结果摘要:',
+            ...(results.length > 0
+                ? results.map((item, index) => [
+                    `${index + 1}. ${item.title || item.url || '结果'}`,
+                    item.snippet ? `搜索摘要: ${item.snippet}` : '',
+                    item.page_text ? `来源正文摘录: ${String(item.page_text).slice(0, 3000)}` : '',
+                    item.url ? `链接: ${item.url}` : ''
+                ].filter(Boolean).join('\n'))
+                : ['没有找到特别有用的结果。']),
+            '',
+            '[使用规则]',
+            '- 这是你刚刚查手机/上网看到的公开信息，不是你的亲身经历。',
+            '- 自然继续之前的私聊，不要写成搜索报告。',
+            '- 可以说“我刚搜了下/我看到网上写着/我这边查到的是”。',
+            '- 不要提后端、API、key、工具、prompt 或系统。'
+        ].join('\n');
+    }
+
+    async function planCharacterWebSearch({ character, intent, transformedHistory, recentInputString, conversationDigest, topicSwitchState }) {
+        const fallbackQuery = String(intent?.query_hint || recentInputString || '').trim().slice(0, 180);
+        const plannerConfig = resolveRagPlannerConfig(character);
+        if (!plannerConfig.endpoint || !plannerConfig.key || !plannerConfig.model) {
+            return { queries: fallbackQuery ? [fallbackQuery] : [], provider: 'auto', need_fetch_pages: false };
+        }
+        const plannerInstruction = [
+            'WEB SEARCH QUERY PLANNER',
+            'The character has decided they would naturally check the web before replying.',
+            'Your job is only to turn that character intent into concise search queries.',
+            'Do not roleplay. Do not answer the user.',
+            '',
+            '[Character web intent]',
+            `Reason: ${intent?.reason || ''}`,
+            `Query hint: ${intent?.query_hint || ''}`,
+            '',
+            '[Output JSON]',
+            '{',
+            '  "queries": ["one concise query", "optional second query"],',
+            '  "provider": "auto",',
+            '  "need_fetch_pages": false',
+            '  "save_scope": "character"',
+            '}',
+            '',
+            '[Rules]',
+            '- Return ONLY valid JSON.',
+            '- Use Chinese query terms when the user is chatting in Chinese.',
+            '- Preserve dates, locations, names, product titles, and platform names.',
+            '- 1 or 2 queries are enough.',
+            '- provider should normally be "auto".'
+        ].join('\n');
+        const messages = buildRagPlannerMessages({
+            recentHistory: transformedHistory,
+            latestUserMessage: recentInputString,
+            conversationDigest,
+            plannerInstruction,
+            topicSwitchState,
+            quoteData: true
+        });
+        try {
+            recordLlmDebug(character, 'input', messages, {
+                context_type: 'web_search_query_plan',
+                planner_source: plannerConfig.source,
+                latest_user_message: recentInputString
+            });
+            const { content, usage, finishReason } = await callLLM({
+                endpoint: plannerConfig.endpoint,
+                key: plannerConfig.key,
+                model: plannerConfig.model,
+                messages,
+                maxTokens: 1200,
+                temperature: 0,
+                returnUsage: true,
+                debugAttempt: buildLlmAttemptRecorder(character, {
+                    context_type: 'web_search_query_plan',
+                    planner_source: plannerConfig.source
+                })
+            });
+            recordLlmDebug(character, 'output', content, {
+                context_type: 'web_search_query_plan',
+                planner_source: plannerConfig.source,
+                finishReason: finishReason || '',
+                usage: usage || null
+            });
+            if (usage) recordTokenUsage(character.id, 'web_search_query_plan', usage);
+            const rawJson = extractBalancedJsonPayload(content, '{', '}');
+            const parsed = JSON.parse(rawJson);
+            const queries = (Array.isArray(parsed?.queries) ? parsed.queries : [])
+                .map(item => String(item || '').trim())
+                .filter(Boolean)
+                .slice(0, 2);
+            return {
+                queries: queries.length > 0 ? queries : (fallbackQuery ? [fallbackQuery] : []),
+                provider: String(parsed?.provider || 'auto').trim() || 'auto',
+                need_fetch_pages: parsed?.need_fetch_pages === true,
+                save_scope: String(parsed?.save_scope || 'character').trim() || 'character'
+            };
+        } catch (e) {
+            console.warn(`[Engine/Web] Query planner failed for ${character.name}: ${e.message}`);
+            return { queries: fallbackQuery ? [fallbackQuery] : [], provider: 'auto', need_fetch_pages: false, save_scope: 'character' };
+        }
+    }
+
+    async function runCharacterWebSearch({ character, intent, plan }) {
+        const mcpLab = require('./plugins/mcpLab');
+        const query = String(plan?.queries?.[0] || intent?.query_hint || '').trim();
+        if (!query) throw new Error('没有可查询的关键词');
+        const resolved = mcpLab.resolveSearchProvider(db, plan?.provider || 'auto');
+        const labDb = mcpLab.ensureMcpLabDb(db);
+        const taskId = mcpLab.makeId();
+        const startedAt = new Date().toISOString();
+        const taskBase = {
+            id: taskId,
+            owner_id: userId,
+            title: `私聊联网：${query}`.slice(0, 160),
+            kind: 'private_web_search',
+            input: {
+                query,
+                provider: resolved.id,
+                character_id: character.id,
+                character_name: character.name || '',
+                reason: intent?.reason || '',
+                query_hint: intent?.query_hint || ''
+            },
+            created_at: startedAt,
+            started_at: startedAt
+        };
+        labDb.saveTask({
+            ...taskBase,
+            status: 'running',
+            output: null,
+            error: '',
+            finished_at: ''
+        });
+        let searchResult = null;
+        try {
+            searchResult = await mcpLab.runWebSearch(query, {
+                provider: resolved.id,
+                apiKey: resolved.key,
+                fetchPages: true,
+                fetchPageLimit: 3
+            });
+            labDb.saveTask({
+                ...taskBase,
+                status: 'done',
+                output: searchResult,
+                error: '',
+                finished_at: new Date().toISOString()
+            });
+            const content = formatWebSearchResultsForKnowledge(searchResult);
+            if (content) {
+                try {
+                    labDb.saveExternalKnowledge({
+                        owner_id: userId,
+                        character_id: character.id,
+                        title: `联网查询：${query}`.slice(0, 240),
+                        content,
+                        source_url: (searchResult.results || []).map(item => item.url).filter(Boolean).slice(0, 3).join('\n'),
+                        source_type: 'web_search',
+                        trust_level: 'search_summary',
+                        tags: ['web_search', resolved.id]
+                    }, labDb.chunkText(content), mcpLab.makeId);
+                } catch (saveErr) {
+                    console.warn(`[Engine/Web] Failed to save web knowledge for ${character.name}: ${saveErr.message}`);
+                }
+            }
+        } catch (searchErr) {
+            try {
+                labDb.saveTask({
+                    ...taskBase,
+                    status: 'error',
+                    output: searchResult,
+                    error: searchErr.message,
+                    finished_at: new Date().toISOString()
+                });
+            } catch (taskErr) {
+                console.warn(`[Engine/Web] Failed to save web task error for ${character.name}: ${taskErr.message}`);
+            }
+            throw searchErr;
+        }
+        return searchResult;
+    }
+
+    async function runWebSearchFollowupIfRequested({
+        character,
+        charCheck,
+        generatedText,
+        usage,
+        apiMessages,
+        transformedHistory,
+        recentInputString,
+        conversationDigest,
+        topicSwitchState,
+        wsClients
+    }) {
+        const intent = parseWebSearchIntentTag(generatedText);
+        if (!intent) return { generatedText, usage, handled: false };
+        setWebSearchActive(character.id, wsClients, true);
+        updateRagProgress(character.id, wsClients, { currentKey: 'retrieve', status: 'running' });
+        const draft = stripWebSearchIntentTag(generatedText);
+        let plan = null;
+        let searchResult = null;
+        let webBlock = '';
+        try {
+            plan = await planCharacterWebSearch({
+                character: charCheck,
+                intent,
+                transformedHistory,
+                recentInputString,
+                conversationDigest,
+                topicSwitchState
+            });
+            searchResult = await runCharacterWebSearch({ character: charCheck, intent, plan });
+            webBlock = formatWebSearchBlock({ intent, plan, searchResult });
+        } catch (e) {
+            webBlock = formatWebSearchBlock({ intent, plan, error: e.message });
+        }
+        const currentUserName = String(db.getUserProfile?.()?.name || '用户').trim() || '用户';
+        const followupMessages = [
+            ...apiMessages,
+            ...(draft ? [{ role: 'assistant', content: draft }] : []),
+            {
+                role: 'user',
+                content: [
+                    '[系统事件：联网查询结果已返回]',
+                    '下面是这次联网查询已经返回的内容。请把它当成你刚刚查手机/网页看到的信息。',
+                    `根据这些结果继续给 ${currentUserName} 一个自然的用户可见反馈。`,
+                    '这一步不是新的联网决策，不需要再输出 WEB_SEARCH_INTENT。',
+                    '',
+                    webBlock,
+                    '',
+                    '[现在继续]',
+                    `请作为角色本人，直接告诉 ${currentUserName} 你刚刚查到了什么。`
+                ].filter(Boolean).join('\n')
+            }
+        ];
+        recordLlmDebug(charCheck, 'input', followupMessages, {
+            context_type: 'private_reply_web_followup',
+            latest_user_message: recentInputString,
+            web_intent: intent,
+            web_plan: plan,
+            web_result_source: searchResult?.source || ''
+        });
+        let followup = null;
+        try {
+            followup = await callLLM({
+                endpoint: character.api_endpoint,
+                key: character.api_key,
+                model: character.model_name,
+                messages: followupMessages,
+                maxTokens: character.max_tokens || 2000,
+                presencePenalty: 0.35,
+                frequencyPenalty: 0.45,
+                returnUsage: true,
+                debugAttempt: buildLlmAttemptRecorder(character, {
+                    context_type: 'private_reply_web_followup'
+                })
+            });
+        } catch (e) {
+            setWebSearchActive(character.id, wsClients, false);
+            throw e;
+        }
+        recordLlmDebug(charCheck, 'output', followup.content, {
+            context_type: 'private_reply_web_followup',
+            finishReason: followup.finishReason || '',
+            usage: followup.usage || null,
+            web_intent: intent,
+            web_plan: plan
+        });
+        const nextText = followup.content || draft || generatedText;
+        setWebSearchActive(character.id, wsClients, false);
+        return {
+            generatedText: nextText,
+            usage: addUsageTotals(usage, followup.usage),
+            finishReason: followup.finishReason || '',
+            handled: true
+        };
+    }
+
     function logEmotionTransition(beforeState, patch, source, reason) {
         if (!patch || Object.keys(patch).length === 0 || typeof db.addEmotionLog !== 'function') return;
         const afterState = { ...beforeState, ...patch };
@@ -1521,6 +1904,7 @@ function getEngine(userId) {
             stateData[charId] = {
                 countdownMs: Math.max(0, timerData.targetTime - Date.now()),
                 isThinking: timerData.isThinking || false,
+                webSearchActive: timerData.webSearchActive || false,
                 ragProgress: timerData.ragProgress || null,
                 pressure: charCheck.pressure_level || 0,
                 status: charCheck.status,
@@ -1567,6 +1951,13 @@ function getEngine(userId) {
             updatedAt: Date.now()
         };
         timers.set(characterId, { ...timerData, ragProgress: nextProgress });
+        broadcastEngineState(wsClients);
+    }
+
+    function setWebSearchActive(characterId, wsClients, active) {
+        if (!timers.has(characterId)) return;
+        const timerData = timers.get(characterId) || {};
+        timers.set(characterId, { ...timerData, webSearchActive: !!active });
         broadcastEngineState(wsClients);
     }
 
@@ -1728,7 +2119,6 @@ function getEngine(userId) {
 
     // Generates the system prompt merging character persona, world info, and memories
     async function buildPrompt(character, contextMessages, isTimerWakeup = false, options = {}) {
-        const defaultGuidelines = getDefaultGuidelines();
         const conversationDigest = options.conversationDigest || null;
         const privateContextSummaries = Array.isArray(options.privateContextSummaries)
             ? options.privateContextSummaries.slice(-3)
@@ -1740,6 +2130,7 @@ function getEngine(userId) {
 
         const recentInputString = String(options.recentInputString || contextMessages.slice(-2).map(m => m.content).join(' ')).trim();
         const userProfile = db.getUserProfile?.() || null;
+        const defaultGuidelines = getDefaultGuidelines(userProfile?.name || '用户');
         const responseStyleConstitution = String(userProfile?.response_style_constitution || '').trim() || getDefaultResponseStyleConstitution();
 
         // --- Use Universal Context Builder ---
@@ -2088,13 +2479,13 @@ ${dynamicPromptBase}`;
             '      "memory_tier": ["core", "active"],',
             '      "query_hints": ["用户背景", "稳定偏好"],',
             '      "reason": "why this plan helps output quality",',
-            '      "limit": 4',
+            '      "limit": 8',
             '    }',
             '  ]',
             '}',
             '- For temporal browse, set route="temporal_browse", rag_needed=false, temporal_hint to only the pure time phrase, and plans=[].',
             '- For no retrieval, set route="none", rag_needed=false, plans=[].',
-            '- For semantic retrieval, prefer 1 to 3 plans, with plans aligned to the database schema above.',
+            '- For semantic retrieval, prefer 1 to 3 plans, with plans aligned to the database schema above. Use limit 6 to 10 for recall questions unless the topic is extremely narrow.',
             '- Keep retrieval_label and query_hints specific. Preserve time or number constraints when they matter.'
         ].join('\n');
         let parsedDecision = normalizedResumeState?.parsedDecision || null;
@@ -2444,7 +2835,7 @@ ${dynamicPromptBase}`;
             '- "filters.memory_focus" may include only: user_profile, user_current_arc, relationship, general.',
             '- "filters.memory_tier" may include only: core, active, ambient.',
             '- Do NOT output temporal_hint or any time-range filter. Time-anchored lookup is handled by the dedicated temporal retrieval stage before this rewrite step.',
-            '- "limit" should be 4 to 20.',
+            '- "limit" should be 6 to 20 for recall questions, unless the topic is extremely narrow.',
             '- Prefer narrow, user-centered retrieval rather than broad generic search.',
             '- Be highly sensitive to time expressions, dates, durations, numbers, amounts, counts, and order words.',
             '- Preserve numeric constraints inside the queries whenever they matter. Do not rewrite "第2次/50元/两次/几点/多久" into weaker wording like "一些/那次".',
@@ -2471,7 +2862,7 @@ ${dynamicPromptBase}`;
             '    "memory_focus": ["user_profile"],',
             '    "memory_tier": ["core", "active"]',
             '  },',
-            '  "limit": 3',
+            '  "limit": 8',
             '}'
         ].filter(Boolean).join('\n');
         const rewriteMessages = buildRagPlannerMessages({
@@ -2670,11 +3061,19 @@ ${dynamicPromptBase}`;
                 `You must compare the current time with each memory's Event Time / Source Dialogue Time / Source Absolute Time before using it. ` +
                 `Treat the memory summaries and details below as factual recall anchors from the past, with their own timestamps. They are not automatically the current moment, and they are not permanent character settings unless the memory explicitly says so. ` +
                 `A recalled memory may be recent or old; decide that from the time labels, not by guessing. ` +
-                `If any recalled memory conflicts with the user's newest message or the latest visible conversation, trust the newest conversation first. ` +
+                `If any recalled memory conflicts with the user's newest message, trust the user's newest message first. Do not treat your own recent claims of not remembering, not knowing, or needing the user to repeat something as evidence against these retrieved memories. ` +
                 `When answering, prefer these concrete facts over vague emotional generalization.]\n`
                 + formattedMemories
                 + '\n(Use these recalled facts to answer the user accurately and specifically.)';
-            apiMessages[0].content += `\n${sysInjection}\n`;
+            const latestUserIndex = apiMessages.length - 1;
+            if (latestUserIndex >= 0 && apiMessages[latestUserIndex]?.role === 'user') {
+                apiMessages[latestUserIndex] = {
+                    ...apiMessages[latestUserIndex],
+                    content: `${sysInjection}\n\n[Newest user message]\n${apiMessages[latestUserIndex].content}`
+                };
+            } else {
+                apiMessages.push({ role: 'user', content: sysInjection });
+            }
 
             if (!msgMetadata) msgMetadata = { retrievedMemories: [] };
             if (!Array.isArray(msgMetadata.retrievedMemories)) msgMetadata.retrievedMemories = [];
@@ -2904,9 +3303,10 @@ ${dynamicPromptBase}`;
             } else if (!isUserReply && apiMessages.length > 0 && apiMessages[apiMessages.length - 1].role === 'assistant') {
                 // Prevent third-party AI API proxies from auto-injecting "继续" (Continue)
                 // by explicitly providing a system-level user message.
+                const currentUserName = String(db.getUserProfile?.()?.name || '用户').trim() || '用户';
                 apiMessages.push({
                     role: 'user',
-                    content: '[系统提示：上面 history 里 role=assistant 的内容，都是你这个角色自己之前说过的话；role=user 的内容，才是用户 Nana 说的话；role=system 是系统事件。现在请你以 assistant 身份，基于当前语境主动给 Nana 发一条新消息。不要把 assistant 历史误认成 user 说的话。]'
+                    content: `[系统提示：上面 history 里 role=assistant 的内容，都是你这个角色自己之前说过的话；role=user 的内容，才是用户 ${currentUserName} 说的话；role=system 是系统事件。现在请你以 assistant 身份，基于当前语境主动给 ${currentUserName} 发一条新消息。不要把 assistant 历史误认成 user 说的话。]`
                 });
             }
 
@@ -3038,6 +3438,47 @@ ${dynamicPromptBase}`;
                     context_type: isUserReply ? 'private_reply' : (isTimerWakeup ? 'timer_wakeup' : 'proactive')
                 })
             });
+
+            if (isUserReply && generatedText && /\[WEB_SEARCH_INTENT:/i.test(String(generatedText))) {
+                const firstWebDraftText = stripHiddenTagsForVisibleMessage(generatedText);
+                const preWebFreshChar = db.getCharacter(character.id);
+                const preWebMessages = db.getMessages(character.id, 2);
+                const preWebLastMsg = preWebMessages[preWebMessages.length - 1];
+                const preWebWasWiped = !preWebFreshChar
+                    || preWebMessages.length === 0
+                    || (preWebMessages.length <= 1 && preWebLastMsg?.content?.includes('All chat history'));
+                if (preWebWasWiped) {
+                    console.log(`\n[Engine] Aborting web followup for ${charCheck.name}: Chat history was wiped mid-generation.`);
+                    timers.delete(character.id);
+                    return;
+                }
+                const draftSaved = firstWebDraftText
+                    ? persistVisibleCharacterText({
+                        characterId: character.id,
+                        text: firstWebDraftText,
+                        wsClients,
+                        metadata: msgMetadata
+                    })
+                    : [];
+                const webFollowup = await runWebSearchFollowupIfRequested({
+                    character,
+                    charCheck,
+                    generatedText,
+                    usage,
+                    apiMessages,
+                    transformedHistory,
+                    recentInputString: effectiveRecentInputString,
+                    conversationDigest,
+                    topicSwitchState,
+                    wsClients
+                });
+                generatedText = webFollowup.generatedText;
+                usage = webFollowup.usage;
+                finishReason = webFollowup.finishReason || finishReason;
+                if (draftSaved.length > 0) {
+                    msgMetadata = null;
+                }
+            }
 
             if ((finishReason === 'length' || looksPrematurelyCutOff(generatedText)) && generatedText) {
                 const continuationMaxAttempts = 3;
@@ -3373,7 +3814,7 @@ ${dynamicPromptBase}`;
                 const ttsIntent = parseTtsIntentTag(generatedText);
 
                 // Strip all tags from the final text message using a global regex
-                const globalStripRegex = /\[(?:TIMER|TRANSFER|MOMENT|MOMENT_LIKE|MOMENT_COMMENT|DIARY|UNLOCK_DIARY|AFFINITY|CHAR_AFFINITY|PRESSURE|PRESSURE_DELTA|JEALOUSY|MOOD_DELTA|EMOTION_REASON|EMOTION_STATE|CITY_INTENT|CITY_ACTION|TTS_INTENT|DIARY_PASSWORD|REDPACKET_SEND|Red Packet)[^\]]*\]/gi;
+                const globalStripRegex = /\[(?:TIMER|TRANSFER|MOMENT|MOMENT_LIKE|MOMENT_COMMENT|DIARY|UNLOCK_DIARY|AFFINITY|CHAR_AFFINITY|PRESSURE|PRESSURE_DELTA|JEALOUSY|MOOD_DELTA|EMOTION_REASON|EMOTION_STATE|CITY_INTENT|CITY_ACTION|WEB_SEARCH_INTENT|TTS_INTENT|DIARY_PASSWORD|REDPACKET_SEND|Red Packet)[^\]]*\]/gi;
                 generatedText = generatedText.replace(globalStripRegex, '').replace(/\[\s*\]/g, '').replace(/\n{3,}/g, '\n\n').trim();
                 generatedText = stripTtsIntentTags(generatedText);
                 generatedText = stripHistoryMetadataPrefixFromOutput(generatedText);

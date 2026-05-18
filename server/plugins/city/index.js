@@ -10,6 +10,7 @@ const { registerCoreCityRoutes } = require('./routes/coreRoutes');
 const { registerEventQuestRoutes } = require('./routes/eventQuestRoutes');
 const initCityGrowthDb = require('../cityGrowth/growthDb');
 const schoolLogic = require('../cityGrowth/schoolLogic');
+const mcpLabTools = require('../mcpLab');
 const { enqueueBackgroundTask } = require('../../backgroundQueue');
 const { buildUniversalContext, formatTypedAntiRepeatBlock } = require('../../contextBuilder');
 const { deriveEmotion, derivePhysicalState, applyEmotionEvent, getEmotionBehaviorGuidance, buildEmotionLogEntry } = require('../../emotion');
@@ -1720,7 +1721,10 @@ ${recentSameKindBlock}
 
     function buildQuestPromptContext(activeQuests = [], activeQuestClaim = null, lastQuestReview = null, recentQuestReviews = []) {
         const openTasks = Array.isArray(activeQuests) ? activeQuests.slice(0, 6).map((quest) => {
-            const claimText = quest.claim_count > 0 ? `已接单 ${quest.claim_count} 人` : '暂时无人接单';
+            const claimantNames = Array.isArray(quest.claimant_names) ? quest.claimant_names.filter(Boolean) : [];
+            const claimText = claimantNames.length > 0
+                ? `已由 ${claimantNames.join('、')} 接单/领先；后加入也可以帮忙推进，但只有抢先正式交付的人能拿赏金，不能预写自己已经拿到钱`
+                : '暂时无人接单';
             return `- [QUEST_${quest.id}] ${quest.emoji || '📜'} ${quest.title} | 地点=${quest.target_district || 'street'} | 奖励=${Number(quest.reward_gold || 0)}金币${Number(quest.reward_cal || 0) > 0 ? ` ${Number(quest.reward_cal || 0)}体力` : ''} | ${claimText} | ${quest.description || ''}`;
         }) : [];
 
@@ -1954,6 +1958,8 @@ ${taskInstruction}
 - 如果只是看见公告、犹豫、评估要不要接，且没有明确行动，可以不带 quest_intent。
 - 任务推进必须贴合任务内容：采购/配送要写拿货、送达；清理/维修要写动手处理；调查类要写打听、寻找、发现；巡逻/护送要写陪同、盯守、来回查看。
 - 去错地点、只是在附近闲逛、或者文案和任务不匹配，都不会推进任务进度。
+- 如果公告显示已由别人接单/领先，你可以后加入帮忙，但不要在 log/chat/diary 里写自己已经拿到赏金；只有系统确认你抢先正式交付后，才能写领到赏金。
+- 如果你没有“你当前手上的公告任务”块，就不能写自己交付任务或领赏，只能写看见、评估、接单、帮忙或普通行动。
 - 黑客据点只是地点之一。只有任务内容明确要求监听/入侵/截获情报时，才把行动写成黑客行动；普通公告任务在黑客据点推进时，不要自动写监听记录或截获私聊。
 [吃饭/补给语义]
 - 餐厅/饭店/现场用餐 = 这轮吃饭并恢复体力。
@@ -2137,7 +2143,9 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         runTimeSkipBackfill,
         triggerAdminGrantChat,
         getWsClients,
-        getEngine
+        getEngine,
+        isCollapsedCityLog,
+        regenerateActionNarrations
     });
 
     // Autonomous event loop & RNG minute scheduling
@@ -2700,6 +2708,19 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             }
             if (!codeMatch) codeMatch = reply.match(/\[([A-Z_]+)\]/)?.[1]?.toLowerCase();
 
+            const salvageQuestIntentFromReply = () => {
+                const raw = String(reply || '');
+                const questBlock = raw.match(/['"]?quest_intent['"]?\s*:\s*\{([\s\S]*?)\}/i);
+                if (!questBlock) return null;
+                const body = questBlock[1] || '';
+                const idMatch = body.match(/['"]?(?:quest_id|id)['"]?\s*:\s*([0-9]+)/i);
+                const stageMatch = body.match(/['"]?stage['"]?\s*:\s*['"]?([a-z_]+)/i);
+                const questId = Number(idMatch?.[1] || 0);
+                const stage = String(stageMatch?.[1] || '').trim().toLowerCase();
+                if (!questId || !['claim', 'progress', 'report'].includes(stage)) return null;
+                return { quest_id: questId, stage };
+            };
+
             // Salvage non-JSON responses
             // If the LLM completely ignored JSON formatting but still gave us an action tag + some text,
             // we fabricate a richNarrations object using its raw text so we don't lose the flavor.
@@ -2752,6 +2773,11 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
                     };
                 }
                 console.log(`[City] ${char.name} 非 JSON 回复抢救成功，已提取 Action: ${codeMatch.toUpperCase()}`);
+            }
+            const salvagedQuestIntent = salvageQuestIntentFromReply();
+            if (richNarrations && salvagedQuestIntent && (!richNarrations.quest_intent || typeof richNarrations.quest_intent !== 'object')) {
+                richNarrations.quest_intent = salvagedQuestIntent;
+                console.log(`[City] ${char.name} 坏格式回复中抢救 quest_intent: QUEST_${salvagedQuestIntent.quest_id}/${salvagedQuestIntent.stage}`);
             }
 
             // Handle EAT_ITEM action
@@ -3075,6 +3101,320 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         scoreQuestProgressWithMayor: (...args) => mayorService.scoreQuestProgressWithMayor(...args)
     });
 
+    function parseCityWebIntentTag(text) {
+        const raw = String(text || '');
+        const match = raw.match(/\[WEB_SEARCH_INTENT:\s*([\s\S]*?)\]/i);
+        if (!match) return null;
+        const payload = String(match[1] || '').trim();
+        if (!payload) return { reason: '', query_hint: '' };
+        try {
+            const start = payload.indexOf('{');
+            const end = payload.lastIndexOf('}');
+            const parsed = JSON.parse(start >= 0 && end > start ? payload.slice(start, end + 1) : payload);
+            return {
+                reason: String(parsed?.reason || '').trim(),
+                query_hint: String(parsed?.query_hint || parsed?.query || '').trim()
+            };
+        } catch (e) {
+            return {
+                reason: payload.replace(/[{}"']/g, '').slice(0, 120),
+                query_hint: payload.replace(/[{}"']/g, '').slice(0, 160)
+            };
+        }
+    }
+
+    function stripCityWebIntentTag(text) {
+        return String(text || '')
+            .replace(/\[WEB_SEARCH_INTENT:\s*[\s\S]*?\]/gi, '')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+    }
+
+    function formatCityWebSearchKnowledge(searchResult) {
+        const results = Array.isArray(searchResult?.results) ? searchResult.results.slice(0, 3) : [];
+        return [
+            `查询: ${searchResult?.query || ''}`,
+            `来源: ${searchResult?.source || ''}`,
+            `时间: ${searchResult?.fetched_at || new Date().toISOString()}`,
+            '',
+            ...results.map((item, index) => [
+                `${index + 1}. ${item.title || item.url || 'Result'}`,
+                item.snippet ? `摘要: ${item.snippet}` : '',
+                item.page_text ? `来源正文: ${String(item.page_text).slice(0, 4000)}` : '',
+                item.url ? `链接: ${item.url}` : ''
+            ].filter(Boolean).join('\n'))
+        ].join('\n').trim();
+    }
+
+    function formatCityWebResultBlock(searchResult, plan, intent) {
+        const results = Array.isArray(searchResult?.results) ? searchResult.results.slice(0, 3) : [];
+        return [
+            '[刚刚查到的公开网页信息]',
+            `查阅原因：${intent?.reason || '角色临时想确认一下'}`,
+            `查询词：${searchResult?.query || plan?.queries?.[0] || intent?.query_hint || ''}`,
+            `来源：${searchResult?.source || ''}`,
+            '',
+            ...results.map((item, index) => [
+                `${index + 1}. ${item.title || item.url || '结果'}`,
+                item.snippet ? `搜索摘要: ${item.snippet}` : '',
+                item.page_text ? `来源正文摘录: ${String(item.page_text).slice(0, 3000)}` : '',
+                item.url ? `链接: ${item.url}` : ''
+            ].filter(Boolean).join('\n')),
+            '',
+            '[边界]',
+            '- 这是角色刚刚看手机/上网查到的信息，不是亲身经历。',
+            '- 商业街活动文本要写成现实动作，不要写成搜索报告。',
+            '- 不要提 API、key、后端、系统或 prompt。'
+        ].join('\n');
+    }
+
+    async function planCityWebSearchQuery(db, char, district, intent, baseLog) {
+        const fallbackQuery = String(intent?.query_hint || baseLog || `${district?.name || ''} 最新信息`).trim().slice(0, 180);
+        const endpoint = String(char.memory_api_endpoint || char.api_endpoint || '').trim();
+        const key = String(char.memory_api_key || char.api_key || '').trim();
+        const model = String(char.memory_model_name || char.model_name || '').trim();
+        if (!endpoint || !key || !model) return { queries: fallbackQuery ? [fallbackQuery] : [], provider: 'auto' };
+        const prompt = [
+            '你是商业街联网查询规划器，只负责把角色的查询意图变成搜索关键词。',
+            '不要角色扮演，不要写活动文本，只返回 JSON。',
+            '',
+            `[角色] ${char.name}`,
+            `[地点] ${district?.emoji || ''}${district?.name || district?.id || ''} / ${district?.type || ''}`,
+            `[刚刚的商业街行动] ${baseLog || ''}`,
+            `[角色想查的原因] ${intent?.reason || ''}`,
+            `[查询提示] ${intent?.query_hint || ''}`,
+            '',
+            '返回 JSON：',
+            '{ "queries": ["一个简洁搜索词", "可选第二个搜索词"], "provider": "auto" }'
+        ].join('\n');
+        const messages = [
+            { role: 'system', content: '你只返回合法 JSON 对象，不要输出 markdown 或解释。' },
+            { role: 'user', content: prompt }
+        ];
+        try {
+            recordCityLlmDebug(db, char, 'input', 'city_web_query_plan', messages, { model, location: district?.id || '' });
+            const reply = await callLLM({
+                endpoint,
+                key,
+                model,
+                messages,
+                maxTokens: 1000,
+                temperature: 0,
+                debugAttempt: buildCityAttemptRecorder(db, char, 'city_web_query_plan', { location: district?.id || '' })
+            });
+            recordCityLlmDebug(db, char, 'output', 'city_web_query_plan', reply, { model, location: district?.id || '' });
+            const jsonMatch = String(reply || '').match(/\{[\s\S]*\}/);
+            const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+            const queries = (Array.isArray(parsed.queries) ? parsed.queries : [])
+                .map(item => String(item || '').trim())
+                .filter(Boolean)
+                .slice(0, 2);
+            return {
+                queries: queries.length ? queries : (fallbackQuery ? [fallbackQuery] : []),
+                provider: String(parsed.provider || 'auto').trim() || 'auto'
+            };
+        } catch (e) {
+            console.warn(`[City/Web] 查询规划失败 ${char.name}: ${e.message}`);
+            return { queries: fallbackQuery ? [fallbackQuery] : [], provider: 'auto' };
+        }
+    }
+
+    async function maybeRunCityWebSearchActivity({ db, userId, char, district, config, baseLog }) {
+        if (!char?.api_endpoint || !char?.api_key || !char?.model_name) return null;
+        const status = String(char.city_status || '').trim();
+        if (status === 'coma' || status === 'sleeping' || district?.type === 'medical') return null;
+        const locationLabel = `${district?.emoji || ''}${district?.name || district?.id || '商业街'}`.trim();
+        const prePrompt = [
+            `你是 ${char.name}，正在 ${locationLabel}。`,
+            '这是一段可选的商业街生活插曲：是否查网页完全由你按角色性格、当前场景和刚刚发生的行动判断。',
+            '可以像真人一样掏手机查资料、比价、看攻略、确认新闻、刷八卦；也可以觉得没必要，继续做眼前的事。',
+            '',
+            `[刚刚发生的商业街行动] ${baseLog || ''}`,
+            `[当前状态] 钱包=${char.wallet ?? 0} 体力=${char.calories ?? 0} 压力=${char.stress ?? 50} 心情=${char.mood ?? 50} 状态=${status || 'idle'}`,
+            district?.type === 'work' ? '[工作风险] 你现在处在工作相关地点。如果查的不是工作正事，就会像摸鱼，后续可能被发现并受到惩罚；除非诱因、性格或情绪足够强，否则可以输出 NO_WEB。' : '',
+            '',
+            '请按角色性格和当前场景判断你此刻会不会自然想查一下网页。',
+            '如果你觉得这段活动需要额外联网内容来增强真实感或后续输出质量，输出一段商业街活动文本，描述你查之前的动作、想法和查询方向，并在末尾带标签：',
+            '[WEB_SEARCH_INTENT:{"reason":"为什么想查","query_hint":"搜索关键词方向"}]',
+            '如果不会，只输出 NO_WEB。',
+            '不要解释系统，不要提 API、key、后端。'
+        ].filter(Boolean).join('\n');
+        const preMessages = [
+            { role: 'system', content: '你是商业街生活模拟器。联网是可选的角色行为；只有当你决定角色会查网页时，才在活动文本末尾附带 WEB_SEARCH_INTENT 标签。' },
+            { role: 'user', content: prePrompt }
+        ];
+        recordCityLlmDebug(db, char, 'input', 'city_web_search_pre_activity', preMessages, { model: char.model_name, location: district?.id || '' });
+        const preReply = await callLLM({
+            endpoint: char.api_endpoint,
+            key: char.api_key,
+            model: char.model_name,
+            messages: preMessages,
+            maxTokens: 10000,
+            temperature: 0.8,
+            debugAttempt: buildCityAttemptRecorder(db, char, 'city_web_search_pre_activity', { location: district?.id || '' })
+        });
+        recordCityLlmDebug(db, char, 'output', 'city_web_search_pre_activity', preReply, { model: char.model_name, location: district?.id || '' });
+        if (/^\s*NO_WEB\s*$/i.test(String(preReply || '').trim())) return null;
+        const intent = parseCityWebIntentTag(preReply);
+        if (!intent) return null;
+
+        const preLog = stripCityWebIntentTag(preReply) || `${char.name} 在 ${locationLabel} 低头划开手机，想查查${intent.query_hint || '一点消息'}。`;
+        db.city.logAction(char.id, 'WEB_SEARCH', preLog, 0, 0, district?.id || char.location || '');
+        broadcastCityEvent(userId, char.id, 'WEB_SEARCH', preLog);
+
+        const plan = await planCityWebSearchQuery(db, char, district, intent, baseLog);
+        const query = String(plan.queries?.[0] || intent.query_hint || '').trim();
+        if (!query) return { moneyDelta: 0, calorieDelta: 0, stateEffects: { stress: 1 } };
+
+        const resolved = mcpLabTools.resolveSearchProvider(db, plan.provider || 'auto');
+        const labDb = mcpLabTools.ensureMcpLabDb(db);
+        const taskId = mcpLabTools.makeId();
+        const taskTime = new Date().toISOString();
+        const taskBase = {
+            id: taskId,
+            owner_id: userId,
+            title: `商业街联网：${query}`.slice(0, 160),
+            kind: 'city_web_search',
+            input: {
+                query,
+                provider: resolved.id,
+                character_id: char.id,
+                character_name: char.name || '',
+                district_id: district?.id || '',
+                district_name: district?.name || '',
+                reason: intent?.reason || '',
+                query_hint: intent?.query_hint || ''
+            },
+            created_at: taskTime,
+            started_at: taskTime
+        };
+        labDb.saveTask({
+            ...taskBase,
+            status: 'running',
+            output: null,
+            error: '',
+            finished_at: ''
+        });
+        let searchResult = null;
+        try {
+            searchResult = await mcpLabTools.runWebSearch(query, {
+                provider: resolved.id,
+                apiKey: resolved.key,
+                fetchPages: true,
+                fetchPageLimit: 3
+            });
+            labDb.saveTask({
+                ...taskBase,
+                status: 'done',
+                output: searchResult,
+                error: '',
+                finished_at: new Date().toISOString()
+            });
+            const content = formatCityWebSearchKnowledge(searchResult);
+            if (content) {
+                try {
+                    labDb.saveExternalKnowledge({
+                        owner_id: userId,
+                        character_id: char.id,
+                        title: `商业街联网：${query}`.slice(0, 240),
+                        content,
+                        source_url: (searchResult.results || []).map(item => item.url).filter(Boolean).slice(0, 3).join('\n'),
+                        source_type: 'city_web_search',
+                        trust_level: 'search_summary',
+                        tags: ['city_web_search', resolved.id, district?.id || '']
+                    }, labDb.chunkText(content), mcpLabTools.makeId);
+                } catch (saveErr) {
+                    console.warn(`[City/Web] 保存外部知识失败 ${char.name}: ${saveErr.message}`);
+                }
+            }
+        } catch (searchErr) {
+            try {
+                labDb.saveTask({
+                    ...taskBase,
+                    status: 'error',
+                    output: searchResult,
+                    error: searchErr.message,
+                    finished_at: new Date().toISOString()
+                });
+            } catch (taskErr) {
+                console.warn(`[City/Web] 保存联网任务失败 ${char.name}: ${taskErr.message}`);
+            }
+            throw searchErr;
+        }
+
+        const afterPrompt = [
+            `你是 ${char.name}，刚刚在 ${locationLabel} 查了一下手机/网页。`,
+            '',
+            formatCityWebResultBlock(searchResult, plan, intent),
+            '',
+            '[任务]',
+            '输出一段商业街活动文本，描述你看完联网内容后的动作、反应、决定或情绪。不要限制字数，按场景需要展开。',
+            '如果是在工作场景摸鱼，要带一点心虚、遮掩或赶紧收手机的现实感。',
+            '只输出活动文本，不要 JSON，不要标签。'
+        ].join('\n');
+        const afterMessages = [
+            { role: 'system', content: '你是商业街生活模拟器。只输出一段自然的商业街活动记录文本。' },
+            { role: 'user', content: afterPrompt }
+        ];
+        recordCityLlmDebug(db, char, 'input', 'city_web_search_after_activity', afterMessages, { model: char.model_name, location: district?.id || '', query });
+        const afterReply = await callLLM({
+            endpoint: char.api_endpoint,
+            key: char.api_key,
+            model: char.model_name,
+            messages: afterMessages,
+            maxTokens: 10000,
+            temperature: 0.75,
+            debugAttempt: buildCityAttemptRecorder(db, char, 'city_web_search_after_activity', { location: district?.id || '', query })
+        });
+        const afterLog = String(afterReply || '').replace(/\[[A-Z_]+:[^\]]*?\]/g, '').trim();
+        recordCityLlmDebug(db, char, 'output', 'city_web_search_after_activity', afterLog, { model: char.model_name, location: district?.id || '', query });
+        if (afterLog) {
+            db.city.logAction(char.id, 'WEB_RESULT', afterLog, 0, 0, district?.id || char.location || '');
+            broadcastCityEvent(userId, char.id, 'WEB_RESULT', afterLog);
+        }
+
+        const outcome = { moneyDelta: 0, calorieDelta: 0, stateEffects: { stress: district?.type === 'work' ? 2 : 0, mood: 1 } };
+        const looksLikeWorkResearch = /工作|资料|任务|客户|报告|学习|课程|项目|公告|悬赏|路线|价格|采购/.test(`${intent.reason} ${intent.query_hint} ${query}`);
+        if (district?.type === 'work' && !looksLikeWorkResearch) {
+            const punishMessages = [
+                { role: 'system', content: '你是商业街工作摸鱼后果判定器。只输出 NO_PUNISH 或一段活动记录文本。' },
+                {
+                    role: 'user',
+                    content: [
+                        `你是 ${char.name}，刚刚在工作时摸鱼查网页。`,
+                        `[摸鱼前] ${preLog}`,
+                        `[摸鱼后] ${afterLog}`,
+                        '请根据场景判断是否真的会被发现。',
+                        '如果没有明显被发现，只输出 NO_PUNISH。',
+                        '如果会被发现，输出一段商业街惩罚文本：被主管/同事/顾客发现、尴尬补救、被扣钱或被迫加班。不要限制字数，按场景需要展开，但不要过度夸张。'
+                    ].join('\n')
+                }
+            ];
+            recordCityLlmDebug(db, char, 'input', 'city_web_search_work_punish', punishMessages, { model: char.model_name, location: district?.id || '', query });
+            const punishReply = await callLLM({
+                endpoint: char.api_endpoint,
+                key: char.api_key,
+                model: char.model_name,
+                messages: punishMessages,
+                maxTokens: 10000,
+                temperature: 0.75,
+                debugAttempt: buildCityAttemptRecorder(db, char, 'city_web_search_work_punish', { location: district?.id || '', query })
+            });
+            const punishLog = String(punishReply || '').trim();
+            recordCityLlmDebug(db, char, 'output', 'city_web_search_work_punish', punishLog, { model: char.model_name, location: district?.id || '', query });
+            if (punishLog && !/^\s*NO_PUNISH\s*$/i.test(punishLog)) {
+                const penaltyMoney = -Math.max(3, Math.min(30, Math.round(Number(district.money_reward || 10) * 0.25)));
+                db.city.logAction(char.id, 'WEB_PUNISH', punishLog, 0, penaltyMoney, district?.id || char.location || '');
+                broadcastCityEvent(userId, char.id, 'WEB_PUNISH', punishLog);
+                outcome.moneyDelta += penaltyMoney;
+                outcome.stateEffects.stress = (outcome.stateEffects.stress || 0) + 8;
+                outcome.stateEffects.mood = (outcome.stateEffects.mood || 0) - 5;
+            }
+        }
+
+        return outcome;
+    }
+
     const actionService = createActionService({
         normalizeSurvivalState,
         districtsFallbackForExhaustion,
@@ -3099,7 +3439,8 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         buildHackerIntelAppendix,
         triggerHackerIntelReply,
         getMedicalStayMinutes,
-        getCityNowMs: (config) => getCityDate(config).getTime()
+        getCityNowMs: (config) => getCityDate(config).getTime(),
+        maybeRunCityWebSearchActivity
     });
 
     const mayorRuntimeService = createMayorRuntimeService({
@@ -3316,38 +3657,8 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
                 }
             }
 
-            // 4. Save only notable city events to long-term memory.
-            const shouldPersistSpecialCityMemory = () => {
-                if (!eventSummary || String(eventSummary).trim() === '') return false;
-                if (['STARVE', 'BROKE', 'GAMBLING_WIN', 'GAMBLING_LOSE', 'SOCIAL'].includes(eventType)) return true;
-
-                const text = [
-                    eventSummary,
-                    richNarrations?.chat || '',
-                    richNarrations?.diary || '',
-                    richNarrations?.moment || ''
-                ].join(' ');
-
-                return /(饿晕|崩溃|破产|输光|赢了|中奖|住院|急诊|吵架|嫉妒|焦虑|监视|跟踪|告白|拥抱|接吻|约会|礼物|转账|红包|秘密|暗号|黑客|偷窥|偷拍|冲突|事故|任务|悬赏|灾难|天气|暴雨|停电|受伤|工厂|餐厅|便利店)/.test(text);
-            };
-
-            if (shouldPersistSpecialCityMemory()) {
-                try {
-                    const memory = getMemory(userId);
-                    memory.saveExtractedMemory(char.id, {
-                        event: eventSummary,
-                        time: new Date().toLocaleString('zh-CN'),
-                        location: char.location || '',
-                        people: '',
-                        relationships: '',
-                        items: '',
-                        importance: ['STARVE', 'BROKE', 'GAMBLING_WIN', 'GAMBLING_LOSE', 'SOCIAL'].includes(eventType) ? 7 : 6
-                    });
-                    console.log(`[City->Chat] ${char.name} 特殊事件入记忆 ${eventType}`);
-                } catch (e) {
-                    console.error(`[City->Chat] 记忆失败: ${e.message}`);
-                }
-            }
+            // 4. City logs stay in city_logs first. Long-term memory is produced
+            // by the batched memory sweep, same as private/group chat overflow.
         } catch (e) {
             console.error(`[City->Chat] 桥接异常: ${e.message}`);
         }

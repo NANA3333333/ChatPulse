@@ -1995,13 +1995,16 @@ app.get('/api/characters/:id/context-stats', authMiddleware, async (req, res) =>
         breakdown.message_envelope = estimatedMessageEnvelopeTokens;
 
         let unsummarizedCount = 0;
+        let privateUnsummarizedCount = 0;
+        let groupUnsummarizedCount = 0;
+        let cityUnsummarizedCount = 0;
         if (!character.sweep_initialized && typeof db.initializeSweepBaseline === 'function' && typeof db.getGroups === 'function') {
             const groups = db.getGroups().filter(g => g.members.some(m => m.member_id === character.id));
             const groupWindows = groups.map(g => ({ groupId: g.id, windowLimit: g.inject_limit ?? 5 }));
             db.initializeSweepBaseline(charId, contextLimit, groupWindows);
         } else if (character.sweep_initialized) {
             const privateWindow = character.context_msg_limit || 60;
-            unsummarizedCount = typeof db.countOverflowMessages === 'function'
+            privateUnsummarizedCount = typeof db.countOverflowMessages === 'function'
                 ? db.countOverflowMessages(charId, privateWindow)
                 : 0;
 
@@ -2009,9 +2012,13 @@ app.get('/api/characters/:id/context-stats', authMiddleware, async (req, res) =>
                 const groups = db.getGroups().filter(g => g.members.some(m => m.member_id === character.id));
                 for (const g of groups) {
                     const groupWindow = g.inject_limit ?? 5;
-                    unsummarizedCount += db.countOverflowGroupMessages(g.id, groupWindow);
+                    groupUnsummarizedCount += db.countOverflowGroupMessages(g.id, groupWindow);
                 }
             }
+            if (db.city && typeof db.city.countOverflowCityLogs === 'function') {
+                cityUnsummarizedCount = db.city.countOverflowCityLogs(charId, 0);
+            }
+            unsummarizedCount = privateUnsummarizedCount + groupUnsummarizedCount + cityUnsummarizedCount;
         }
 
         // Calculate total tokens
@@ -2291,6 +2298,9 @@ app.get('/api/characters/:id/context-stats', authMiddleware, async (req, res) =>
                 total: finalPromptEstimate || total,
                 total_breakdown_only: total,
                 w_unsummarized_count: unsummarizedCount,
+                w_private_unsummarized_count: privateUnsummarizedCount,
+                w_group_unsummarized_count: groupUnsummarizedCount,
+                w_city_unsummarized_count: cityUnsummarizedCount,
                 w_sweep_limit: character.sweep_limit || 30,
                 w_last_error: character.sweep_last_error || '',
                 w_last_run_at: character.sweep_last_run_at || 0,

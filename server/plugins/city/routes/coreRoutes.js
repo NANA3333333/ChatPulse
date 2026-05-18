@@ -9,7 +9,9 @@ function registerCoreCityRoutes(app, deps) {
         runTimeSkipBackfill,
         triggerAdminGrantChat,
         getWsClients,
-        getEngine
+        getEngine,
+        isCollapsedCityLog,
+        regenerateActionNarrations
     } = deps;
 
     app.get('/api/city/logs', authMiddleware, (req, res) => {
@@ -21,6 +23,61 @@ function registerCoreCityRoutes(app, deps) {
                 ? 'all'
                 : (Number.isFinite(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 10000)) : 300);
             res.json({ success: true, logs: req.db.city.getCityLogs(limit) });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/city/logs/:id/reroll', authMiddleware, async (req, res) => {
+        try {
+            ensureCityDb(req.db);
+            const logId = Number.parseInt(req.params.id, 10);
+            if (!Number.isFinite(logId) || logId <= 0) return res.status(400).json({ error: '无效的活动记录 ID' });
+            if (typeof regenerateActionNarrations !== 'function') return res.status(500).json({ error: '当前版本不支持重 roll 活动文案' });
+            const rawDb = typeof req.db.getRawDb === 'function' ? req.db.getRawDb() : req.db;
+            const log = rawDb.prepare('SELECT * FROM city_logs WHERE id = ?').get(logId);
+            if (!log) return res.status(404).json({ error: '活动记录不存在' });
+            if (String(log.character_id || '').toLowerCase() === 'system') return res.status(400).json({ error: '系统记录不能重 roll' });
+
+            const originalContent = String(log.content || '').trim();
+            const canReroll = (typeof isCollapsedCityLog === 'function' && isCollapsedCityLog(originalContent))
+                || Boolean(req.body?.force);
+            if (!canReroll) return res.status(400).json({ error: '只有折叠/失败的商业街活动需要重 roll' });
+
+            const char = req.db.getCharacter(log.character_id);
+            if (!char) return res.status(404).json({ error: '角色不存在' });
+            const district = req.db.city.getDistrict(log.location)
+                || req.db.city.getEnabledDistricts().find((item) => String(item.id || '').toLowerCase() === String(log.location || '').toLowerCase())
+                || req.db.city.getDistrict(char.location)
+                || null;
+            if (!district) return res.status(404).json({ error: '无法定位这条活动的地点' });
+
+            const narrations = await regenerateActionNarrations(char, district, req.db, {
+                log: originalContent,
+                chat: '',
+                moment: '',
+                diary: ''
+            }, {
+                currentCals: char.calories ?? 2000
+            });
+            const nextContent = String(narrations?.log || '').trim();
+            if (!nextContent || (typeof isCollapsedCityLog === 'function' && isCollapsedCityLog(nextContent))) {
+                return res.status(500).json({ error: '重 roll 后仍然没有得到可展示文案，请稍后再试' });
+            }
+
+            rawDb.prepare('UPDATE city_logs SET content = ? WHERE id = ?').run(nextContent, logId);
+            const updated = rawDb.prepare(`
+                SELECT l.*, c.name as char_name, c.avatar as char_avatar
+                FROM city_logs l
+                LEFT JOIN characters c ON l.character_id = c.id
+                WHERE l.id = ?
+            `).get(logId);
+
+            const wsClients = getWsClients?.(req.user.id) || [];
+            wsClients.forEach((client) => {
+                if (client.readyState === 1) {
+                    client.send(JSON.stringify({ type: 'city_update', charId: char.id, action: 'REROLL', message: nextContent }));
+                }
+            });
+            res.json({ success: true, log: updated });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 

@@ -18,6 +18,7 @@ import {
     Store,
     SunMedium,
     Wind,
+    RotateCcw,
 } from 'lucide-react';
 import CityManager from './CityManager';
 import { resolveAvatarUrl } from '../../utils/avatar';
@@ -264,6 +265,7 @@ export default function CityLog({ apiUrl, userProfile }) {
     const [collapsedDates, setCollapsedDates] = useState({});
     const [expandedHiddenLogs, setExpandedHiddenLogs] = useState({});
     const [retryingQuestReviewId, setRetryingQuestReviewId] = useState(null);
+    const [rerollingLogId, setRerollingLogId] = useState(null);
     const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
     const refreshTimerRef = React.useRef(null);
     const token = localStorage.getItem('token');
@@ -320,6 +322,31 @@ export default function CityLog({ apiUrl, userProfile }) {
             window.alert(error.message || '市长评分重试失败');
         } finally {
             setRetryingQuestReviewId(null);
+        }
+    };
+
+    const rerollCityLog = async (logId) => {
+        if (!logId || rerollingLogId) return;
+        setRerollingLogId(logId);
+        try {
+            const headers = {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            };
+            const response = await fetch(`${apiUrl}/city/logs/${logId}/reroll`, {
+                method: 'POST',
+                headers,
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || '商业街活动重 roll 失败');
+            }
+            await fetchData();
+            window.dispatchEvent(new Event('city_update'));
+        } catch (error) {
+            window.alert(error.message || '商业街活动重 roll 失败');
+        } finally {
+            setRerollingLogId(null);
         }
     };
 
@@ -684,6 +711,29 @@ export default function CityLog({ apiUrl, userProfile }) {
                                                                                         原文：{log.truncated_original_content || log.content}
                                                                                     </div>
                                                                                 )}
+                                                                                <div style={{ marginTop: '6px', display: 'flex', justifyContent: 'flex-end' }}>
+                                                                                    <button
+                                                                                        type="button"
+                                                                                        onClick={() => rerollCityLog(log.id)}
+                                                                                        disabled={rerollingLogId === log.id}
+                                                                                        style={{
+                                                                                            border: '1px solid rgba(245, 158, 11, 0.35)',
+                                                                                            borderRadius: '999px',
+                                                                                            padding: '4px 8px',
+                                                                                            background: rerollingLogId === log.id ? '#fde68a' : '#fff7ed',
+                                                                                            color: '#b45309',
+                                                                                            cursor: rerollingLogId === log.id ? 'not-allowed' : 'pointer',
+                                                                                            fontSize: '10px',
+                                                                                            fontWeight: 700,
+                                                                                            display: 'inline-flex',
+                                                                                            alignItems: 'center',
+                                                                                            gap: '4px',
+                                                                                        }}
+                                                                                    >
+                                                                                        <RotateCcw size={10} />
+                                                                                        {rerollingLogId === log.id ? '重 roll 中...' : '重 roll'}
+                                                                                    </button>
+                                                                                </div>
                                                                             </div>
                                                                         ) : (
                                                                             <>

@@ -28,9 +28,18 @@ module.exports = function initCityDb(db) {
             delta_calories INTEGER DEFAULT 0,
             delta_money REAL DEFAULT 0,
             location TEXT DEFAULT '',
-            timestamp INTEGER NOT NULL
+            timestamp INTEGER NOT NULL,
+            is_summarized INTEGER DEFAULT 0
         );
     `);
+    try {
+        const cols = db.prepare("PRAGMA table_info(city_logs)").all();
+        const hasSummarized = cols.some(col => col.name === 'is_summarized');
+        if (!hasSummarized) {
+            db.exec("ALTER TABLE city_logs ADD COLUMN is_summarized INTEGER DEFAULT 0;");
+            db.prepare('UPDATE city_logs SET is_summarized = 1').run();
+        }
+    } catch (e) { }
     try { db.exec("ALTER TABLE city_quests ADD COLUMN target_district TEXT DEFAULT 'street';"); } catch (e) { }
     try { db.exec("ALTER TABLE city_quests ADD COLUMN source_announcement_id INTEGER DEFAULT 0;"); } catch (e) { }
     try { db.exec("ALTER TABLE city_quests ADD COLUMN quest_type TEXT DEFAULT 'errand';"); } catch (e) { }
@@ -661,6 +670,67 @@ module.exports = function initCityDb(db) {
             const review = reviewByLogId.get(Number(row.id || 0)) || null;
             return review ? { ...decorated, quest_review: review } : decorated;
         });
+    }
+
+    function getOverflowCityLogs(characterId, windowLimit = 0, limit = 50) {
+        if (windowLimit <= 0) {
+            return db.prepare(`
+                SELECT *
+                FROM city_logs
+                WHERE character_id = ?
+                  AND COALESCE(is_summarized, 0) = 0
+                ORDER BY timestamp ASC
+                LIMIT ?
+            `).all(characterId, limit);
+        }
+        return db.prepare(`
+            SELECT *
+            FROM city_logs
+            WHERE character_id = ?
+              AND COALESCE(is_summarized, 0) = 0
+              AND id NOT IN (
+                SELECT id FROM city_logs
+                WHERE character_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+              )
+            ORDER BY timestamp ASC
+            LIMIT ?
+        `).all(characterId, characterId, windowLimit, limit);
+    }
+
+    function countOverflowCityLogs(characterId, windowLimit = 0) {
+        if (windowLimit <= 0) {
+            const row = db.prepare(`
+                SELECT COUNT(*) as count
+                FROM city_logs
+                WHERE character_id = ?
+                  AND COALESCE(is_summarized, 0) = 0
+            `).get(characterId);
+            return row ? row.count : 0;
+        }
+        const row = db.prepare(`
+            SELECT COUNT(*) as count
+            FROM city_logs
+            WHERE character_id = ?
+              AND COALESCE(is_summarized, 0) = 0
+              AND id NOT IN (
+                SELECT id FROM city_logs
+                WHERE character_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+              )
+        `).get(characterId, characterId, windowLimit);
+        return row ? row.count : 0;
+    }
+
+    function markCityLogsSummarized(logIds) {
+        if (!logIds || logIds.length === 0) return 0;
+        const ids = Array.from(new Set(logIds.map(id => Number(id || 0)).filter(id => id > 0)));
+        if (ids.length === 0) return 0;
+        const placeholders = ids.map(() => '?').join(', ');
+        const info = db.prepare(`UPDATE city_logs SET is_summarized = 1 WHERE id IN (${placeholders})`).run(...ids);
+        return info.changes;
     }
 
     function addCityAnnouncement(sourceType = 'system', title = '', content = '', location = 'street') {
@@ -1308,7 +1378,7 @@ module.exports = function initCityDb(db) {
 
     // ═══════════════════════════════════════════════════════════════════════
     return {
-        logAction, addCityAnnouncement, deleteCityAnnouncement, getCityAnnouncements, getCityLogs, getCharacterRecentLogs, getOtherCharacterLocationTodayLogs, clearAllLogs, wipeAllData,
+        logAction, addCityAnnouncement, deleteCityAnnouncement, getCityAnnouncements, getCityLogs, getOverflowCityLogs, countOverflowCityLogs, markCityLogsSummarized, getCharacterRecentLogs, getOtherCharacterLocationTodayLogs, clearAllLogs, wipeAllData,
         clearCharacterCityData,
         claimActionSlot, clearExpiredActionGuards, claimSocialEncounter, clearExpiredSocialGuards,
         getDistricts, getDistrict, getEnabledDistricts, upsertDistrict, deleteDistrict,

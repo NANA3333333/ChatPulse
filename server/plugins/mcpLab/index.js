@@ -1,7 +1,6 @@
 const crypto = require('crypto');
 const initMcpLabDb = require('./db');
 
-const tasksByUser = new Map();
 const WEB_SEARCH_PROVIDERS = [
     {
         id: 'serper',
@@ -33,14 +32,12 @@ function nowIso() {
     return new Date().toISOString();
 }
 
-function getUserTasks(userId) {
-    const key = String(userId || 'default');
-    if (!tasksByUser.has(key)) tasksByUser.set(key, []);
-    return tasksByUser.get(key);
-}
-
 function safeText(value, maxLength = 2000) {
     return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
+function safeSnippet(value) {
+    return safeText(value, 4000);
 }
 
 function safeParseJson(value, fallback = {}) {
@@ -121,8 +118,9 @@ function flattenDuckDuckGoTopics(items, output = []) {
         if (item?.Text || item?.FirstURL) {
             output.push({
                 title: safeText(item.Text || item.FirstURL, 140),
-                snippet: safeText(item.Text || '', 320),
-                url: String(item.FirstURL || '').trim()
+                snippet: safeSnippet(item.Text || ''),
+                url: String(item.FirstURL || '').trim(),
+                raw: item
             });
         }
     }
@@ -134,37 +132,51 @@ async function runWebSearch(query, options = {}) {
     if (!q) throw new Error('Query is required.');
     const provider = String(options.provider || '').trim();
     const apiKey = String(options.apiKey || options.serperKey || '').trim();
+    let result = null;
     if (provider === 'serper' && apiKey) {
-        return runSerperSearch(q, apiKey);
+        result = await runSerperSearch(q, apiKey);
+    } else if (provider === 'tavily' && apiKey) {
+        result = await runTavilySearch(q, apiKey);
+    } else if (provider === 'brave' && apiKey) {
+        result = await runBraveSearch(q, apiKey);
+    } else if (provider === 'bing' && apiKey) {
+        result = await runBingSearch(q, apiKey);
+    } else {
+        const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&no_redirect=1&no_html=1`;
+        const response = await fetchWithTimeout(url, { timeoutMs: 12000 });
+        if (!response.ok) throw new Error(`Search failed with HTTP ${response.status}`);
+        const data = await response.json();
+        const results = [];
+        if (data.AbstractText || data.AbstractURL) {
+            results.push({
+                title: safeText(data.Heading || q, 140),
+                snippet: safeSnippet(data.AbstractText || ''),
+                url: String(data.AbstractURL || '').trim(),
+                raw: {
+                    Heading: data.Heading,
+                    AbstractText: data.AbstractText,
+                    AbstractURL: data.AbstractURL,
+                    AbstractSource: data.AbstractSource,
+                    Abstract: data.Abstract
+                }
+            });
+        }
+        flattenDuckDuckGoTopics(data.RelatedTopics, results);
+        result = {
+            query: q,
+            source: 'duckduckgo_instant_answer',
+            results: results.filter(item => item.snippet || item.url).slice(0, 3),
+            fetched_at: nowIso(),
+            raw_response: data
+        };
     }
-    if (provider === 'tavily' && apiKey) {
-        return runTavilySearch(q, apiKey);
-    }
-    if (provider === 'brave' && apiKey) {
-        return runBraveSearch(q, apiKey);
-    }
-    if (provider === 'bing' && apiKey) {
-        return runBingSearch(q, apiKey);
-    }
-    const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&no_redirect=1&no_html=1`;
-    const response = await fetchWithTimeout(url, { timeoutMs: 12000 });
-    if (!response.ok) throw new Error(`Search failed with HTTP ${response.status}`);
-    const data = await response.json();
-    const results = [];
-    if (data.AbstractText || data.AbstractURL) {
-        results.push({
-            title: safeText(data.Heading || q, 140),
-            snippet: safeText(data.AbstractText || '', 500),
-            url: String(data.AbstractURL || '').trim()
+    if (options.fetchPages) {
+        return enrichSearchResultPages(result, {
+            limit: options.fetchPageLimit,
+            textLength: options.fetchPageTextLength
         });
     }
-    flattenDuckDuckGoTopics(data.RelatedTopics, results);
-    return {
-        query: q,
-        source: 'duckduckgo_instant_answer',
-        results: results.filter(item => item.snippet || item.url).slice(0, 8),
-        fetched_at: nowIso()
-    };
+    return result;
 }
 
 function normalizeSearchResults(query, source, results, extra = {}) {
@@ -174,11 +186,12 @@ function normalizeSearchResults(query, source, results, extra = {}) {
         results: (Array.isArray(results) ? results : [])
             .map(item => ({
                 title: safeText(item.title || item.name || item.url || 'Result', 180),
-                snippet: safeText(item.snippet || item.description || item.content || '', 600),
-                url: String(item.url || item.link || '').trim()
+                snippet: safeSnippet(item.snippet || item.description || item.content || ''),
+                url: String(item.url || item.link || '').trim(),
+                raw: item.raw || item
             }))
             .filter(item => item.snippet || item.url)
-            .slice(0, 10),
+            .slice(0, 3),
         fetched_at: nowIso(),
         ...extra
     };
@@ -198,7 +211,7 @@ async function runSerperSearch(query, apiKey) {
         },
         body: JSON.stringify({
             q,
-            num: 8,
+            num: 3,
             hl: 'zh-cn',
             gl: 'cn'
         })
@@ -219,33 +232,37 @@ async function runSerperSearch(query, apiKey) {
     if (answerBox) {
         results.push({
             title: safeText(answerBox.title || answerBox.answer || 'Answer Box', 140),
-            snippet: safeText(answerBox.answer || answerBox.snippet || answerBox.snippetHighlighted?.join(' ') || '', 500),
-            url: String(answerBox.link || '').trim()
+            snippet: safeSnippet(answerBox.answer || answerBox.snippet || answerBox.snippetHighlighted?.join(' ') || ''),
+            url: String(answerBox.link || '').trim(),
+            raw: answerBox
         });
     }
     const knowledgeGraph = data?.knowledgeGraph;
     if (knowledgeGraph?.title || knowledgeGraph?.description) {
         results.push({
             title: safeText(knowledgeGraph.title || q, 140),
-            snippet: safeText(knowledgeGraph.description || knowledgeGraph.descriptionSource || '', 500),
-            url: String(knowledgeGraph.website || '').trim()
+            snippet: safeSnippet(knowledgeGraph.description || knowledgeGraph.descriptionSource || ''),
+            url: String(knowledgeGraph.website || '').trim(),
+            raw: knowledgeGraph
         });
     }
     for (const item of Array.isArray(data?.organic) ? data.organic : []) {
         results.push({
             title: safeText(item.title || item.link || 'Result', 160),
-            snippet: safeText(item.snippet || '', 500),
-            url: String(item.link || '').trim()
+            snippet: safeSnippet(item.snippet || ''),
+            url: String(item.link || '').trim(),
+            raw: item
         });
     }
     for (const item of Array.isArray(data?.news) ? data.news : []) {
         results.push({
             title: safeText(item.title || item.link || 'News', 160),
-            snippet: safeText(item.snippet || item.date || '', 500),
-            url: String(item.link || '').trim()
+            snippet: safeSnippet(item.snippet || item.date || ''),
+            url: String(item.link || '').trim(),
+            raw: item
         });
     }
-    return normalizeSearchResults(q, 'serper_google_search', results);
+    return normalizeSearchResults(q, 'serper_google_search', results, { raw_response: data });
 }
 
 async function runTavilySearch(query, apiKey) {
@@ -260,7 +277,7 @@ async function runTavilySearch(query, apiKey) {
             api_key: apiKey,
             query: q,
             search_depth: 'basic',
-            max_results: 8,
+            max_results: 3,
             include_answer: true
         })
     });
@@ -268,16 +285,16 @@ async function runTavilySearch(query, apiKey) {
     const data = text ? JSON.parse(text) : {};
     if (!response.ok) throw new Error(data?.detail || data?.error || text || `Tavily search failed with HTTP ${response.status}`);
     const results = [];
-    if (data.answer) results.push({ title: 'Tavily Answer', snippet: data.answer, url: '' });
+    if (data.answer) results.push({ title: 'Tavily Answer', snippet: data.answer, url: '', raw: { answer: data.answer } });
     for (const item of Array.isArray(data.results) ? data.results : []) {
-        results.push({ title: item.title, snippet: item.content || item.snippet, url: item.url });
+        results.push({ title: item.title, snippet: item.content || item.snippet, url: item.url, raw: item });
     }
-    return normalizeSearchResults(q, 'tavily_search', results);
+    return normalizeSearchResults(q, 'tavily_search', results, { raw_response: data });
 }
 
 async function runBraveSearch(query, apiKey) {
     const q = safeText(query, 300);
-    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(q)}&count=8&country=CN&search_lang=zh-hans`;
+    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(q)}&count=3&country=CN&search_lang=zh-hans`;
     const response = await fetchWithTimeout(url, {
         timeoutMs: 12000,
         headers: {
@@ -291,14 +308,15 @@ async function runBraveSearch(query, apiKey) {
     const results = (data?.web?.results || []).map(item => ({
         title: item.title,
         snippet: item.description || item.extra_snippets?.join(' '),
-        url: item.url
+        url: item.url,
+        raw: item
     }));
-    return normalizeSearchResults(q, 'brave_search', results);
+    return normalizeSearchResults(q, 'brave_search', results, { raw_response: data });
 }
 
 async function runBingSearch(query, apiKey) {
     const q = safeText(query, 300);
-    const url = `https://api.bing.microsoft.com/v7.0/search?q=${encodeURIComponent(q)}&count=8&mkt=zh-CN`;
+    const url = `https://api.bing.microsoft.com/v7.0/search?q=${encodeURIComponent(q)}&count=3&mkt=zh-CN`;
     const response = await fetchWithTimeout(url, {
         timeoutMs: 12000,
         headers: {
@@ -312,9 +330,10 @@ async function runBingSearch(query, apiKey) {
     const results = (data?.webPages?.value || []).map(item => ({
         title: item.name,
         snippet: item.snippet,
-        url: item.url
+        url: item.url,
+        raw: item
     }));
-    return normalizeSearchResults(q, 'bing_web_search', results);
+    return normalizeSearchResults(q, 'bing_web_search', results, { raw_response: data });
 }
 
 function getWebSearchConfig(db) {
@@ -380,17 +399,57 @@ async function runFetchUrl(rawUrl) {
     };
 }
 
+async function enrichSearchResultPages(searchResult, options = {}) {
+    const limit = Math.max(0, Math.min(5, Number(options.limit || 3) || 3));
+    if (!searchResult || limit <= 0 || !Array.isArray(searchResult.results)) return searchResult;
+    const textLength = Math.max(1000, Math.min(20000, Number(options.textLength || 8000) || 8000));
+    const next = {
+        ...searchResult,
+        page_fetch: {
+            enabled: true,
+            limit,
+            fetched_at: nowIso()
+        },
+        results: searchResult.results.map(item => ({ ...item }))
+    };
+    const targets = next.results
+        .map((item, index) => ({ item, index, url: String(item.url || '').trim() }))
+        .filter(entry => /^https?:\/\//i.test(entry.url))
+        .slice(0, limit);
+    const settled = await Promise.allSettled(targets.map(entry => runFetchUrl(entry.url)));
+    settled.forEach((outcome, index) => {
+        const target = targets[index];
+        if (!target) return;
+        if (outcome.status === 'fulfilled') {
+            const page = outcome.value || {};
+            target.item.page_text = safeText(page.text || '', textLength);
+            target.item.page = {
+                url: page.url || target.url,
+                status: page.status || 0,
+                content_type: page.content_type || '',
+                fetched_at: page.fetched_at || nowIso()
+            };
+        } else {
+            target.item.page_error = String(outcome.reason?.message || outcome.reason || 'fetch failed').slice(0, 300);
+        }
+    });
+    return next;
+}
+
 async function runTask(task, context = {}) {
     const input = task.input || {};
     task.status = 'running';
     task.started_at = nowIso();
     task.error = '';
+    if (context.db) ensureMcpLabDb(context.db).saveTask(task);
     try {
-        if (task.kind === 'web_search') {
+        if (task.kind === 'web_search' || task.kind === 'private_web_search' || task.kind === 'city_web_search') {
             const resolved = resolveSearchProvider(context.db, input.provider);
             task.output = await runWebSearch(input.query || task.title, {
                 provider: resolved.id,
-                apiKey: resolved.key
+                apiKey: resolved.key,
+                fetchPages: input.fetch_pages !== false,
+                fetchPageLimit: input.fetch_page_limit || 3
             });
         } else if (task.kind === 'fetch_url') {
             task.output = await runFetchUrl(input.url);
@@ -404,6 +463,7 @@ async function runTask(task, context = {}) {
         task.error = e.message;
         task.finished_at = nowIso();
     }
+    if (context.db) ensureMcpLabDb(context.db).saveTask(task);
     return task;
 }
 
@@ -483,7 +543,7 @@ function inspectContext(db, characterId) {
     };
 }
 
-module.exports = function initMcpLab(app, context) {
+function initMcpLab(app, context) {
     const { authMiddleware } = context;
 
     app.get('/api/mcp-lab/status', authMiddleware, (req, res) => {
@@ -525,16 +585,46 @@ module.exports = function initMcpLab(app, context) {
     });
 
     app.post('/api/mcp-lab/search', authMiddleware, async (req, res) => {
+        let task = null;
+        let labDb = null;
         try {
             const resolved = resolveSearchProvider(req.db, req.body?.provider);
+            labDb = ensureMcpLabDb(req.db);
+            const query = String(req.body?.query || '').trim();
+            task = labDb.saveTask({
+                id: makeId(),
+                owner_id: req.user?.id || '',
+                title: safeText(query || 'Web search', 160),
+                kind: 'web_search',
+                input: { query, provider: req.body?.provider || resolved.id },
+                status: 'running',
+                output: null,
+                error: '',
+                created_at: nowIso(),
+                started_at: nowIso(),
+                finished_at: ''
+            });
+            task.output = await runWebSearch(query, {
+                provider: resolved.id,
+                apiKey: resolved.key,
+                fetchPages: req.body?.fetch_pages !== false,
+                fetchPageLimit: req.body?.fetch_page_limit || 3
+            });
+            task.status = 'done';
+            task.finished_at = nowIso();
+            labDb.saveTask(task);
             res.json({
                 success: true,
-                result: await runWebSearch(req.body?.query, {
-                    provider: resolved.id,
-                    apiKey: resolved.key
-                })
+                result: task.output,
+                task
             });
         } catch (e) {
+            if (task && labDb) {
+                task.status = 'error';
+                task.error = e.message;
+                task.finished_at = nowIso();
+                labDb.saveTask(task);
+            }
             res.status(500).json({ success: false, error: e.message });
         }
     });
@@ -587,6 +677,7 @@ module.exports = function initMcpLab(app, context) {
                 preferred_provider: config.provider,
                 active_provider: resolved.id,
                 active_provider_label: resolved.label,
+                saved_key_count: Object.values(config.keys || {}).filter(value => String(value || '').trim()).length,
                 providers: config.providers.map(({ id, label, env, docs, has_key, masked, source }) => ({ id, label, env, docs, has_key, masked, source }))
             });
         } catch (e) {
@@ -626,6 +717,7 @@ module.exports = function initMcpLab(app, context) {
                 preferred_provider: config.provider,
                 active_provider: resolved.id,
                 active_provider_label: resolved.label,
+                saved_key_count: Object.values(config.keys || {}).filter(value => String(value || '').trim()).length,
                 providers: config.providers.map(({ id, label, env, docs, has_key, masked, source }) => ({ id, label, env, docs, has_key, masked, source }))
             });
         } catch (e) {
@@ -634,15 +726,46 @@ module.exports = function initMcpLab(app, context) {
     });
 
     app.post('/api/mcp-lab/fetch', authMiddleware, async (req, res) => {
+        let task = null;
+        let labDb = null;
         try {
-            res.json({ success: true, result: await runFetchUrl(req.body?.url) });
+            labDb = ensureMcpLabDb(req.db);
+            const url = String(req.body?.url || '').trim();
+            task = labDb.saveTask({
+                id: makeId(),
+                owner_id: req.user?.id || '',
+                title: safeText(url || 'Fetch URL', 160),
+                kind: 'fetch_url',
+                input: { url },
+                status: 'running',
+                output: null,
+                error: '',
+                created_at: nowIso(),
+                started_at: nowIso(),
+                finished_at: ''
+            });
+            task.output = await runFetchUrl(url);
+            task.status = 'done';
+            task.finished_at = nowIso();
+            labDb.saveTask(task);
+            res.json({ success: true, result: task.output, task });
         } catch (e) {
+            if (task && labDb) {
+                task.status = 'error';
+                task.error = e.message;
+                task.finished_at = nowIso();
+                labDb.saveTask(task);
+            }
             res.status(500).json({ success: false, error: e.message });
         }
     });
 
     app.get('/api/mcp-lab/tasks', authMiddleware, (req, res) => {
-        res.json({ success: true, tasks: getUserTasks(req.user?.id) });
+        try {
+            res.json({ success: true, tasks: ensureMcpLabDb(req.db).listTasks(req.user?.id || '') });
+        } catch (e) {
+            res.status(500).json({ success: false, error: e.message });
+        }
     });
 
     app.post('/api/mcp-lab/tasks', authMiddleware, async (req, res) => {
@@ -660,11 +783,11 @@ module.exports = function initMcpLab(app, context) {
                 started_at: '',
                 finished_at: ''
             };
-            const tasks = getUserTasks(req.user?.id);
-            tasks.unshift(task);
-            if (tasks.length > 80) tasks.splice(80);
+            task.owner_id = req.user?.id || '';
+            const labDb = ensureMcpLabDb(req.db);
+            labDb.saveTask(task);
             if (req.body?.run_now !== false) await runTask(task, { db: req.db });
-            res.json({ success: true, task });
+            res.json({ success: true, task: labDb.getTask(task.id, req.user?.id || '') || task });
         } catch (e) {
             res.status(500).json({ success: false, error: e.message });
         }
@@ -672,7 +795,8 @@ module.exports = function initMcpLab(app, context) {
 
     app.post('/api/mcp-lab/tasks/:id/run', authMiddleware, async (req, res) => {
         try {
-            const task = getUserTasks(req.user?.id).find(item => item.id === req.params.id);
+            const labDb = ensureMcpLabDb(req.db);
+            const task = labDb.getTask(req.params.id, req.user?.id || '');
             if (!task) return res.status(404).json({ success: false, error: 'Task not found.' });
             res.json({ success: true, task: await runTask(task, { db: req.db }) });
         } catch (e) {
@@ -681,10 +805,11 @@ module.exports = function initMcpLab(app, context) {
     });
 
     app.delete('/api/mcp-lab/tasks/:id', authMiddleware, (req, res) => {
-        const tasks = getUserTasks(req.user?.id);
-        const next = tasks.filter(item => item.id !== req.params.id);
-        tasks.splice(0, tasks.length, ...next);
-        res.json({ success: true });
+        try {
+            res.json({ success: true, deleted: ensureMcpLabDb(req.db).deleteTask(req.params.id, req.user?.id || '') });
+        } catch (e) {
+            res.status(500).json({ success: false, error: e.message });
+        }
     });
 
     app.get('/api/mcp-lab/knowledge', authMiddleware, (req, res) => {
@@ -739,4 +864,14 @@ module.exports = function initMcpLab(app, context) {
     });
 
     console.log('[MCP Lab DLC] Experimental web tools registered.');
-};
+}
+
+module.exports = initMcpLab;
+module.exports.WEB_SEARCH_PROVIDERS = WEB_SEARCH_PROVIDERS;
+module.exports.ensureMcpLabDb = ensureMcpLabDb;
+module.exports.getWebSearchConfig = getWebSearchConfig;
+module.exports.resolveSearchProvider = resolveSearchProvider;
+module.exports.runWebSearch = runWebSearch;
+module.exports.runFetchUrl = runFetchUrl;
+module.exports.safeText = safeText;
+module.exports.makeId = makeId;
