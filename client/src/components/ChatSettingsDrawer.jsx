@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect } from 'react';
-import { X, Trash2, Settings, RefreshCw } from 'lucide-react';
+import { X, Trash2, Settings, RefreshCw, Download, Upload } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 import { resolveAvatarUrl } from '../utils/avatar';
 import { deriveEmotion, derivePhysicalState } from '../utils/emotion';
@@ -9,7 +9,7 @@ function parseJsonSafely(value, fallback = null) {
     if (typeof value !== 'string') return value;
     try {
         return JSON.parse(value);
-    } catch (_) {
+    } catch {
         return fallback;
     }
 }
@@ -42,7 +42,7 @@ function formatLlmDebugPayload(payload) {
     }
     try {
         return JSON.stringify(payload, null, 2);
-    } catch (_) {
+    } catch {
         return String(payload);
     }
 }
@@ -75,8 +75,14 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
     const [isSavingFreq, setIsSavingFreq] = useState(false);
     const [isRetryingSweep, setIsRetryingSweep] = useState(false);
     const [isResettingPhysicalState, setIsResettingPhysicalState] = useState(false);
+    const [isExportingArchive, setIsExportingArchive] = useState(false);
+    const [isImportingArchive, setIsImportingArchive] = useState(false);
+    const archiveInputRef = React.useRef(null);
     const authHeaders = {
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`
+    };
+    const authOnlyHeaders = {
         'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`
     };
     const currentEmotion = contact ? deriveEmotion(contact) : null;
@@ -366,6 +372,80 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
 
     if (!contact) return null;
 
+    const handleExportCharacterArchive = async () => {
+        if (!contact?.id) return;
+        setIsExportingArchive(true);
+        try {
+            const res = await fetch(`${apiUrl}/data/${contact.id}/export`, {
+                headers: authOnlyHeaders
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                alert((lang === 'en' ? 'Export failed: ' : '导出失败：') + (data.error || res.statusText));
+                return;
+            }
+            const blob = await res.blob();
+            const disposition = res.headers.get('Content-Disposition') || '';
+            const match = disposition.match(/filename="?([^";]+)"?/i);
+            const fallbackName = `${contact.name || contact.id}_${contact.id}_character_export.json`;
+            const filename = match?.[1] || fallbackName;
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (e) {
+            console.error('Failed to export character archive:', e);
+            alert(lang === 'en' ? 'Failed to export character archive.' : '导出角色包失败。');
+        } finally {
+            setIsExportingArchive(false);
+        }
+    };
+
+    const handleImportCharacterArchive = async (event) => {
+        if (!contact?.id) return;
+        const file = event.target.files?.[0];
+        event.target.value = '';
+        if (!file) return;
+        if (!window.confirm(lang === 'en'
+            ? `Import this archive into ${contact.name}?\n\nThis replaces this character's chat history, memories, moments, and diaries, then rebuilds the Qdrant memory index.`
+            : `确定把这个角色包导入到 ${contact.name} 吗？\n\n这会替换当前角色的聊天记录、记忆、朋友圈和日记，并重建 Qdrant 记忆索引。`)) return;
+
+        setIsImportingArchive(true);
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('mode', 'replace');
+            const res = await fetch(`${apiUrl}/data/${contact.id}/import?mode=replace`, {
+                method: 'POST',
+                headers: authOnlyHeaders,
+                body: formData
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.success) {
+                alert((lang === 'en' ? 'Import failed: ' : '导入失败：') + (data.error || 'Unknown error'));
+                return;
+            }
+            const counts = data.imported || {};
+            const indexNote = data.rebuiltMemoryIndex
+                ? ''
+                : (lang === 'en' ? '\nMemory index rebuild needs attention.' : '\n记忆索引重建需要检查。');
+            alert(lang === 'en'
+                ? `Import complete. Messages: ${counts.messages || 0}, memories: ${counts.memories || 0}, moments: ${counts.moments || 0}, diaries: ${counts.diaries || 0}.${indexNote}`
+                : `导入完成。聊天 ${counts.messages || 0} 条，记忆 ${counts.memories || 0} 条，朋友圈 ${counts.moments || 0} 条，日记 ${counts.diaries || 0} 条。${indexNote}`);
+            window.dispatchEvent(new Event('refresh_contacts'));
+            window.location.reload();
+        } catch (e) {
+            console.error('Failed to import character archive:', e);
+            alert(lang === 'en' ? 'Failed to import character archive.' : '导入角色包失败。');
+        } finally {
+            setIsImportingArchive(false);
+        }
+    };
+
     const handleClearHistory = async () => {
         if (!window.confirm(lang === 'en'
             ? `Are you sure you want to completely wipe all history with ${contact.name}?\n\nThis deletes chats, memories, diaries, moments, vector indices, and resets affinity.\n\nThis cannot be undone.`
@@ -405,8 +485,8 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
                 return;
             }
             alert(lang === 'en'
-                ? `Memory sweep completed. Saved ${data.savedCount ?? 0} memories.`
-                : `长时记忆整理完成，新增 ${data.savedCount ?? 0} 条记忆。`);
+                ? `Memory sweep completed for ${data.pool || 'auto'}. Saved ${data.savedCount ?? 0} memories.`
+                : `长时记忆整理完成（${data.pool || 'auto'} 池），新增 ${data.savedCount ?? 0} 条记忆。`);
         } catch (e) {
             console.error('Failed to retry memory sweep', e);
             alert(lang === 'en' ? 'Network request failed.' : '网络请求失败。');
@@ -577,8 +657,8 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
                     </div>
                     <div style={{ fontSize: '13px', color: '#666', marginBottom: '12px', lineHeight: '1.4' }}>
                         {lang === 'en'
-                            ? 'The AI automatically forms long-term memories once this many old messages accumulate. Higher values = richer memory but more token cost.'
-                            : '控制系统每次提取长时记忆的积攒阈值。一旦未消化对话达到此数量，后台会立即将其打包成核心记忆。值越大长时记忆越丰富连贯，但提取开销也越大。'}
+                            ? 'Private chat, group chat, and city logs accumulate separately. Whichever pool reaches this value is swept alone.'
+                            : '私聊、群聊、商业街分别积攒。哪个池达到这个阈值，就只整理并清零哪个池。'}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                         <input type="range" min="10" max="100" step="10" value={sweepLimit} onChange={(e) => setSweepLimit(parseInt(e.target.value, 10))} onMouseUp={handleSweepLimitSave} onTouchEnd={handleSweepLimitSave} style={{ flex: 1, accentColor: 'var(--accent-color)' }} />
@@ -1043,6 +1123,46 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
                             ))}
                         </div>
                     )}
+                </div>
+
+                <div style={{ marginTop: '10px', backgroundColor: '#fff', borderTop: '1px solid #eee', borderBottom: '1px solid #eee' }}>
+                    <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#333' }}>
+                            {lang === 'en' ? 'Character Archive' : '单角色存档'}
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#666', lineHeight: '1.5' }}>
+                            {lang === 'en'
+                                ? 'Export or replace this character with chats, SQLite memories, moments, moment interactions, diaries, and a rebuilt Qdrant memory index.'
+                                : '导出或覆盖恢复当前角色的聊天、SQLite 记忆、朋友圈及互动、日记，并在导入后重建 Qdrant 记忆索引。'}
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            <button
+                                onClick={handleExportCharacterArchive}
+                                disabled={isExportingArchive || isImportingArchive}
+                                style={{ flex: 1, minWidth: '150px', padding: '10px 12px', border: '1px solid #7fb3ff', background: isExportingArchive ? '#eef5ff' : '#f7fbff', color: '#2f74d0', borderRadius: '8px', cursor: (isExportingArchive || isImportingArchive) ? 'not-allowed' : 'pointer', fontWeight: '600', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                            >
+                                <Download size={16} /> {isExportingArchive
+                                    ? (lang === 'en' ? 'Exporting...' : '导出中...')
+                                    : (lang === 'en' ? 'Export Archive' : '导出角色包')}
+                            </button>
+                            <button
+                                onClick={() => archiveInputRef.current?.click()}
+                                disabled={isExportingArchive || isImportingArchive}
+                                style={{ flex: 1, minWidth: '150px', padding: '10px 12px', border: '1px solid #e0a84f', background: isImportingArchive ? '#fff7e8' : '#fffaf2', color: '#b7791f', borderRadius: '8px', cursor: (isExportingArchive || isImportingArchive) ? 'not-allowed' : 'pointer', fontWeight: '600', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                            >
+                                <Upload size={16} /> {isImportingArchive
+                                    ? (lang === 'en' ? 'Importing...' : '导入中...')
+                                    : (lang === 'en' ? 'Import Archive' : '导入角色包')}
+                            </button>
+                            <input
+                                ref={archiveInputRef}
+                                type="file"
+                                accept=".json,application/json"
+                                style={{ display: 'none' }}
+                                onChange={handleImportCharacterArchive}
+                            />
+                        </div>
+                    </div>
                 </div>
 
                 <div style={{ marginTop: '10px', backgroundColor: '#fff', borderTop: '1px solid #eee', borderBottom: '1px solid #eee' }}>

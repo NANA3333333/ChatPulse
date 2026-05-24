@@ -24,6 +24,7 @@ client/login-page.png
 
 # Local runtime / logs
 .runtime/
+logs/
 *.log
 *.out.log
 *.err.log

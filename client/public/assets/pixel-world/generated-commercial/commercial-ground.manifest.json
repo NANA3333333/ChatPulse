@@ -1,0 +1,110 @@
+{
+  "tiles": [
+    {
+      "id": "tile_pavement",
+      "path": "tiles/tile_pavement.png",
+      "size": [
+        64,
+        64
+      ]
+    },
+    {
+      "id": "tile_grass",
+      "path": "tiles/tile_grass.png",
+      "size": [
+        64,
+        64
+      ]
+    },
+    {
+      "id": "tile_flower_grass",
+      "path": "tiles/tile_flower_grass.png",
+      "size": [
+        64,
+        64
+      ]
+    },
+    {
+      "id": "tile_stone_path",
+      "path": "tiles/tile_stone_path.png",
+      "size": [
+        64,
+        64
+      ]
+    },
+    {
+      "id": "tile_crosswalk",
+      "path": "tiles/tile_crosswalk.png",
+      "size": [
+        64,
+        64
+      ]
+    },
+    {
+      "id": "tile_water",
+      "path": "tiles/tile_water.png",
+      "size": [
+        64,
+        64
+      ]
+    },
+    {
+      "id": "tile_wood_plank",
+      "path": "tiles/tile_wood_plank.png",
+      "size": [
+        64,
+        64
+      ]
+    },
+    {
+      "id": "tile_road_soft",
+      "path": "tiles/tile_road_soft.png",
+      "size": [
+        64,
+        64
+      ]
+    }
+  ],
+  "fences": [
+    {
+      "id": "fence_horizontal",
+      "path": "tiles/fence_horizontal.png",
+      "size": [
+        64,
+        64
+      ]
+    },
+    {
+      "id": "fence_vertical",
+      "path": "tiles/fence_vertical.png",
+      "size": [
+        64,
+        64
+      ]
+    },
+    {
+      "id": "fence_corner",
+      "path": "tiles/fence_corner.png",
+      "size": [
+        64,
+        64
+      ]
+    },
+    {
+      "id": "railing_horizontal",
+      "path": "tiles/railing_horizontal.png",
+      "size": [
+        64,
+        64
+      ]
+    },
+    {
+      "id": "fence_gate",
+      "path": "tiles/fence_gate.png",
+      "size": [
+        64,
+        64
+      ]
+    }
+  ]
+}

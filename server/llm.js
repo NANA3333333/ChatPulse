@@ -181,7 +181,7 @@ function summarizeMessages(messages = []) {
     });
 }
 
-function buildRequestBody({ model, messages, maxTokens, temperature, presencePenalty = 0, frequencyPenalty = 0 }) {
+function buildRequestBody({ model, messages, maxTokens, temperature, presencePenalty = 0, frequencyPenalty = 0, responseFormat = null }) {
     return {
         ...(temperature == null
             ? {
@@ -199,6 +199,7 @@ function buildRequestBody({ model, messages, maxTokens, temperature, presencePen
                 presence_penalty: Number(presencePenalty || 0),
                 frequency_penalty: Number(frequencyPenalty || 0),
             }),
+        ...(responseFormat ? { response_format: responseFormat } : {}),
     };
 }
 
@@ -280,6 +281,7 @@ function learnRelayPlannerRateLimit({ endpoint, key, cacheType, errorText }) {
  * @param {number} options.maxTokens Max tokens to generate
  * @param {number} options.temperature Generation temperature
  * @param {boolean} options.returnUsage If true, returning object {content, usage} instead of string.
+ * @param {Object|null} options.responseFormat Optional OpenAI-compatible response_format.
  * @returns {Promise<string|Object>} The generated reply text or object with usage
  */
 async function callLLM({
@@ -305,7 +307,8 @@ async function callLLM({
     promptCacheHintMode = 'auto',
     debugAttempt = null,
     validateCachedContent = null,
-    shouldCacheResult = null
+    shouldCacheResult = null,
+    responseFormat = null
 }) {
     if (!endpoint || !key || !model) {
         throw new Error('LLM call missing required configuration (endpoint, key, or model).');
@@ -380,7 +383,8 @@ async function callLLM({
                 maxTokens,
                 temperature: attemptTemp,
                 presencePenalty,
-                frequencyPenalty
+                frequencyPenalty,
+                responseFormat
             });
             if (supportsClaudePromptCacheHints(model, enablePromptCacheHints)) {
                 requestVariants.push({
@@ -397,7 +401,19 @@ async function callLLM({
 
             let data = null;
             let lastVariantError = null;
+            const expandedRequestVariants = [];
             for (const variant of requestVariants) {
+                if (responseFormat) {
+                    expandedRequestVariants.push({
+                        ...variant,
+                        label: `${variant.label}_json`,
+                        responseFormat
+                    });
+                }
+                expandedRequestVariants.push({ ...variant, responseFormat: null });
+            }
+
+            for (const variant of expandedRequestVariants) {
                 const attemptStartedAt = Date.now();
                 const requestBody = buildRequestBody({
                     model,
@@ -405,7 +421,8 @@ async function callLLM({
                     maxTokens,
                     temperature: attemptTemp,
                     presencePenalty,
-                    frequencyPenalty
+                    frequencyPenalty,
+                    responseFormat: variant.responseFormat
                 });
                 const requestBodyTokenCount = getTokenCount(JSON.stringify(requestBody));
                 const uncachedRequestBodyTokenCount = getTokenCount(JSON.stringify(uncachedDebugRequestBody));
@@ -421,8 +438,9 @@ async function callLLM({
                             temperature: attemptTemp,
                             presencePenalty,
                             frequencyPenalty,
+                            responseFormat: variant.responseFormat || null,
                             messageCount: Array.isArray(variant.messages) ? variant.messages.length : 0,
-                            promptCacheHint: variant.label === 'claude_prompt_cache',
+                            promptCacheHint: variant.label.startsWith('claude_prompt_cache'),
                             requestBodyTokens: requestBodyTokenCount,
                             uncachedRequestBodyTokens: uncachedRequestBodyTokenCount,
                             requestBodyPreview: safeJsonPreview(requestBody, 12000),
@@ -472,7 +490,7 @@ async function callLLM({
                                 status: response.status,
                                 durationMs: Date.now() - attemptStartedAt,
                                 error: lastVariantError.message,
-                                promptCacheHint: variant.label === 'claude_prompt_cache',
+                                promptCacheHint: variant.label.startsWith('claude_prompt_cache'),
                                 requestBodyTokens: requestBodyTokenCount,
                                 uncachedRequestBodyTokens: uncachedRequestBodyTokenCount,
                                 requestBodyPreview: safeJsonPreview(requestBody, 12000),
@@ -484,8 +502,17 @@ async function callLLM({
                     } catch (e) {
                         console.warn('[LLM Debug] Failed to record attempt error:', e.message);
                     }
-                    const isHintVariant = variant.label === 'claude_prompt_cache';
+                    const isHintVariant = variant.label.startsWith('claude_prompt_cache');
+                    const isJsonFormatVariant = !!variant.responseFormat;
+                    const isLikelyResponseFormatRejection = isJsonFormatVariant
+                        && response.status >= 400
+                        && response.status < 500
+                        && /response[_-]?format|json_schema|json mode|schema/i.test(String(errorText || ''));
                     const isLikelySchemaRejection = response.status >= 400 && response.status < 500;
+                    if (isLikelyResponseFormatRejection) {
+                        console.warn(`[LLM] JSON response_format rejected for ${model}, falling back to prompt-only JSON.`);
+                        continue;
+                    }
                     if (isHintVariant && isLikelySchemaRejection) {
                         console.warn(`[LLM] Prompt cache hint variant rejected for ${model}, falling back to standard request.`);
                         continue;
@@ -506,7 +533,7 @@ async function callLLM({
                                 durationMs: Date.now() - attemptStartedAt,
                                 usage: data?.usage || null,
                                 finishReason: data?.choices?.[0]?.finish_reason || 'unknown',
-                                promptCacheHint: variant.label === 'claude_prompt_cache',
+                                promptCacheHint: variant.label.startsWith('claude_prompt_cache'),
                                 requestBodyTokens: requestBodyTokenCount,
                                 uncachedRequestBodyTokens: uncachedRequestBodyTokenCount,
                                 requestBodyPreview: safeJsonPreview(requestBody, 12000),

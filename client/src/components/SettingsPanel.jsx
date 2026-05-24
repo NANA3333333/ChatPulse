@@ -558,7 +558,11 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
         }
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        let didTimeout = false;
+        const timeoutId = setTimeout(() => {
+            didTimeout = true;
+            controller.abort();
+        }, 5000);
 
         fetch(`${apiUrl}/user`, { headers, signal: controller.signal })
             .then(res => res.json())
@@ -589,6 +593,9 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
             })
             .catch((err) => {
                 clearTimeout(timeoutId);
+                if (err?.name === 'AbortError' && !didTimeout) {
+                    return;
+                }
                 console.error(err);
                 setProfileLoadError(err?.name === 'AbortError' ? 'Profile request timed out.' : (err?.message || 'Failed to load profile.'));
             });

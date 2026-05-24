@@ -12,6 +12,8 @@ const LOCAL_EMBEDDING_DIM = Number(process.env.LOCAL_EMBEDDING_DIM || 1024);
 const LOCAL_EMBEDDING_INDEX_TAG = process.env.LOCAL_EMBEDDING_INDEX_TAG || 'bge_m3_1024';
 const MEMORY_QUERY_EXPANSION_ENABLED = process.env.MEMORY_QUERY_EXPANSION_ENABLED !== '0';
 const LOCAL_VECTOR_INDEX_ENABLED = process.env.LOCAL_VECTOR_INDEX_ENABLED === '1';
+const MEMORY_RETRIEVAL_SOURCE_VERSION = 'new-library-consolidation-summary-v1';
+const MEMORY_INDEX_GRANULARITY = 'new_library_card_v1';
 
 // Dynamic import for transformers.js
 let pipeline = null;
@@ -43,6 +45,7 @@ const activeEmbeddingJobs = new Map();
 
 let globalWsClientsResolver = null;
 const activeSweepJobs = new Set();
+const sweepPoolCooldowns = new Map();
 const SWEEP_COOLDOWN_MS = 10 * 1000;
 function setWsClientsResolver(resolver) {
     globalWsClientsResolver = resolver;
@@ -250,6 +253,34 @@ function getVectorIndexFile(dir) {
     return path.join(dir, 'index.json');
 }
 
+function getVectorIndexVersionFile(userId, characterId) {
+    return path.join(getVectorIndexDir(userId, characterId), 'memory_source_version.json');
+}
+
+function readVectorIndexSourceVersion(userId, characterId) {
+    try {
+        const filePath = getVectorIndexVersionFile(userId, characterId);
+        if (!fs.existsSync(filePath)) return null;
+        return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch (e) {
+        return null;
+    }
+}
+
+function writeVectorIndexSourceVersion(userId, characterId, payload = {}) {
+    try {
+        const filePath = getVectorIndexVersionFile(userId, characterId);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, JSON.stringify({
+            version: MEMORY_RETRIEVAL_SOURCE_VERSION,
+            built_at: Date.now(),
+            ...payload
+        }, null, 2));
+    } catch (e) {
+        console.warn(`[Memory] Failed to write memory index source marker for ${characterId}:`, e.message);
+    }
+}
+
 function getVectorIndexItemCountSync(dir) {
     try {
         const indexPath = getVectorIndexFile(dir);
@@ -325,6 +356,24 @@ function getMemory(userId) {
         'park', 'restaurant', 'home', 'factory', 'convenience_store', 'school', 'street',
         'mall', 'cafe', 'office', 'hospital'
     ]);
+
+    function buildMemorySubjectRules(character = {}, sourceContext = 'mixed') {
+        const characterName = character?.name || '当前角色';
+        const contextLine = sourceContext === 'commercial_street'
+            ? `- 当前输入是 commercial_street / city activity：这些是 ${characterName} 的城市生活与商业街行动日志。日志里的“我/I”默认是 ${characterName}，不是 User/Nana。`
+            : sourceContext === 'group_chat'
+                ? '- 当前输入是 group_chat：每行可见说话人就是主语；群友的“我/I”只属于该群友，不能合并成 User。'
+                : sourceContext === 'private_chat'
+                    ? `- 当前输入是 private_chat："User:" 行属于真实用户，"${characterName}:" 行属于 ${characterName}；每行里的“我/I”只属于该行说话人。`
+                    : `- 当前输入可能混合 private_chat / group_chat / commercial_street / moment：必须先按来源前缀判断主语，再写记忆。`;
+        return `SUBJECT / PERSON RULES (hard):
+- "User"、"用户"、"Nana" 只表示真实用户；"${characterName}"、"当前角色"、"角色" 表示这个角色本人。
+${contextLine}
+- 工厂、餐厅、便利店、公园、长椅、回家、出租屋、领工钱、日结、搬运等商业街/城市行动，默认是 ${characterName} 的行为，除非文本明确写 User/Nana 做了这件事。
+- 输出 summary/content 时必须显式写清主语；不要写“用户……”除非来源明确是 User/Nana 的行为、状态或想法。
+- 这里的“角色”只是当前数据库对象，不等于 roleplay。不要把普通事件包装成“在角色扮演中/在设定中/剧情中”；除非原文明确讨论扮演机制本身，否则直接写“${characterName}……”。
+- ${characterName} 自己的城市生活、工作、身体状态、金钱压力通常归为 memory_focus="general"；只有直接改变 User 与 ${characterName} 关系时才用 relationship；不要把角色行为归到 user_profile 或 user_current_arc。`;
+    }
 
     function looksLikeCityMemory(memoryData = {}) {
         const type = String(memoryData.memory_type || '').toLowerCase();
@@ -548,9 +597,11 @@ function getMemory(userId) {
             .filter(ts => Number.isFinite(ts) && ts > 0)
             .sort((a, b) => a - b);
         const messageIds = rows
-            .map(msg => msg?.id)
-            .filter(id => id !== undefined && id !== null)
-            .map(id => String(id));
+            .flatMap(msg => {
+                const explicitIds = normalizeStringArray(msg?.source_message_ids_json);
+                if (explicitIds.length > 0) return explicitIds;
+                return msg?.id !== undefined && msg?.id !== null ? [String(msg.id)] : [];
+            });
         const source_started_at = timestamps[0] || 0;
         const source_ended_at = timestamps[timestamps.length - 1] || source_started_at || 0;
         return {
@@ -583,6 +634,7 @@ function getMemory(userId) {
             people: peopleList.join(', '),
             relationships: relationshipSummary.join('; ')
         });
+        const consolidationSummary = String(rawMemoryData.consolidation_summary || rawMemoryData.merge_summary || summary || content || '').trim();
         const normalized = {
             memory_type: memoryType,
             summary: summary || content || '(empty memory)',
@@ -606,8 +658,13 @@ function getMemory(userId) {
             source_ended_at: Number(rawMemoryData.source_ended_at || 0),
             source_time_text: String(rawMemoryData.source_time_text || '').trim(),
             source_message_count: Number(rawMemoryData.source_message_count || 0),
+            source_context: String(rawMemoryData.source_context || '').trim(),
+            scene_tag: String(rawMemoryData.scene_tag || '').trim(),
+            source_app: String(rawMemoryData.source_app || '').trim(),
             memory_tier: String(rawMemoryData.memory_tier || classified.memory_tier || 'ambient').trim().toLowerCase(),
-            memory_focus: String(rawMemoryData.memory_focus || classified.memory_focus || 'general').trim().toLowerCase()
+            memory_focus: String(rawMemoryData.memory_focus || classified.memory_focus || 'general').trim().toLowerCase(),
+            consolidation_key: String(rawMemoryData.consolidation_key || rawMemoryData.merge_key || rawMemoryData.dedupe_key || '').trim(),
+            consolidation_summary: consolidationSummary
         };
         if (!normalized.source_time_text) {
             normalized.source_time_text = formatSourceTimeRange(normalized.source_started_at, normalized.source_ended_at);
@@ -643,12 +700,15 @@ function getMemory(userId) {
 
     function buildMemoryEmbeddingText(memoryData) {
         const relationshipSummary = summarizeRelationships(memoryData.relationship_json ?? memoryData.relationships);
+        const primarySummary = String(memoryData.consolidation_summary || memoryData.summary || memoryData.content || memoryData.event || '').trim();
+        const hasNewSummary = !!String(memoryData.consolidation_summary || '').trim();
         return [
+            hasNewSummary ? 'LibrarySource: new_consolidated_memory' : 'LibrarySource: legacy_memory_backup',
             memoryData.memory_type ? `Type: ${memoryData.memory_type}` : '',
             memoryData.memory_tier ? `Tier: ${memoryData.memory_tier}` : '',
             memoryData.memory_focus ? `Focus: ${memoryData.memory_focus}` : '',
-            memoryData.summary ? `Summary: ${memoryData.summary}` : '',
-            memoryData.content ? `Content: ${memoryData.content}` : '',
+            primarySummary ? `Summary: ${primarySummary}` : '',
+            !hasNewSummary && memoryData.content ? `Content: ${memoryData.content}` : '',
             memoryData.location ? `Location: ${memoryData.location}` : '',
             memoryData.time ? `Time: ${memoryData.time}` : '',
             memoryData.source_time_text ? `SourceTime: ${memoryData.source_time_text}` : '',
@@ -659,9 +719,148 @@ function getMemory(userId) {
         ].filter(Boolean).join('. ');
     }
 
+    function getNewLibraryIndexGroupKey(memoryRow = {}) {
+        return [
+            String(memoryRow.character_id || ''),
+            String(memoryRow.consolidation_key || '').trim(),
+            String(memoryRow.consolidation_summary || '').trim().toLowerCase()
+        ].join('::');
+    }
+
+    function pickNewLibraryIndexRepresentative(existing, row) {
+        if (!existing) return row;
+        const existingRank = Number(existing.importance || 0) * 10000000000000
+            + Number(existing.updated_at || existing.created_at || 0);
+        const rowRank = Number(row.importance || 0) * 10000000000000
+            + Number(row.updated_at || row.created_at || 0);
+        return rowRank > existingRank ? row : existing;
+    }
+
+    function buildNewLibraryIndexCards(rows = []) {
+        const groups = new Map();
+        for (const row of selectSearchableMemoryRows(rows)) {
+            const key = getNewLibraryIndexGroupKey(row);
+            const existing = groups.get(key);
+            groups.set(key, {
+                key,
+                representative: pickNewLibraryIndexRepresentative(existing?.representative, row),
+                source_ids: [...(existing?.source_ids || []), row.id],
+                row_count: Number(existing?.row_count || 0) + 1
+            });
+        }
+        return Array.from(groups.values()).map(group => {
+            const row = group.representative || {};
+            const relationshipSummary = summarizeRelationships(row.relationship_json ?? row.relationships).join('; ');
+            return {
+                id: row.id,
+                point_id: row.id,
+                index_group_key: group.key,
+                source_ids: group.source_ids,
+                row_count: group.row_count,
+                character_id: String(row.character_id || ''),
+                group_id: row.group_id || '',
+                memory_type: row.memory_type || 'event',
+                memory_tier: row.memory_tier || 'ambient',
+                memory_focus: row.memory_focus || 'general',
+                importance: Number(row.importance || 5),
+                created_at: Number(row.created_at || Date.now()),
+                updated_at: Number(row.updated_at || row.created_at || Date.now()),
+                time: row.time || '',
+                is_archived: Number(row.is_archived || 0),
+                dedupe_key: row.dedupe_key || '',
+                source_started_at: Number(row.source_started_at || 0),
+                source_ended_at: Number(row.source_ended_at || 0),
+                source_time_text: row.source_time_text || row.time || '',
+                source_message_count: group.row_count,
+                location: row.location || '',
+                people: row.people || '',
+                items: row.items || '',
+                relationships: row.relationships || relationshipSummary,
+                relationship_json: row.relationship_json,
+                emotion: row.emotion || '',
+                event: row.event || row.consolidation_summary || row.summary || '',
+                retrieval_count: Number(row.retrieval_count || 0),
+                last_retrieved_at: Number(row.last_retrieved_at || 0),
+                consolidation_key: row.consolidation_key || '',
+                consolidation_summary: row.consolidation_summary || '',
+                summary: row.consolidation_summary || row.summary || row.event || '',
+                content: row.consolidation_summary || row.content || row.event || ''
+            };
+        }).sort((a, b) => (
+            a.character_id.localeCompare(b.character_id)
+            || b.updated_at - a.updated_at
+            || b.created_at - a.created_at
+            || Number(b.id || 0) - Number(a.id || 0)
+        ));
+    }
+
+    async function upsertNewLibraryIndexCard(characterId, card, index = null) {
+        const textToEmbed = buildMemoryEmbeddingText(card);
+        const embeddingArray = await getEmbedding(textToEmbed);
+        const retrievalWeight = computeMemoryRetrievalWeight(card);
+        if (await canUseQdrant()) {
+            try {
+                await qdrant.upsertMemoryPoint(userId, {
+                    id: String(card.point_id),
+                    vector: embeddingArray,
+                    payload: {
+                        memory_id: card.id,
+                        character_id: String(characterId),
+                        group_id: card.group_id || '',
+                        memory_type: card.memory_type || 'event',
+                        memory_tier: card.memory_tier || 'ambient',
+                        memory_focus: card.memory_focus || 'general',
+                        importance: card.importance || 5,
+                        created_at: card.created_at || Date.now(),
+                        updated_at: card.updated_at || card.created_at || Date.now(),
+                        time: card.time || '',
+                        is_archived: Number(card.is_archived || 0),
+                        dedupe_key: card.dedupe_key || '',
+                        retrieval_weight: retrievalWeight,
+                        summary: card.summary || card.consolidation_summary || '',
+                        content: card.content || card.consolidation_summary || '',
+                        location: card.location || '',
+                        source_started_at: Number(card.source_started_at || 0),
+                        source_ended_at: Number(card.source_ended_at || 0),
+                        source_time_text: card.source_time_text || '',
+                        source_message_count: Number(card.source_message_count || card.row_count || 0),
+                        source_memory_ids: (card.source_ids || []).join(','),
+                        consolidation_key: card.consolidation_key || '',
+                        consolidation_summary: card.consolidation_summary || '',
+                        memory_library_source: 'new',
+                        memory_index_version: MEMORY_RETRIEVAL_SOURCE_VERSION,
+                        memory_index_granularity: MEMORY_INDEX_GRANULARITY
+                    }
+                });
+            } catch (e) {
+                console.error(`[Memory] Qdrant upsert failed for ${characterId}/${card.id}:`, e.message);
+                qdrantAvailability = false;
+            }
+        }
+        if (index) {
+            await index.insertItem({
+                id: String(card.point_id),
+                vector: embeddingArray,
+                metadata: {
+                    memory_id: card.id,
+                    surprise_score: card.importance || 5,
+                    memory_type: card.memory_type || 'event',
+                    memory_tier: card.memory_tier || 'ambient',
+                    memory_focus: card.memory_focus || 'general',
+                    dedupe_key: card.dedupe_key || '',
+                    retrieval_weight: retrievalWeight,
+                    source_memory_ids: (card.source_ids || []).join(','),
+                    memory_library_source: 'new',
+                    memory_index_version: MEMORY_RETRIEVAL_SOURCE_VERSION,
+                    memory_index_granularity: MEMORY_INDEX_GRANULARITY
+                }
+            });
+        }
+    }
+
     function formatMemoryForPrompt(memory) {
         const parts = [];
-        const label = memory.summary || memory.event || memory.content;
+        const label = memory.consolidation_summary || memory.summary || memory.event || memory.content;
         if (label) parts.push(label);
         if (memory.time) parts.push(`时间: ${memory.time}`);
         if (memory.source_time_text) parts.push(`来源对话时间: ${memory.source_time_text}`);
@@ -1065,62 +1264,161 @@ function getMemory(userId) {
     async function rebuildIndex(characterId) {
         await wipeIndex(characterId);
         const db = getDb();
-        const rows = db.getMemories ? db.getMemories(characterId) : [];
-        if (!rows || rows.length === 0) return;
+        const allRows = db.getMemories ? db.getMemories(characterId) : [];
+        const rows = selectSearchableMemoryRows(allRows);
+        const cards = buildNewLibraryIndexCards(rows);
+        if (!cards || cards.length === 0) {
+            writeVectorIndexSourceVersion(userId, characterId, {
+                indexed_count: 0,
+                source_count: Array.isArray(allRows) ? allRows.length : 0,
+                new_library_count: rows.length,
+                new_library_card_count: 0,
+                memory_index_granularity: MEMORY_INDEX_GRANULARITY
+            });
+            return;
+        }
 
         const index = LOCAL_VECTOR_INDEX_ENABLED ? await getVectorIndex(userId, characterId) : null;
-        for (const mem of rows) {
-            const textToEmbed = buildMemoryEmbeddingText(mem);
-            const embeddingArray = await getEmbedding(textToEmbed);
-            const retrievalWeight = computeMemoryRetrievalWeight(mem);
-            if (await canUseQdrant()) {
-                try {
-                    await qdrant.upsertMemoryPoint(userId, {
-                        id: String(mem.id),
-                        vector: embeddingArray,
-                        payload: {
-                            memory_id: mem.id,
-                            character_id: String(characterId),
-                            group_id: mem.group_id || '',
-                            memory_type: mem.memory_type || 'event',
-                            memory_tier: mem.memory_tier || 'ambient',
-                            memory_focus: mem.memory_focus || 'general',
-                            importance: mem.importance || 5,
-                            created_at: mem.created_at || Date.now(),
-                            time: mem.time || '',
-                            is_archived: Number(mem.is_archived || 0),
-                            dedupe_key: mem.dedupe_key || '',
-                            retrieval_weight: retrievalWeight,
-                            summary: mem.summary || mem.event || '',
-                            content: mem.content || mem.event || '',
-                            location: mem.location || '',
-                            source_started_at: Number(mem.source_started_at || 0),
-                            source_ended_at: Number(mem.source_ended_at || 0),
-                            source_time_text: mem.source_time_text || '',
-                            source_message_count: Number(mem.source_message_count || 0)
-                        }
-                    });
-                } catch (e) {
-                    console.error(`[Memory] Qdrant rebuild upsert failed for ${characterId}/${mem.id}:`, e.message);
-                    qdrantAvailability = false;
-                }
-            }
-            if (index) {
-                await index.insertItem({
-                    id: String(mem.id),
-                    vector: embeddingArray,
-                    metadata: {
-                        memory_id: mem.id,
-                        surprise_score: mem.surprise_score || mem.importance || 5,
-                        memory_type: mem.memory_type || 'event',
-                        memory_tier: mem.memory_tier || 'ambient',
-                        memory_focus: mem.memory_focus || 'general',
-                        dedupe_key: mem.dedupe_key || '',
-                        retrieval_weight: retrievalWeight
+        for (const card of cards) {
+            await upsertNewLibraryIndexCard(characterId, card, index);
+        }
+        writeVectorIndexSourceVersion(userId, characterId, {
+            indexed_count: cards.length,
+            source_count: Array.isArray(allRows) ? allRows.length : rows.length,
+            new_library_count: rows.length,
+            new_library_card_count: cards.length,
+            memory_index_granularity: MEMORY_INDEX_GRANULARITY
+        });
+    }
+
+    async function deleteMemoryIndexEntries(characterId, memoryIds = []) {
+        const ids = Array.from(new Set((Array.isArray(memoryIds) ? memoryIds : [memoryIds])
+            .map(id => String(id || '').trim())
+            .filter(Boolean)));
+        if (ids.length === 0) return { deleted: 0, qdrant_deleted: 0, local_deleted: 0, errors: [] };
+
+        const errors = [];
+        let qdrantDeleted = 0;
+        let localDeleted = 0;
+
+        const qdrantEnabled = qdrant.getQdrantConfig?.().enabled !== false;
+        const qdrantUsable = await canUseQdrant();
+        if (qdrantUsable) {
+            try {
+                if (typeof qdrant.deleteMemoryPoints === 'function') {
+                    const result = await qdrant.deleteMemoryPoints(userId, ids);
+                    qdrantDeleted = Number(result?.deleted || ids.length);
+                } else {
+                    for (const id of ids) {
+                        await qdrant.deleteMemoryPoint(userId, id);
+                        qdrantDeleted += 1;
                     }
-                });
+                }
+            } catch (e) {
+                errors.push(`qdrant:${e.message}`);
+                qdrantAvailability = false;
+            }
+        } else if (qdrantEnabled) {
+            errors.push('qdrant:unavailable');
+        }
+
+        if (LOCAL_VECTOR_INDEX_ENABLED) {
+            try {
+                const index = await getVectorIndex(userId, characterId);
+                if (typeof index.deleteItem === 'function') {
+                    for (const id of ids) {
+                        try {
+                            await index.deleteItem(String(id));
+                            localDeleted += 1;
+                        } catch (e) {
+                            errors.push(`local:${id}:${e.message}`);
+                        }
+                    }
+                }
+            } catch (e) {
+                errors.push(`local:${e.message}`);
             }
         }
+
+        if (errors.length > 0) {
+            const error = new Error(`Memory index delete failed: ${errors.join('; ')}`);
+            error.details = errors;
+            error.partial = { deleted: ids.length, qdrant_deleted: qdrantDeleted, local_deleted: localDeleted };
+            throw error;
+        }
+
+        return {
+            deleted: ids.length,
+            qdrant_deleted: qdrantDeleted,
+            local_deleted: localDeleted,
+            errors
+        };
+    }
+
+    async function refreshMemoryIndexEntries(characterId, memoryIds = [], options = {}) {
+        const ids = Array.from(new Set((Array.isArray(memoryIds) ? memoryIds : [memoryIds])
+            .map(id => String(id || '').trim())
+            .filter(Boolean)));
+        const previousRows = Array.isArray(options?.previousRows) ? options.previousRows.filter(Boolean) : [];
+        if (ids.length === 0 && previousRows.length === 0) {
+            return { refreshed: 0, deleted: 0, card_count: 0 };
+        }
+
+        const db = getDb();
+        const allRows = db.getMemories ? db.getMemories(characterId) : [];
+        const searchableRows = selectSearchableMemoryRows(allRows);
+        const allCards = buildNewLibraryIndexCards(searchableRows);
+        const idSet = new Set(ids);
+        const targetGroupKeys = new Set();
+        for (const row of previousRows) {
+            if (row && hasNewLibrarySummary(row)) {
+                targetGroupKeys.add(getNewLibraryIndexGroupKey(row));
+            }
+        }
+        for (const row of searchableRows) {
+            if (idSet.has(String(row.id || ''))) {
+                targetGroupKeys.add(getNewLibraryIndexGroupKey(row));
+            }
+        }
+
+        const targetCards = allCards.filter(card => {
+            if (targetGroupKeys.has(card.index_group_key)) return true;
+            return (card.source_ids || []).some(sourceId => idSet.has(String(sourceId || '')));
+        });
+        const deleteIds = new Set(ids);
+        for (const card of targetCards) {
+            for (const sourceId of card.source_ids || []) {
+                if (sourceId !== undefined && sourceId !== null) deleteIds.add(String(sourceId));
+            }
+        }
+
+        if (deleteIds.size > 0) {
+            try {
+                await deleteMemoryIndexEntries(characterId, Array.from(deleteIds));
+            } catch (e) {
+                console.warn(`[Memory] Partial index delete before refresh failed for ${characterId}:`, e.message);
+            }
+        }
+
+        const index = LOCAL_VECTOR_INDEX_ENABLED ? await getVectorIndex(userId, characterId) : null;
+        let refreshed = 0;
+        for (const card of targetCards) {
+            await upsertNewLibraryIndexCard(characterId, card, index);
+            refreshed += 1;
+        }
+        writeVectorIndexSourceVersion(userId, characterId, {
+            indexed_count: allCards.length,
+            source_count: Array.isArray(allRows) ? allRows.length : searchableRows.length,
+            new_library_count: searchableRows.length,
+            new_library_card_count: allCards.length,
+            memory_index_granularity: MEMORY_INDEX_GRANULARITY
+        });
+        return {
+            refreshed,
+            deleted: deleteIds.size,
+            card_count: allCards.length,
+            target_group_count: targetGroupKeys.size
+        };
     }
 
     async function ensureSearchIndexReady(characterId, onTrace = null) {
@@ -1138,20 +1436,51 @@ function getMemory(userId) {
         const db = getDb();
         const rawDb = typeof db.getRawDb === 'function' ? db.getRawDb() : null;
         if (!rawDb || typeof rawDb.prepare !== 'function') return;
-        const memoryCount = Number(rawDb.prepare('SELECT COUNT(*) AS c FROM memories WHERE character_id = ?').get(characterId)?.c || 0);
+        const countRow = rawDb.prepare(`
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN COALESCE(NULLIF(consolidation_summary, ''), '') <> '' AND COALESCE(is_archived, 0) = 0 THEN 1 ELSE 0 END) AS new_count,
+                MAX(CASE WHEN COALESCE(NULLIF(consolidation_summary, ''), '') <> '' THEN COALESCE(updated_at, classified_at, created_at, 0) ELSE 0 END) AS latest_new_at
+            FROM memories
+            WHERE character_id = ?
+        `).get(characterId) || {};
+        const totalMemoryCount = Number(countRow.total || 0);
+        const newLibraryCount = Number(countRow.new_count || 0);
+        const latestNewLibraryAt = Number(countRow.latest_new_at || 0);
+        const memoryCount = newLibraryCount;
         if (typeof onTrace === 'function') {
-            await onTrace({ phase: 'ensure_memory_count', memoryCount });
+            await onTrace({ phase: 'ensure_memory_count', memoryCount, totalMemoryCount, newLibraryCount });
         }
         if (memoryCount <= 0) return;
 
-        const currentDir = getVectorIndexDir(userId, characterId);
-        const legacyDir = getLegacyVectorIndexDir(userId, characterId);
-        const legacyDefaultDir = getLegacyDefaultVectorIndexDir(characterId);
-        const localItemCount = Math.max(
-            getVectorIndexItemCountSync(currentDir),
-            getVectorIndexItemCountSync(legacyDir),
-            getVectorIndexItemCountSync(legacyDefaultDir)
-        );
+        const sourceMarker = readVectorIndexSourceVersion(userId, characterId);
+        const markerIsCurrent = sourceMarker?.version === MEMORY_RETRIEVAL_SOURCE_VERSION
+            && Number(sourceMarker?.built_at || 0) >= latestNewLibraryAt;
+        if (newLibraryCount > 0 && !markerIsCurrent) {
+            indexRepairAttempts.set(key, now);
+            console.warn(`[Memory] Search index marker is stale for ${characterId}; skipping automatic rebuild. Run an explicit rebuild instead.`);
+            if (typeof onTrace === 'function') {
+                await onTrace({
+                    phase: 'ensure_stale_no_auto_rebuild',
+                    newLibraryCount,
+                    latestNewLibraryAt,
+                    markerVersion: sourceMarker?.version || ''
+                });
+            }
+            return;
+        }
+
+        let localItemCount = 0;
+        if (LOCAL_VECTOR_INDEX_ENABLED) {
+            const currentDir = getVectorIndexDir(userId, characterId);
+            const legacyDir = getLegacyVectorIndexDir(userId, characterId);
+            const legacyDefaultDir = getLegacyDefaultVectorIndexDir(characterId);
+            localItemCount = Math.max(
+                getVectorIndexItemCountSync(currentDir),
+                getVectorIndexItemCountSync(legacyDir),
+                getVectorIndexItemCountSync(legacyDefaultDir)
+            );
+        }
 
         let qdrantCount = 0;
         if (await canUseQdrant()) {
@@ -1164,9 +1493,7 @@ function getMemory(userId) {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        filter: {
-                            must: [{ key: 'character_id', match: { value: String(characterId) } }]
-                        },
+                        filter: buildMemorySearchFilter(characterId),
                         exact: true
                     })
                 });
@@ -1191,11 +1518,10 @@ function getMemory(userId) {
         }
 
         indexRepairAttempts.set(key, now);
-        console.warn(`[Memory] Detected empty search index for ${characterId} despite ${memoryCount} SQL memories. Rebuilding...`);
+        console.warn(`[Memory] Detected empty visible search index for ${characterId} despite ${memoryCount} SQL memories; skipping automatic rebuild.`);
         if (typeof onTrace === 'function') {
-            await onTrace({ phase: 'ensure_rebuild', qdrantCount, localItemCount, memoryCount });
+            await onTrace({ phase: 'ensure_missing_no_auto_rebuild', qdrantCount, localItemCount, memoryCount });
         }
-        await rebuildIndex(characterId);
     }
 
     const MEMORY_QUERY_EXPANSIONS = [
@@ -1402,15 +1728,65 @@ function getMemory(userId) {
         return Math.min(0.55, 0.12 + (hitCount * 0.12) + (coverage * 0.12));
     }
 
-    function computeLexicalBoost(memoryRow, queryVariants = []) {
-        const haystack = normalizeSearchText([
-            memoryRow?.summary,
-            memoryRow?.content,
-            memoryRow?.event,
+    function hasNewLibrarySummary(memoryRow = {}) {
+        return !!String(memoryRow?.consolidation_summary || '').trim();
+    }
+
+    function selectSearchableMemoryRows(rows = []) {
+        const activeRows = (Array.isArray(rows) ? rows : [])
+            .filter(row => row && Number(row.is_archived || 0) === 0);
+        return activeRows.filter(hasNewLibrarySummary);
+    }
+
+    function buildMemoryRecallText(memoryRow = {}) {
+        const primary = String(memoryRow.consolidation_summary || memoryRow.summary || memoryRow.content || memoryRow.event || '').trim();
+        return [
+            primary,
             memoryRow?.people,
             memoryRow?.relationships,
-            memoryRow?.location
-        ].filter(Boolean).join(' '));
+            memoryRow?.location,
+            memoryRow?.source_time_text,
+            memoryRow?.time
+        ].filter(Boolean).join(' ');
+    }
+
+    function getNewLibraryRecallKey(memoryRow = {}) {
+        if (!hasNewLibrarySummary(memoryRow)) return `legacy:${memoryRow?.id || ''}`;
+        const key = String(memoryRow.consolidation_key || '').trim().toLowerCase();
+        const summary = String(memoryRow.consolidation_summary || '').trim().toLowerCase();
+        return `new:${memoryRow.character_id || ''}:${key || summary}`;
+    }
+
+    function prepareMemoryForRecall(memoryRow = {}) {
+        if (!memoryRow || !hasNewLibrarySummary(memoryRow)) return memoryRow;
+        const summary = String(memoryRow.consolidation_summary || '').trim();
+        return {
+            ...memoryRow,
+            legacy_summary: memoryRow.legacy_summary || memoryRow.summary || '',
+            legacy_content: memoryRow.legacy_content || memoryRow.content || '',
+            summary,
+            content: summary,
+            event: memoryRow.event || summary,
+            memory_library_source: 'new'
+        };
+    }
+
+    function finalizeMemorySearchRows(rows = [], limit = 5) {
+        const deduped = [];
+        const seen = new Set();
+        for (const row of rows) {
+            if (!row?.id) continue;
+            const key = getNewLibraryRecallKey(row);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            deduped.push(prepareMemoryForRecall(row));
+            if (deduped.length >= limit) break;
+        }
+        return deduped;
+    }
+
+    function computeLexicalBoost(memoryRow, queryVariants = []) {
+        const haystack = normalizeSearchText(buildMemoryRecallText(memoryRow));
         if (!haystack) return 0;
 
         let boost = 0;
@@ -1421,14 +1797,7 @@ function getMemory(userId) {
     }
 
     function computeAliasBridgeBoost(memoryRow, queryVariants = []) {
-        const haystack = normalizeSearchText([
-            memoryRow?.summary,
-            memoryRow?.content,
-            memoryRow?.event,
-            memoryRow?.people,
-            memoryRow?.relationships,
-            memoryRow?.location
-        ].filter(Boolean).join(' '));
+        const haystack = normalizeSearchText(buildMemoryRecallText(memoryRow));
         if (!haystack) return 0;
 
         const normalizedQueries = queryVariants.map(v => normalizeSearchText(v)).filter(Boolean);
@@ -1446,9 +1815,7 @@ function getMemory(userId) {
         const query = String(queryText || '');
         if (!/记得|说了什么|提过什么|回忆|想起/i.test(query)) return 0;
         const text = [
-            memoryRow?.summary,
-            memoryRow?.content,
-            memoryRow?.event
+            buildMemoryRecallText(memoryRow)
         ].filter(Boolean).join(' ');
         if (!text) return 0;
         if (/(不记得|想不起来|记不清|lack of recall|can't remember|空白)/i.test(text)) {
@@ -1468,8 +1835,7 @@ function getMemory(userId) {
                 .filter(Boolean);
             if (normalizedVariants.length === 0) return [];
 
-            const rows = db.getMemories(characterId)
-                .filter(row => Number(row.is_archived || 0) === 0);
+            const rows = buildNewLibraryIndexCards(db.getMemories(characterId));
 
             const scored = rows.map(row => {
                 let lexicalBoost = computeLexicalBoost(row, normalizedVariants);
@@ -1478,14 +1844,7 @@ function getMemory(userId) {
                 for (const variant of normalizedVariants) {
                     const needle = normalizeSearchText(variant);
                     if (!needle) continue;
-                    const haystack = normalizeSearchText([
-                        row.summary,
-                        row.content,
-                        row.event,
-                        row.people,
-                        row.relationships,
-                        row.location
-                    ].filter(Boolean).join(' '));
+                    const haystack = normalizeSearchText(buildMemoryRecallText(row));
                     if (haystack.includes(needle) || computeLexicalVariantBoost(haystack, variant) > 0) {
                         matchedQuery = variant;
                         break;
@@ -1505,14 +1864,15 @@ function getMemory(userId) {
                 };
             }).filter(Boolean);
 
-            return scored
+            const rankedRows = scored
                 .sort((a, b) => b.finalScore - a.finalScore)
-                .slice(0, limit)
+                .slice(0, Math.max(limit * 3, limit))
                 .map(entry => {
                     entry.row._search_score = entry.finalScore.toFixed(3);
                     entry.row._matched_query = entry.matchedQuery;
                     return entry.row;
                 });
+            return finalizeMemorySearchRows(rankedRows, limit);
         } catch (e) {
             console.error(`[Memory] Lexical fallback failed for ${characterId}:`, e.message);
             return [];
@@ -1521,8 +1881,7 @@ function getMemory(userId) {
 
     async function runSemanticMemoryFallback(db, characterId, queryText, limit = 5) {
         try {
-            const rows = db.getMemories(characterId)
-                .filter(row => Number(row.is_archived || 0) === 0)
+            const rows = buildNewLibraryIndexCards(db.getMemories(characterId))
                 .slice(0, 120);
             if (rows.length === 0) return [];
 
@@ -1533,14 +1892,7 @@ function getMemory(userId) {
                     await yieldToEventLoop();
                 }
                 const row = rows[idx];
-                const text = [
-                    row.summary,
-                    row.content,
-                    row.event,
-                    row.people,
-                    row.relationships,
-                    row.location
-                ].filter(Boolean).join(' ');
+                const text = buildMemoryRecallText(row);
                 if (!text) continue;
                 const rowEmbedding = await getEmbedding(text.slice(0, 1200));
                 const similarity = queryEmbedding.reduce((sum, value, idx) => sum + (value * (rowEmbedding[idx] || 0)), 0);
@@ -1554,14 +1906,15 @@ function getMemory(userId) {
                 scored.push({ row, finalScore });
             }
 
-            return scored
+            const rankedRows = scored
                 .sort((a, b) => b.finalScore - a.finalScore)
-                .slice(0, limit)
+                .slice(0, Math.max(limit * 3, limit))
                 .map(entry => {
                     entry.row._search_score = entry.finalScore.toFixed(3);
                     entry.row._matched_query = 'semantic_fallback';
                     return entry.row;
                 });
+            return finalizeMemorySearchRows(rankedRows, limit);
         } catch (e) {
             console.error(`[Memory] Semantic fallback failed for ${characterId}:`, e.message);
             return [];
@@ -1812,7 +2165,10 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
     function buildMemorySearchFilter(characterId, filters = {}, temporalRange = null) {
         const must = [
             { key: 'character_id', match: { value: String(characterId) } },
-            { key: 'is_archived', match: { value: 0 } }
+            { key: 'is_archived', match: { value: 0 } },
+            { key: 'memory_library_source', match: { value: 'new' } },
+            { key: 'memory_index_version', match: { value: MEMORY_RETRIEVAL_SOURCE_VERSION } },
+            { key: 'memory_index_granularity', match: { value: MEMORY_INDEX_GRANULARITY } }
         ];
         const focusList = Array.isArray(filters.memory_focus) ? filters.memory_focus.filter(Boolean) : [];
         const tierList = Array.isArray(filters.memory_tier) ? filters.memory_tier.filter(Boolean) : [];
@@ -1848,7 +2204,27 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
     async function searchMemories(characterId, queryText, limit = 5, onTrace = null) {
         try {
             const db = getDb();
+            let vectorIndexReady = true;
+            try {
+                await ensureSearchIndexReady(characterId, onTrace);
+            } catch (e) {
+                vectorIndexReady = false;
+                console.warn(`[Memory] Failed to ensure new-library search index for ${characterId}; continuing with lexical fallback where possible:`, e.message);
+                if (typeof onTrace === 'function') {
+                    await onTrace({ phase: 'ensure_error', message: String(e?.message || e) });
+                }
+            }
             const normalizedRequest = normalizeMemorySearchRequest(queryText, limit);
+            const searchableRows = selectSearchableMemoryRows(db.getMemories ? db.getMemories(characterId) : []);
+            if (searchableRows.length === 0) {
+                if (typeof onTrace === 'function') {
+                    await onTrace({
+                        phase: 'new_library_empty',
+                        message: 'No consolidated new-library memories are available for this character.'
+                    });
+                }
+                return [];
+            }
             const baseQuery = normalizedRequest.primaryText || normalizedRequest.explicitQueries[0] || '';
             const temporalRange = resolveTemporalHintRange(normalizedRequest.temporalHint, Date.now());
             let queryVariants = normalizedRequest.explicitQueries.length > 0
@@ -1878,7 +2254,7 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
                 });
             }
 
-            if (await canUseQdrant()) {
+            if (vectorIndexReady && await canUseQdrant()) {
                 try {
                     if (typeof onTrace === 'function') {
                         await onTrace({ phase: 'qdrant_begin', variantCount: queryVariants.length });
@@ -1911,6 +2287,7 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
                             const memoryId = res?.payload?.memory_id || res?.id;
                             if (!memoryId || res.score <= 0.3) continue;
                             const memRow = db.getMemory(memoryId);
+                            if (!hasNewLibrarySummary(memRow)) continue;
                             if (!memoryMatchesSearchFilters(memRow, normalizedRequest.filters, temporalRange)) continue;
                             const surpriseScore = res?.payload?.importance || memRow.importance || 5;
                             const retrievalWeight = Math.max(
@@ -1953,14 +2330,15 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
                         }
                     }
 
-                    const memories = Array.from(aggregate.values())
+                    const rankedRows = Array.from(aggregate.values())
                         .sort((a, b) => b.finalScore - a.finalScore)
-                        .slice(0, resultLimit)
+                        .slice(0, Math.max(resultLimit * 3, resultLimit))
                         .map(entry => {
                             entry.memRow._search_score = entry.finalScore.toFixed(3);
                             entry.memRow._matched_query = entry.matchedQuery;
                             return entry.memRow;
                         });
+                    const memories = finalizeMemorySearchRows(rankedRows, resultLimit);
                     if (memories.length > 0 && db.markMemoriesRetrieved) {
                         db.markMemoriesRetrieved(memories.map(m => m.id));
                     }
@@ -1984,7 +2362,7 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
                 }
             }
 
-            if (LOCAL_VECTOR_INDEX_ENABLED) {
+            if (vectorIndexReady && LOCAL_VECTOR_INDEX_ENABLED) {
                 if (typeof onTrace === 'function') {
                     await onTrace({ phase: 'vectra_begin', variantCount: queryVariants.length });
                 }
@@ -2011,6 +2389,7 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
                     for (const res of results) {
                         if (!(res.score > 0.3 && res.item.metadata && res.item.metadata.memory_id)) continue;
                         const memRow = db.getMemory(res.item.metadata.memory_id);
+                        if (!hasNewLibrarySummary(memRow)) continue;
                         if (!memoryMatchesSearchFilters(memRow, normalizedRequest.filters, temporalRange)) continue;
                         const surpriseScore = (res.item.metadata && res.item.metadata.surprise_score) ? res.item.metadata.surprise_score : 5;
                         const retrievalWeight = Math.max(
@@ -2052,14 +2431,15 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
                     }
                 }
 
-                const memories = Array.from(aggregate.values())
+                const rankedRows = Array.from(aggregate.values())
                     .sort((a, b) => b.finalScore - a.finalScore)
-                    .slice(0, resultLimit)
+                    .slice(0, Math.max(resultLimit * 3, resultLimit))
                     .map(entry => {
                         entry.memRow._search_score = entry.finalScore.toFixed(3);
                         entry.memRow._matched_query = entry.matchedQuery;
                         return entry.memRow;
                     });
+                const memories = finalizeMemorySearchRows(rankedRows, resultLimit);
                 if (memories.length > 0 && db.markMemoriesRetrieved) {
                     db.markMemoriesRetrieved(memories.map(m => m.id));
                 }
@@ -2116,6 +2496,9 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
 
         const contextText = recentMessages.map(m => `${m.role === 'user' ? 'User' : character.name}: ${m.content}`).join('\n');
         const sourceTimeMeta = buildSourceTimeMeta(recentMessages);
+        const sourceContext = groupId ? 'group_chat' : 'private_chat';
+        const sceneTag = groupId ? 'group_chat' : 'private_chat';
+        const subjectRules = buildMemorySubjectRules(character, sourceContext);
         const engineContextWrapper = { getUserDb, getMemory: () => getMemory(userId) };
         const universalResult = await buildUniversalContext(engineContextWrapper, character, '', !!groupId);
 
@@ -2126,6 +2509,8 @@ ${universalResult?.preamble || ''}
 You are a memory extraction assistant. Analyze the following recent conversation snippet between User and ${character.name}.
 Identify if there are any noteworthy facts, events, preferences, emotions, or relationship changes worth remembering.
 Return a structured JSON object. Focus on extracting WHAT happened, WHEN, WHERE, and WHO.
+
+${subjectRules}
 
 WRITING STYLE:
 - Write "summary" as a natural Chinese short sentence that a human can read at a glance.
@@ -2189,6 +2574,8 @@ Output exactly in this JSON format (and nothing else):
     "items": ["..."],
     "emotion": "...",
     "importance": <number 1-10>,
+    "source_context": "${sourceContext}",
+    "scene_tag": "${sceneTag}",
     "source_message_ids_json": ["optional ids if known"]
 }
 `;
@@ -2240,6 +2627,8 @@ Output exactly in this JSON format (and nothing else):
                 const parsed = JSON.parse(jsonText);
 
                 if (parsed.action === 'add' || parsed.action === 'update') {
+                    parsed.source_context = sourceContext;
+                    parsed.scene_tag = sceneTag;
                     parsed.source_started_at = sourceTimeMeta.source_started_at;
                     parsed.source_ended_at = sourceTimeMeta.source_ended_at;
                     parsed.source_time_text = parsed.source_time_text || sourceTimeMeta.source_time_text;
@@ -2363,6 +2752,7 @@ Output only the summary sentence, without quotes or extra explanation.
         };
         const summarizeBatch = async (batch) => {
             const dialogueText = batch.map(m => `${speakerName(m)}: ${String(m.content || '').trim()}`).join('\n');
+            const subjectRules = buildMemorySubjectRules(character, 'private_chat');
             const summaryPrompt = `请总结下面这一段私聊窗口外的原文对话。
 
 要求：
@@ -2372,6 +2762,8 @@ Output only the summary sentence, without quotes or extra explanation.
 - 必须分清 User 说了什么、${character.name} 说了什么；不要把 ${character.name} 的话写成 User 的话。
 - 如果有 System/Event，写成事件背景，不要当成 User 发言。
 - 用中文自然段或要点输出纯文本，不要 JSON，不要 Markdown 表格。
+
+${subjectRules}
 
 [待总结私聊原文]
 ${dialogueText}`;
@@ -2496,6 +2888,7 @@ ${dialogueText}`;
             recent_facts: existingDigest.recent_facts_json || [],
             scene_state: existingDigest.scene_state_json || []
         }, null, 2) : '{"digest_text":"","emotion_state":"","relationship_state":[],"open_loops":[],"recent_facts":[],"scene_state":[]}';
+        const subjectRules = buildMemorySubjectRules(character, 'group_chat');
 
         const digestPrompt = `You maintain a compact rolling state for ${character.name}'s view of an ongoing group chat named ${group.name}.
 Update the previous digest using ONLY the new dialogue delta below.
@@ -2505,6 +2898,8 @@ Goals:
 - Keep only unresolved topics, direct questions, social tension, and scene facts that still matter.
 - Compress aggressively. Prefer fragments over sentences.
 - The whole JSON values combined should usually stay under 65 words.
+
+${subjectRules}
 
 Return exactly one JSON object and nothing else:
 {
@@ -2636,7 +3031,7 @@ ${deltaText}`;
         privateMsgs.forEach((m) => {
             activityEntries.push({
                 timestamp: m.timestamp || 0,
-                text: `[Private Chat] ${m.role === 'user' ? 'User' : character.name}: ${m.content}`
+                text: `[Private Chat][private_chat] ${m.role === 'user' ? 'User' : character.name}: ${m.content}`
             });
         });
 
@@ -2647,7 +3042,7 @@ ${deltaText}`;
                 const sName = m.sender_id === 'user' ? 'User' : (m.sender_name || 'Unknown');
                 activityEntries.push({
                     timestamp: m.timestamp || 0,
-                    text: `[Group Chat: ${g.name}] ${sName}: ${m.content}`
+                    text: `[Group Chat: ${g.name}][group_chat] ${sName}: ${m.content}`
                 });
             });
         }
@@ -2657,7 +3052,7 @@ ${deltaText}`;
             const author = m.character_id === 'user' ? 'User' : (db.getCharacter(m.character_id)?.name || m.character_id);
             activityEntries.push({
                 timestamp: m.created_at || m.timestamp || 0,
-                text: `[Moment by ${author}] ${m.content}`
+                text: `[Moment][moment] ${author}: ${m.content}`
             });
         });
 
@@ -2670,7 +3065,7 @@ ${deltaText}`;
                 recentLogs.forEach((l) => {
                     activityEntries.push({
                         timestamp: l.timestamp || 0,
-                        text: `[City Activity] ${l.message}`
+                        text: `[City Activity][commercial_street] ${character.name}: ${l.message}`
                     });
                 });
             }
@@ -2683,6 +3078,7 @@ ${deltaText}`;
         const engineContextWrapper = { getUserDb, getMemory: () => getMemory(userId) };
         const universalResult = await buildUniversalContext(engineContextWrapper, character, '', false);
         const totalBatches = Math.ceil(activityEntries.length / batchSize);
+        const subjectRules = buildMemorySubjectRules(character, 'mixed');
         let savedCount = 0;
 
         for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
@@ -2696,6 +3092,8 @@ You are a memory aggregation assistant. Analyze batch ${batchIndex + 1} of ${tot
 This chunk may include private chats with User, group chats, social media moments, and city activities.
 Identify noteworthy events, facts, relationship developments, preferences, plans, emotional shifts, or recurring themes worth remembering long-term.
 Return a structured JSON ARRAY of memory objects.
+
+${subjectRules}
 
 IMPORTANT:
 - Process only this chunk.
@@ -2713,6 +3111,8 @@ IMPORTANT:
   - "active" for currently relevant but more temporary memories
   - "ambient" for lower-priority fragments
 - Treat repeated confessions, direct affection, explicit "I like/love you", relationship confirmation, or clear emotional demands toward the character as key relationship nodes. These should usually be stored as "memory_focus": "relationship" and "memory_tier": "core".
+- Choose "source_context" and "scene_tag" from the source prefix: private_chat, group_chat, commercial_street, moment, diary, external_app, or unknown.
+- For city/commercial-street logs, output source_context="commercial_street" and scene_tag="commercial_street"; do not rewrite the character's city action as a User action.
 
 Importance scale:
 - 1-3: Casual preferences, routine activities
@@ -2740,7 +3140,9 @@ Output exactly in this JSON format (and nothing else):
     "relationships": ["..."] or [{"summary":"...","target":"...","change":"..."}],
     "items": ["..."],
     "emotion": "...",
-    "importance": <number 1-10>
+    "importance": <number 1-10>,
+    "source_context": "private_chat | group_chat | commercial_street | moment | diary | external_app | unknown",
+    "scene_tag": "private_chat | group_chat | commercial_street | moment | diary | external_app | unknown"
   }
 ]`;
 
@@ -2799,7 +3201,7 @@ Output exactly in this JSON format (and nothing else):
         const privateMsgs = db.getVisibleMessagesSince(character.id, sinceMs);
         const activityEntries = privateMsgs.map((m) => ({
             timestamp: m.timestamp || 0,
-            text: `[Private Chat] ${m.role === 'user' ? 'User' : character.name}: ${m.content}`
+            text: `[Private Chat][private_chat] ${m.role === 'user' ? 'User' : character.name}: ${m.content}`
         }));
 
         // 2. Group messages
@@ -2811,7 +3213,7 @@ Output exactly in this JSON format (and nothing else):
                     const sName = m.sender_id === 'user' ? 'User' : (m.sender_name || 'Unknown');
                     activityEntries.push({
                         timestamp: m.timestamp || 0,
-                        text: `[Group Chat: ${g.name}] ${sName}: ${m.content}`
+                        text: `[Group Chat: ${g.name}][group_chat] ${sName}: ${m.content}`
                     });
                 });
             }
@@ -2824,7 +3226,7 @@ Output exactly in this JSON format (and nothing else):
                 const author = m.character_id === 'user' ? 'User' : (db.getCharacter(m.character_id)?.name || m.character_id);
                 activityEntries.push({
                     timestamp: m.created_at || m.timestamp || 0,
-                    text: `[Moment by ${author}] ${m.content}`
+                    text: `[Moment][moment] ${author}: ${m.content}`
                 });
             });
         }
@@ -2841,7 +3243,7 @@ Output exactly in this JSON format (and nothing else):
                         recentLogs.forEach((l) => {
                             activityEntries.push({
                                 timestamp: l.timestamp || 0,
-                                text: `[City Activity] ${l.message}`
+                                text: `[City Activity][commercial_street] ${character.name}: ${l.message}`
                             });
                         });
                     }
@@ -2857,6 +3259,7 @@ Output exactly in this JSON format (and nothing else):
 
         const engineContextWrapper = { getUserDb, getMemory: () => getMemory(userId) };
         const universalResult = await buildUniversalContext(engineContextWrapper, character, '', false);
+        const subjectRules = buildMemorySubjectRules(character, 'mixed');
 
         const extractionPrompt = `[全局世界观与前情提要]
 ${universalResult?.preamble || ''}
@@ -2867,6 +3270,8 @@ This includes private chats with User, group chats, social media moments, and pe
 Identify noteworthy events, facts, relationship developments, or emotional shifts worth remembering long-term.
 Return a structured JSON ARRAY of memory objects.
 
+${subjectRules}
+
 IMPORTANT: Even these count as valid memories:
 - Preferences expressed
 - Daily activities or plans mentioned
@@ -2874,6 +3279,8 @@ IMPORTANT: Even these count as valid memories:
 - New information shared
 - Jokes, teasing, or tone shifts
 - Routine city activity logs should usually be skipped unless they affect emotion, relationships, scarcity, safety, or future plans.
+- Choose "source_context" and "scene_tag" from the source prefix: private_chat, group_chat, commercial_street, moment, diary, external_app, or unknown.
+- For city/commercial-street logs, output source_context="commercial_street" and scene_tag="commercial_street"; do not rewrite the character's city action as a User action.
 
 Importance scale:
 - 1-3: Casual preferences, routine activities
@@ -2911,7 +3318,9 @@ Output exactly in this JSON format (and nothing else):
     "relationships": ["..."] or [{"summary":"...","target":"...","change":"..."}],
     "items": ["..."],
     "emotion": "...",
-    "importance": <number 1-10>
+    "importance": <number 1-10>,
+    "source_context": "private_chat | group_chat | commercial_street | moment | diary | external_app | unknown",
+    "scene_tag": "private_chat | group_chat | commercial_street | moment | diary | external_app | unknown"
   }
 ]
 `;
@@ -2962,25 +3371,172 @@ Output exactly in this JSON format (and nothing else):
         return 0;
     }
 
-    async function sweepOverflowMemories(character) {
+    function normalizeSweepPool(pool = 'auto') {
+        const normalized = String(pool || 'auto').trim().toLowerCase();
+        if (['private', 'private_chat', 'chat'].includes(normalized)) return 'private';
+        if (['group', 'group_chat'].includes(normalized)) return 'group';
+        if (['city', 'commercial_street', 'commercial', 'street'].includes(normalized)) return 'city';
+        return 'auto';
+    }
+
+    function getSweepPoolMeta(pool = 'private') {
+        if (pool === 'group') {
+            return {
+                label: 'group chat',
+                contextLabel: 'group chats',
+                source_context: 'group_chat',
+                scene_tag: 'group_chat',
+                debugContext: 'memory_sweep_group'
+            };
+        }
+        if (pool === 'city') {
+            return {
+                label: 'commercial street',
+                contextLabel: 'city / commercial-street activity logs',
+                source_context: 'commercial_street',
+                scene_tag: 'commercial_street',
+                debugContext: 'memory_sweep_city'
+            };
+        }
+        return {
+            label: 'private chat',
+            contextLabel: 'private chats',
+            source_context: 'private_chat',
+            scene_tag: 'private_chat',
+            debugContext: 'memory_sweep_private'
+        };
+    }
+
+    function getSweepPoolCounts(db, character, sweepLimit = 30) {
+        const privateWindow = character.context_msg_limit || 60;
+        const groups = typeof db.getGroups === 'function'
+            ? db.getGroups().filter(g => g.members.some(m => m.member_id === character.id))
+            : [];
+        let groupCount = 0;
+        if (typeof db.countOverflowGroupMessages === 'function') {
+            for (const g of groups) {
+                groupCount += Number(db.countOverflowGroupMessages(g.id, g.inject_limit ?? 5) || 0);
+            }
+        }
+        return {
+            private: typeof db.countOverflowMessages === 'function'
+                ? Number(db.countOverflowMessages(character.id, privateWindow) || 0)
+                : 0,
+            group: groupCount,
+            city: db.city && typeof db.city.countOverflowCityLogs === 'function'
+                ? Number(db.city.countOverflowCityLogs(character.id, 0) || 0)
+                : 0,
+            limit: sweepLimit
+        };
+    }
+
+    function resolveSweepPool(db, character, requestedPool, sweepLimit) {
+        const normalized = normalizeSweepPool(requestedPool);
+        if (normalized !== 'auto') return normalized;
+        const counts = getSweepPoolCounts(db, character, sweepLimit);
+        const ranked = ['private', 'group', 'city']
+            .map(pool => ({ pool, count: Number(counts[pool] || 0) }))
+            .sort((a, b) => b.count - a.count);
+        return ranked[0]?.count > 0 ? ranked[0].pool : 'private';
+    }
+
+    function collectSweepPoolEntries(db, character, pool, sweepLimit) {
+        const meta = getSweepPoolMeta(pool);
+        const privateMsgs = [];
+        const groupMsgIds = [];
+        const cityLogIds = [];
+        const activityEntries = [];
+        if (pool === 'private') {
+            const privateWindow = character.context_msg_limit || 60;
+            const rows = db.getOverflowMessages(character.id, privateWindow, sweepLimit);
+            for (const m of rows) {
+                privateMsgs.push(m);
+                activityEntries.push({
+                    id: m.id,
+                    timestamp: Number(m.timestamp || 0),
+                    kind: 'private',
+                    role: m.role,
+                    text: `[Private][${formatAbsoluteTimestamp(m.timestamp)}] ${m.role === 'user' ? 'User' : character.name}: ${m.content}`,
+                    source_message_ids_json: [String(m.id)],
+                    source_context: meta.source_context,
+                    scene_tag: meta.scene_tag
+                });
+            }
+        } else if (pool === 'group') {
+            const groups = db.getGroups().filter(g => g.members.some(m => m.member_id === character.id));
+            const candidates = [];
+            for (const g of groups) {
+                const groupWindow = g.inject_limit ?? 5;
+                const msgs = db.getOverflowGroupMessages(g.id, groupWindow, sweepLimit);
+                for (const m of msgs) {
+                    candidates.push({ group: g, message: m });
+                }
+            }
+            candidates
+                .sort((a, b) => Number(a.message.timestamp || 0) - Number(b.message.timestamp || 0))
+                .slice(0, sweepLimit)
+                .forEach(({ group, message }) => {
+                    groupMsgIds.push(message.id);
+                    const speaker = message.sender_id === 'user' ? 'User' : (message.sender_name || 'Unknown');
+                    activityEntries.push({
+                        id: message.id,
+                        timestamp: Number(message.timestamp || 0),
+                        kind: 'group',
+                        role: message.sender_id === 'user' ? 'user' : 'character',
+                        groupName: group.name || '',
+                        text: `[Group:${group.name || 'Unknown'}][${formatAbsoluteTimestamp(message.timestamp)}] ${speaker}: ${message.content}`,
+                        source_message_ids_json: [`group:${message.id}`],
+                        source_context: meta.source_context,
+                        scene_tag: meta.scene_tag
+                    });
+                });
+        } else if (pool === 'city' && db.city && typeof db.city.getOverflowCityLogs === 'function') {
+            const cityLogs = db.city.getOverflowCityLogs(character.id, 0, sweepLimit);
+            for (const log of cityLogs) {
+                cityLogIds.push(log.id);
+                activityEntries.push({
+                    id: `city:${log.id}`,
+                    timestamp: Number(log.timestamp || 0),
+                    kind: 'city',
+                    role: 'character',
+                    text: `[City:${String(log.action_type || 'ACTION')}][${formatAbsoluteTimestamp(log.timestamp)}][location=${log.location || ''}] ${character.name}: ${log.content}`,
+                    source_message_ids_json: [`city:${log.id}`],
+                    source_context: meta.source_context,
+                    scene_tag: meta.scene_tag
+                });
+            }
+        }
+        activityEntries.sort((a, b) => {
+            const tsDelta = Number(a.timestamp || 0) - Number(b.timestamp || 0);
+            if (tsDelta !== 0) return tsDelta;
+            return String(a.id || '').localeCompare(String(b.id || ''));
+        });
+        return { activityEntries, privateMsgs, groupMsgIds, cityLogIds, meta };
+    }
+
+    async function sweepOverflowMemories(character, options = {}) {
+        const db = getDb();
+        const sweepLimit = character.sweep_limit || 30;
+        const sweepPool = resolveSweepPool(db, character, options.pool || options.scope || options.source_context, sweepLimit);
         const sweepKey = String(character.id || '');
-        const lastRunAt = Number(character?.sweep_last_run_at || 0);
+        const poolCooldownKey = `${sweepKey}:${sweepPool}`;
+        const lastRunAt = Number(sweepPoolCooldowns.get(poolCooldownKey) || 0);
         const now = Date.now();
 
         if (activeSweepJobs.has(sweepKey)) {
-            const error = 'Another long-term memory sweep is already running.';
-            console.log(`[Memory] Sweep skipped for ${character.name}: another sweep is already running.`);
+            const error = 'Another long-term memory sweep is already running for this character.';
+            console.log(`[Memory] Sweep skipped for ${character.name}/${sweepPool}: another sweep is already running.`);
             updateSweepStatus(character.id, {
                 sweep_last_error: error,
                 sweep_last_saved_count: 0
             });
-            return { status: 'running', savedCount: 0, error };
+            return { status: 'running', savedCount: 0, pool: sweepPool, error };
         }
 
         if (lastRunAt > 0 && (now - lastRunAt) < SWEEP_COOLDOWN_MS) {
             const remainingSeconds = Math.ceil((SWEEP_COOLDOWN_MS - (now - lastRunAt)) / 1000);
-            const error = `Memory sweep cooldown active. Try again in ${remainingSeconds}s.`;
-            console.log(`[Memory] Sweep skipped for ${character.name}: cooldown active (${remainingSeconds}s remaining).`);
+            const error = `Memory sweep cooldown active for ${sweepPool}. Try again in ${remainingSeconds}s.`;
+            console.log(`[Memory] Sweep skipped for ${character.name}/${sweepPool}: cooldown active (${remainingSeconds}s remaining).`);
             updateSweepStatus(character.id, {
                 sweep_last_error: error,
                 sweep_last_saved_count: 0
@@ -2988,12 +3544,14 @@ Output exactly in this JSON format (and nothing else):
             return {
                 status: 'cooldown',
                 savedCount: 0,
+                pool: sweepPool,
                 error,
                 remainingSeconds
             };
         }
 
         activeSweepJobs.add(sweepKey);
+        sweepPoolCooldowns.set(poolCooldownKey, now);
         const memoryConfig = resolveMemoryModelConfig(character);
         updateSweepStatus(character.id, {
             sweep_last_run_at: now,
@@ -3005,89 +3563,37 @@ Output exactly in this JSON format (and nothing else):
                 sweep_last_error: 'Memory sweep model is not configured.',
                 sweep_last_saved_count: 0
             });
-            return 0;
+            activeSweepJobs.delete(sweepKey);
+            return { status: 'failed', savedCount: 0, pool: sweepPool, error: 'Memory sweep model is not configured.' };
         }
 
-        const sweepLimit = character.sweep_limit || 30;
-        const privateWindow = character.context_msg_limit || 60;
-        const db = getDb();
-        const privateMsgs = db.getOverflowMessages(character.id, privateWindow, sweepLimit);
-        const groupMsgIds = [];
-        const cityLogIds = [];
-        const activityEntries = [];
-        const groups = db.getGroups().filter(g => g.members.some(m => m.member_id === character.id));
-
-        for (const m of privateMsgs) {
-            activityEntries.push({
-                id: m.id,
-                timestamp: Number(m.timestamp || 0),
-                kind: 'private',
-                role: m.role,
-                text: `[Private][${formatAbsoluteTimestamp(m.timestamp)}] ${m.role === 'user' ? 'User' : character.name}: ${m.content}`,
-                source_message_ids_json: [String(m.id)]
-            });
-        }
-
-        for (const g of groups) {
-            const groupWindow = g.inject_limit ?? 5;
-            const msgs = db.getOverflowGroupMessages(g.id, groupWindow, sweepLimit);
-            for (const m of msgs) {
-                groupMsgIds.push(m.id);
-                const speaker = m.sender_id === 'user' ? 'User' : (m.sender_name || 'Unknown');
-                activityEntries.push({
-                    id: m.id,
-                    timestamp: Number(m.timestamp || 0),
-                    kind: 'group',
-                    role: m.sender_id === 'user' ? 'user' : 'character',
-                    groupName: g.name || '',
-                    text: `[Group:${g.name || 'Unknown'}][${formatAbsoluteTimestamp(m.timestamp)}] ${speaker}: ${m.content}`,
-                    source_message_ids_json: [String(m.id)]
-                });
-            }
-        }
-
-        if (db.city && typeof db.city.getOverflowCityLogs === 'function') {
-            const cityLogs = db.city.getOverflowCityLogs(character.id, 0, sweepLimit);
-            for (const log of cityLogs) {
-                cityLogIds.push(log.id);
-                activityEntries.push({
-                    id: `city:${log.id}`,
-                    timestamp: Number(log.timestamp || 0),
-                    kind: 'city',
-                    role: 'character',
-                    text: `[City:${String(log.action_type || 'ACTION')}][${formatAbsoluteTimestamp(log.timestamp)}][location=${log.location || ''}] ${character.name}: ${log.content}`,
-                    source_message_ids_json: [`city:${log.id}`]
-                });
-            }
-        }
-
-        activityEntries.sort((a, b) => {
-            const tsDelta = Number(a.timestamp || 0) - Number(b.timestamp || 0);
-            if (tsDelta !== 0) return tsDelta;
-            return String(a.id || '').localeCompare(String(b.id || ''));
-        });
+        const { activityEntries, privateMsgs, groupMsgIds, cityLogIds, meta } = collectSweepPoolEntries(db, character, sweepPool, sweepLimit);
 
             if (activityEntries.length === 0) {
                 updateSweepStatus(character.id, {
                     sweep_last_error: '',
                     sweep_last_saved_count: 0
                 });
-                return { status: 'done', savedCount: 0 };
+                activeSweepJobs.delete(sweepKey);
+                return { status: 'done', savedCount: 0, pool: sweepPool, consumedCount: 0 };
             }
 
         const batchSize = Math.max(12, Math.min(30, Math.ceil(sweepLimit / 3)));
         const totalBatches = Math.ceil(activityEntries.length / batchSize);
         const parsedMemories = [];
         let rollingSummary = '';
+        const subjectRules = buildMemorySubjectRules(character, meta.source_context);
 
         try {
             for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
                 const batchEntries = activityEntries.slice(batchIndex * batchSize, (batchIndex + 1) * batchSize);
                 const batchTimeMeta = buildSourceTimeMeta(batchEntries);
                 const batchText = batchEntries.map(entry => entry.text).join('\n') || 'No messages.';
-                const extractionPrompt = `You are a memory aggregation assistant. Analyze batch ${batchIndex + 1} of ${totalBatches} from ${character.name}'s overflowed private chats, group chats, and city activity logs.
+                const extractionPrompt = `You are a memory aggregation assistant. Analyze batch ${batchIndex + 1} of ${totalBatches} from ${character.name}'s overflowed ${meta.contextLabel}.
 Carry forward the important context from previous batches using the rolling summary, then refine it with the current batch.
 Return a structured JSON object with both an updated rolling summary and 0 to 4 strong memory candidates.
+
+${subjectRules}
 
 CRITICAL:
 - Output only valid JSON.
@@ -3113,6 +3619,8 @@ CRITICAL:
 - Write each memory "content" as 1 to 2 fuller Chinese sentences with the key detail.
 - Treat "event" as an internal short tag only.
 - Avoid bland labels in "summary" such as "Financial transfer", "Meta-commentary conflict", "Preference update".
+- This sweep is source-separated. Every emitted memory belongs to source_context="${meta.source_context}" and scene_tag="${meta.scene_tag}". Do not blend in other pools.
+- Never write "用户..." for a commercial_street / city action unless the source line explicitly names User/Nana as the actor.
 - City activity logs are routine life traces. Do not store them verbatim.
 - Only extract a city-derived memory if several logs together reveal a durable arc, major consequence, unusual event, relationship-relevant action, severe health/money risk, or a plan that should affect future behavior.
 - If a city log merely describes eating, walking, working, going home, browsing, or resting, keep it in the rolling summary at most; do not emit it as a memory candidate.
@@ -3147,13 +3655,16 @@ Output exactly in this JSON format (and nothing else):
       "items": ["..."],
       "emotion": "...",
       "importance": <number 1-10>,
-      "surprise_score": <number 1-10>
+      "surprise_score": <number 1-10>,
+      "source_context": "${meta.source_context}",
+      "scene_tag": "${meta.scene_tag}"
     }
   ]
 }`;
 
                 recordMemoryDebug(character, 'input', extractionPrompt, {
                     context_type: 'memory_sweep',
+                    sweep_pool: sweepPool,
                     batch_index: batchIndex + 1,
                     total_batches: totalBatches,
                     rolling_summary: rollingSummary || '',
@@ -3227,6 +3738,9 @@ Output exactly in this JSON format (and nothing else):
                 for (const mem of batchMemories) {
                     parsedMemories.push({
                         ...mem,
+                        source_context: meta.source_context,
+                        scene_tag: meta.scene_tag,
+                        source_app: '',
                         source_started_at: batchTimeMeta.source_started_at,
                         source_ended_at: batchTimeMeta.source_ended_at,
                         source_time_text: batchTimeMeta.source_time_text,
@@ -3240,8 +3754,8 @@ Output exactly in this JSON format (and nothing else):
             for (const mem of parsedMemories) {
                 if (mem && mem.importance >= 3 && mem.event) {
                     mem.surprise_score = mem.surprise_score || 5;
-                    await saveExtractedMemory(character.id, mem, null);
-                    savedCount++;
+                    const memoryId = await saveExtractedMemory(character.id, mem, null);
+                    if (memoryId) savedCount++;
                 }
             }
 
@@ -3252,21 +3766,22 @@ Output exactly in this JSON format (and nothing else):
             }
 
             updateSweepStatus(character.id, {
-                sweep_last_error: savedCount > 0 ? '' : 'Sweep completed but no strong memories were extracted.',
+                sweep_last_error: savedCount > 0 ? '' : `${meta.label} sweep completed but no strong memories were extracted.`,
                 sweep_last_success_at: savedCount > 0 ? Date.now() : character.sweep_last_success_at || 0,
                 sweep_last_saved_count: savedCount
             });
-            console.log(`[Memory] Sweep completed for ${character.name}, saved ${savedCount} memories across ${totalBatches} batch(es).`);
-            return { status: 'done', savedCount };
+            console.log(`[Memory] ${meta.label} sweep completed for ${character.name}, saved ${savedCount} memories across ${totalBatches} batch(es).`);
+            return { status: 'done', savedCount, pool: sweepPool, consumedCount: activityEntries.length };
         } catch (e) {
             updateSweepStatus(character.id, {
                 sweep_last_error: e.message || 'Memory sweep failed.',
                 sweep_last_saved_count: 0
             });
-            console.error(`[Memory] Sweep failed for ${character.id}:`, e.message);
+            console.error(`[Memory] ${sweepPool} sweep failed for ${character.id}:`, e.message);
             return {
                 status: 'failed',
                 savedCount: 0,
+                pool: sweepPool,
                 error: e.message || 'Memory sweep failed.'
             };
         } finally {
@@ -3274,10 +3789,11 @@ Output exactly in this JSON format (and nothing else):
         }
     }
 
-    async function saveExtractedMemory(characterId, memoryData, groupId = null) {
+    async function saveExtractedMemory(characterId, memoryData, groupId = null, options = {}) {
+        const saveOptions = options && typeof options === 'object' ? options : {};
         try {
             const normalizedMemory = normalizeMemoryPayload(memoryData, { characterId });
-            if (isRoutineCityMemory(normalizedMemory) && Number(normalizedMemory.importance || 0) <= 3) {
+            if (!saveOptions.allowRoutineCity && isRoutineCityMemory(normalizedMemory) && Number(normalizedMemory.importance || 0) <= 3) {
                 console.log(`[Memory] Skipped routine city memory for ${characterId}: ${normalizedMemory.summary}`);
                 return null;
             }
@@ -3286,11 +3802,17 @@ Output exactly in this JSON format (and nothing else):
 
             // 1. Generate embedding for the normalized memory text
             const textToEmbed = buildMemoryEmbeddingText(normalizedMemory);
-            const embeddingArray = await getEmbedding(textToEmbed);
-
-            // Convert JS array to Buffer for SQLite storage (optional, vectra uses its own file)
-            const embeddingBuffer = Buffer.from(new Float32Array(embeddingArray).buffer);
-            normalizedMemory.embedding = embeddingBuffer;
+            let embeddingArray = null;
+            try {
+                embeddingArray = await getEmbedding(textToEmbed);
+                // Convert JS array to Buffer for SQLite storage (optional, vectra uses its own file)
+                normalizedMemory.embedding = Buffer.from(new Float32Array(embeddingArray).buffer);
+            } catch (e) {
+                if (!saveOptions.allowUnindexed) {
+                    throw e;
+                }
+                console.warn(`[Memory] Embedding unavailable; storing unindexed memory for ${characterId}:`, e.message);
+            }
 
             const existing = normalizedMemory.dedupe_key && db.getMemoryByDedupeKey
                 ? db.getMemoryByDedupeKey(characterId, normalizedMemory.dedupe_key)
@@ -3308,8 +3830,12 @@ Output exactly in this JSON format (and nothing else):
             } else {
                 memoryId = db.addMemory(characterId, normalizedMemory, groupId);
             }
+            const storedMemory = (memoryId && typeof db.getMemory === 'function')
+                ? (db.getMemory(memoryId) || normalizedMemory)
+                : normalizedMemory;
+            const storedIsNewLibrary = hasNewLibrarySummary(storedMemory);
 
-            if (await canUseQdrant()) {
+            if (embeddingArray && await canUseQdrant()) {
                 try {
                     await qdrant.upsertMemoryPoint(userId, {
                         id: String(memoryId),
@@ -3317,23 +3843,30 @@ Output exactly in this JSON format (and nothing else):
                         payload: {
                             memory_id: memoryId,
                             character_id: String(characterId),
-                            group_id: groupId || '',
-                            memory_type: normalizedMemory.memory_type || 'event',
-                            memory_tier: normalizedMemory.memory_tier || 'ambient',
-                            memory_focus: normalizedMemory.memory_focus || 'general',
-                            importance: normalizedMemory.importance || 5,
-                            created_at: existing?.created_at || Date.now(),
-                            time: normalizedMemory.time || '',
-                            is_archived: Number(normalizedMemory.is_archived || 0),
-                            dedupe_key: normalizedMemory.dedupe_key || '',
+                            group_id: storedMemory.group_id || groupId || '',
+                            memory_type: storedMemory.memory_type || normalizedMemory.memory_type || 'event',
+                            memory_tier: storedMemory.memory_tier || normalizedMemory.memory_tier || 'ambient',
+                            memory_focus: storedMemory.memory_focus || normalizedMemory.memory_focus || 'general',
+                            importance: storedMemory.importance || normalizedMemory.importance || 5,
+                            created_at: storedMemory.created_at || existing?.created_at || Date.now(),
+                            updated_at: storedMemory.updated_at || Date.now(),
+                            time: storedMemory.time || normalizedMemory.time || '',
+                            is_archived: Number(storedMemory.is_archived || normalizedMemory.is_archived || 0),
+                            dedupe_key: storedMemory.dedupe_key || normalizedMemory.dedupe_key || '',
                             retrieval_weight: retrievalWeight,
-                            summary: normalizedMemory.summary || '',
-                            content: normalizedMemory.content || '',
-                            location: normalizedMemory.location || '',
-                            source_started_at: Number(normalizedMemory.source_started_at || 0),
-                            source_ended_at: Number(normalizedMemory.source_ended_at || 0),
-                            source_time_text: normalizedMemory.source_time_text || '',
-                            source_message_count: Number(normalizedMemory.source_message_count || 0)
+                            summary: storedMemory.consolidation_summary || storedMemory.summary || normalizedMemory.summary || '',
+                            content: storedMemory.consolidation_summary || storedMemory.content || normalizedMemory.content || '',
+                            consolidation_summary: storedMemory.consolidation_summary || normalizedMemory.consolidation_summary || normalizedMemory.summary || '',
+                            consolidation_key: storedMemory.consolidation_key || normalizedMemory.consolidation_key || '',
+                            location: storedMemory.location || normalizedMemory.location || '',
+                            source_started_at: Number(storedMemory.source_started_at || normalizedMemory.source_started_at || 0),
+                            source_ended_at: Number(storedMemory.source_ended_at || normalizedMemory.source_ended_at || 0),
+                            source_time_text: storedMemory.source_time_text || normalizedMemory.source_time_text || '',
+                            source_message_count: Number(storedMemory.source_message_count || normalizedMemory.source_message_count || 0),
+                            source_memory_ids: String(memoryId),
+                            memory_library_source: storedIsNewLibrary ? 'new' : 'legacy_backup',
+                            memory_index_version: MEMORY_RETRIEVAL_SOURCE_VERSION,
+                            memory_index_granularity: storedIsNewLibrary ? MEMORY_INDEX_GRANULARITY : 'legacy_backup_row_v1'
                         }
                     });
                 } catch (e) {
@@ -3343,7 +3876,7 @@ Output exactly in this JSON format (and nothing else):
             }
 
             // 3. Save to Vectra store as a fallback / local cache
-            if (LOCAL_VECTOR_INDEX_ENABLED) {
+            if (embeddingArray && LOCAL_VECTOR_INDEX_ENABLED) {
                 const index = await getVectorIndex(userId, characterId);
                 if (existing && typeof index.deleteItem === 'function') {
                     try {
@@ -3360,12 +3893,15 @@ Output exactly in this JSON format (and nothing else):
                         memory_tier: normalizedMemory.memory_tier || 'ambient',
                         memory_focus: normalizedMemory.memory_focus || 'general',
                         dedupe_key: normalizedMemory.dedupe_key || '',
-                        retrieval_weight: retrievalWeight
+                        retrieval_weight: retrievalWeight,
+                        memory_library_source: storedIsNewLibrary ? 'new' : 'legacy_backup',
+                        memory_index_version: MEMORY_RETRIEVAL_SOURCE_VERSION,
+                        memory_index_granularity: storedIsNewLibrary ? MEMORY_INDEX_GRANULARITY : 'legacy_backup_row_v1'
                     }
                 });
             }
 
-            console.log(`[Memory] Stored memory for ${characterId}: ${normalizedMemory.summary} `);
+            console.log(`[Memory] Stored${embeddingArray ? '' : ' unindexed'} memory for ${characterId}: ${normalizedMemory.summary} `);
 
             // Broadcast real-time update to connected clients
             if (globalWsClientsResolver) {
@@ -3377,14 +3913,21 @@ Output exactly in this JSON format (and nothing else):
                     });
                 }
             }
+            return memoryId;
         } catch (e) {
             console.error(`[Memory] Save failed for ${characterId}: `, e.message);
+            if (saveOptions.throwOnError) {
+                throw e;
+            }
+            return null;
         }
     }
 
     const instance = {
         wipeIndex,
         rebuildIndex,
+        deleteMemoryIndexEntries,
+        refreshMemoryIndexEntries,
         searchMemories,
         extractMemoryFromContext,
         extractHiddenState,

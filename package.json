@@ -14,5 +14,24 @@
     "docx": "^9.6.1",
     "iconv-lite": "^0.7.2",
     "ws": "^8.19.0"
-  }
+  },
+  "version": "1.0.0",
+  "description": "ChatPulse 是一个本地优先的 AI 社交模拟应用，前端使用 React，后端使用 Express，主存储是 SQLite，并支持接入 Qdrant 做向量记忆检索。",
+  "main": "e2e.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NANA3333333/ChatPluse.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/NANA3333333/ChatPluse/issues"
+  },
+  "homepage": "https://github.com/NANA3333333/ChatPluse#readme"
 }

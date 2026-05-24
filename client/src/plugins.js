@@ -2,7 +2,8 @@ import AdminDashboard from './components/AdminDashboard';
 import CityLog from './plugins/city/CityLog';
 import HousingSocialPanel from './plugins/socialHousing/HousingSocialPanel';
 import McpLabPanel from './plugins/mcpLab/McpLabPanel';
-import { Shield, Activity, Building2, FlaskConical } from 'lucide-react';
+import PixelWorldPanel from './plugins/pixelWorld/PixelWorldPanel';
+import { Shield, Activity, Building2, FlaskConical, Map } from 'lucide-react';
 
 export const plugins = [
   {
@@ -31,6 +32,15 @@ export const plugins = [
     icon: Building2,
     component: HousingSocialPanel,
     color: '#f97316',
+    position: 'top'
+  },
+  {
+    id: 'pixel_world',
+    name_en: 'Pixel World',
+    name_zh: '\u50cf\u7d20\u5b9e\u88c5',
+    icon: Map,
+    component: PixelWorldPanel,
+    color: '#f58bb8',
     position: 'top'
   },
   {

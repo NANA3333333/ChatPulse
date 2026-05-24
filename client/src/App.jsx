@@ -9,9 +9,10 @@ import MomentsFeed from './components/MomentsFeed';
 import SettingsPanel from './components/SettingsPanel';
 import ChatSettingsDrawer from './components/ChatSettingsDrawer';
 import AddCharacterModal from './components/AddCharacterModal';
+import MemoryLibraryPanel from './components/MemoryLibraryPanel';
 
 import './App.css';
-import { MessageSquare, Users, Compass, Settings, UserPlus, Globe, UsersRound, LogOut } from 'lucide-react';
+import { MessageSquare, Users, Compass, Settings, UserPlus, Globe, UsersRound, LogOut, Database, LibraryBig } from 'lucide-react';
 import { plugins } from './plugins';
 import { useLanguage } from './LanguageContext';
 import { useAuth } from './AuthContext';
@@ -79,7 +80,6 @@ function App() {
 
   // Use a ref to track which incoming messages we've already processed for unread badges and sounds
   const processedMessagesRef = useRef(new Set());
-  const groupMsgSeqRef = useRef(0); // Unique sequence counter to prevent React batching from swallowing rapid WS group_message events
   const cityRefreshRef = useRef(null);
   const contactsRefreshRef = useRef(null);
 
@@ -264,7 +264,7 @@ function App() {
       };
 
       ws.onerror = () => {
-        try { ws.close(); } catch (_) { }
+        ws.close();
       };
 
       ws.onmessage = (event) => {
@@ -318,6 +318,8 @@ function App() {
           } else if (msg.type === 'memory_update') {
             console.log('[WS] Memory update received for character:', msg.characterId);
             window.dispatchEvent(new CustomEvent('memory_update', { detail: { characterId: msg.characterId } }));
+          } else if (msg.type === 'memory_maintenance_progress') {
+            window.dispatchEvent(new CustomEvent('memory_maintenance_progress', { detail: msg.data || {} }));
           } else if (msg.type === 'city_update') {
             window.dispatchEvent(new CustomEvent('city_update', { detail: msg }));
             scheduleContactsRefresh();
@@ -484,6 +486,9 @@ function App() {
           <button className={`nav-icon ${activeTab === 'discover' ? 'active' : ''}`} onClick={() => { setActiveTab('discover'); setHasNewMoments(false); }} title={lang === 'en' ? 'Discover — Moments feed' : '发现 — 朋友圈动态'} style={{ position: 'relative' }}>
             <Compass size={24} />
             {hasNewMoments && <div style={{ position: 'absolute', top: '10px', right: '10px', width: '8px', height: '8px', backgroundColor: 'var(--danger)', borderRadius: '50%' }} />}
+          </button>
+          <button className={`nav-icon ${activeTab === 'memory_library' ? 'active' : ''}`} onClick={() => setActiveTab('memory_library')} title={lang === 'en' ? 'Memory Library — Classification and forgetting' : '记忆库 — 分类与遗忘曲线'}>
+            <LibraryBig size={24} />
           </button>
         </div>
         <div className="nav-icons-bottom">
@@ -655,6 +660,14 @@ function App() {
               </div>
             </div>
           )}
+          {activeTab === 'memory_library' && (
+            <div className="contact-item active">
+              <Database size={24} style={{ marginRight: '10px', color: 'var(--accent-color)' }} />
+              <div className="contact-info">
+                <div className="contact-name">{lang === 'en' ? 'Memory Library' : '记忆库'}</div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -687,6 +700,8 @@ function App() {
             <div style={{ flex: 1, height: '100%', overflowY: 'auto', minWidth: 0, minHeight: 0 }}>
               <MomentsFeed apiUrl={API_URL} userProfile={effectiveUser} onBack={() => setActiveTab('chats')} />
             </div>
+          ) : activeTab === 'memory_library' ? (
+            <MemoryLibraryPanel apiUrl={API_URL} contacts={contacts} />
           ) : activeContactId && activeTab === 'chats' ? (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'row', height: '100%', minWidth: 0 }}>
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>

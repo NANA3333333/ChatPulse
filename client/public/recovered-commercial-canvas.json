@@ -1,0 +1,16 @@
+{
+  "segmentCount": 3,
+  "segment": {
+    "width": 2048,
+    "height": 1105
+  },
+  "backgroundColor": "#f4ead8",
+  "loop": {
+    "enabled": true,
+    "axis": "x",
+    "width": 6144,
+    "seam": "left-right",
+    "scrollPreview": "triple-buffer",
+    "wrap": "((x % width) + width) % width"
+  }
+}

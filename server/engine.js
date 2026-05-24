@@ -237,10 +237,16 @@ function buildRagPlannerMessages({ recentHistory = [], latestUserMessage = '', c
 
     const messages = [{ role: 'system', content: systemParts.join('\n') }];
     if (!quoteData && history.length > 0) messages.push(...history);
+    const stripHistorySpeakerPrefix = (text) => String(text || '').trim()
+        .replace(/^\[\d{4}[/-]\d{1,2}[/-]\d{1,2}\s+\d{1,2}:\d{2}(?::\d{2})?\]\s*[^:：]{1,40}[:：]\s*/, '')
+        .trim();
+    const normalizePlannerText = (text) => stripHistorySpeakerPrefix(text)
+        .replace(/\s+/g, ' ')
+        .trim();
     const lastHistoryMessage = history.length > 0 ? history[history.length - 1] : null;
     const latestAlreadyInHistory = !!latestUser
         && lastHistoryMessage?.role === 'user'
-        && String(lastHistoryMessage.content || '').trim() === latestUser;
+        && normalizePlannerText(lastHistoryMessage.content) === normalizePlannerText(latestUser);
     if (quoteData) {
         const transcriptLines = history.map((msg, index) => {
             const role = msg.role === 'assistant' ? 'ASSISTANT' : 'USER';

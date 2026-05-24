@@ -167,13 +167,22 @@ function init(app, context) {
                             const cityUnsummarizedCount = userDb.city && typeof userDb.city.countOverflowCityLogs === 'function'
                                 ? userDb.city.countOverflowCityLogs(char.id, 0)
                                 : 0;
-                            const maxPoolCount = Math.max(privateUnsummarizedCount, groupUnsummarizedCount, cityUnsummarizedCount);
+                            const duePools = [
+                                { pool: 'private', count: privateUnsummarizedCount },
+                                { pool: 'group', count: groupUnsummarizedCount },
+                                { pool: 'city', count: cityUnsummarizedCount }
+                            ].filter(item => item.count >= sweepLimit);
 
-                            if (maxPoolCount >= sweepLimit) {
-                                console.log(`[Scheduler] Threshold reached for ${char.name}. private=${privateUnsummarizedCount}, group=${groupUnsummarizedCount}, city=${cityUnsummarizedCount}, limit=${sweepLimit}. Triggering memory sweep.`);
-                                memory.sweepOverflowMemories(char).catch(err => {
-                                    console.error(`[Scheduler] Overflow sweep failed for ${char.name}:`, err);
-                                });
+                            for (const due of duePools) {
+                                console.log(`[Scheduler] ${due.pool} W pool reached for ${char.name}. private=${privateUnsummarizedCount}, group=${groupUnsummarizedCount}, city=${cityUnsummarizedCount}, limit=${sweepLimit}. Triggering ${due.pool} memory sweep.`);
+                                try {
+                                    const result = await memory.sweepOverflowMemories(char, { pool: due.pool });
+                                    if (result?.status === 'failed') {
+                                        console.error(`[Scheduler] ${due.pool} overflow sweep failed for ${char.name}:`, result.error || 'unknown error');
+                                    }
+                                } catch (err) {
+                                    console.error(`[Scheduler] ${due.pool} overflow sweep crashed for ${char.name}:`, err);
+                                }
                             }
                         }
                     }

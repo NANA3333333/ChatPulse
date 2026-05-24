@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect } from 'react';
-import { Trash2, RefreshCw, Wand2, X } from 'lucide-react';
+import { Trash2, RefreshCw, Wand2, Download, Upload, X } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 
 function MemoTable({ contact, apiUrl, onClose }) {
@@ -7,6 +7,12 @@ function MemoTable({ contact, apiUrl, onClose }) {
     const [memories, setMemories] = useState([]);
     const [loading, setLoading] = useState(false);
     const [isExtracting, setIsExtracting] = useState(false);
+    const [isImporting, setIsImporting] = useState(false);
+    const [isExporting, setIsExporting] = useState(false);
+    const importFileInputRef = React.useRef(null);
+    const authOnlyHeaders = {
+        'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`
+    };
 
     const fetchMemories = React.useCallback(() => {
         if (!contact) return;
@@ -90,21 +96,122 @@ function MemoTable({ contact, apiUrl, onClose }) {
         }
     };
 
+    const handleImportCharacterArchive = async (event) => {
+        if (!contact) return;
+        const file = event.target.files?.[0];
+        event.target.value = '';
+        if (!file) return;
+        if (!window.confirm(lang === 'en'
+            ? `Import this character archive into ${contact.name}?\n\nThis will replace chats, memories, moments, moment interactions, and diaries, then rebuild the Qdrant memory index.`
+            : `确定把这个角色包导入到 ${contact.name} 吗？\n\n这会覆盖当前角色的聊天记录、记忆、朋友圈及互动、日记，并重建 Qdrant 记忆索引。`)) return;
+
+        setIsImporting(true);
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('mode', 'replace');
+            const res = await fetch(`${apiUrl}/data/${contact.id}/import?mode=replace`, {
+                method: 'POST',
+                headers: authOnlyHeaders,
+                body: formData
+            });
+            const data = await res.json().catch(() => ({}));
+
+            if (!res.ok || !data?.success) {
+                const detail = data?.error || data?.errors?.[0]?.error || 'Unknown error';
+                alert(lang === 'en' ? `Import failed:\n${detail}` : `导入失败:\n${detail}`);
+                return;
+            }
+
+            const counts = data.imported || {};
+            const indexNote = data.rebuiltMemoryIndex
+                ? ''
+                : (lang === 'en' ? '\nMemory index rebuild needs attention.' : '\n记忆索引重建需要检查。');
+            alert(lang === 'en'
+                ? `Import complete. Messages: ${counts.messages || 0}, memories: ${counts.memories || 0}, moments: ${counts.moments || 0}, diaries: ${counts.diaries || 0}.${indexNote}`
+                : `导入完成。聊天 ${counts.messages || 0} 条，记忆 ${counts.memories || 0} 条，朋友圈 ${counts.moments || 0} 条，日记 ${counts.diaries || 0} 条。${indexNote}`);
+            window.dispatchEvent(new Event('refresh_contacts'));
+            window.location.reload();
+        } catch (e) {
+            console.error('Failed to import character archive:', e);
+            alert(lang === 'en' ? 'Failed to connect to the server while importing the character archive.' : '导入角色包时无法连接服务器。');
+        } finally {
+            setIsImporting(false);
+        }
+    };
+
+    const handleExportCharacterArchive = async () => {
+        if (!contact) return;
+        setIsExporting(true);
+        try {
+            const res = await fetch(`${apiUrl}/data/${contact.id}/export`, {
+                headers: authOnlyHeaders
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                alert(lang === 'en' ? `Export failed:\n${data?.error || res.statusText}` : `导出失败:\n${data?.error || res.statusText}`);
+                return;
+            }
+            const blob = await res.blob();
+            const disposition = res.headers.get('Content-Disposition') || '';
+            const match = disposition.match(/filename="?([^";]+)"?/i);
+            const fallbackName = `${contact.name || contact.id}_${contact.id}_character_export.json`;
+            const filename = match?.[1] || fallbackName;
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (e) {
+            console.error('Failed to export character archive:', e);
+            alert(lang === 'en' ? 'Failed to export character archive.' : '导出角色包失败。');
+        } finally {
+            setIsExporting(false);
+        }
+    };
+
     if (!contact) return null;
 
     console.log('MemoTable rendering:', { contact: contact?.name, memoriesLength: memories.length, loading });
+    const isBusy = isExporting || isImporting || isExtracting;
 
     return (
-        <div className="drawer-container memory-drawer">
+        <div className="drawer-container memory-drawer memory-table-drawer">
             <div className="memory-header">
                 <h3>{contact.name} {lang === 'en' ? "'s Memories" : '的记忆'}</h3>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <div className="memory-header-actions">
                     <button
-                        onClick={handleExtract}
-                        disabled={isExtracting}
-                        style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '4px 8px', backgroundColor: isExtracting ? '#ccc' : 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: '4px', cursor: isExtracting ? 'not-allowed' : 'pointer', fontSize: '13px' }}
+                        className="memory-action-btn"
+                        onClick={handleExportCharacterArchive}
+                        disabled={isBusy}
+                        title={lang === 'en' ? 'Export chats, memories, moments, diaries, and rebuildable Qdrant memory index data' : '导出聊天、记忆、朋友圈、日记，以及可重建 Qdrant 索引的记忆数据'}
                     >
-                        <Wand2 size={14} /> {isExtracting ? (lang === 'en' ? 'Extracting...' : '提取中...') : (lang === 'en' ? 'Extract Now' : '立即提取')}
+                        <Download size={14} /> {isExporting ? (lang === 'en' ? 'Exporting...' : '导出中...') : (lang === 'en' ? 'Export all' : '导出全部')}
+                    </button>
+                    <button
+                        className="memory-action-btn"
+                        onClick={() => importFileInputRef.current?.click()}
+                        disabled={isBusy}
+                        title={lang === 'en' ? 'Import a full character archive JSON and replace current data' : '导入完整角色包 JSON，并覆盖当前数据'}
+                    >
+                        <Upload size={14} /> {isImporting ? (lang === 'en' ? 'Importing...' : '导入中...') : (lang === 'en' ? 'Import all' : '导入全部')}
+                    </button>
+                    <input
+                        ref={importFileInputRef}
+                        type="file"
+                        accept=".json,application/json"
+                        style={{ display: 'none' }}
+                        onChange={handleImportCharacterArchive}
+                    />
+                    <button
+                        className="memory-action-btn"
+                        onClick={handleExtract}
+                        disabled={isBusy}
+                    >
+                        <Wand2 size={14} /> {isExtracting ? (lang === 'en' ? 'Extracting...' : '提取中...') : (lang === 'en' ? 'Extract' : '提取')}
                     </button>
                     <button className="icon-btn" onClick={fetchMemories} title={lang === 'en' ? "Refresh" : '刷新'}>
                         <RefreshCw size={16} />
@@ -116,9 +223,11 @@ function MemoTable({ contact, apiUrl, onClose }) {
             </div>
 
             <div className="memory-content">
-                {loading || isExtracting ? (
+                {loading || isExtracting || isImporting ? (
                     <p className="loading-text">
-                        {isExtracting
+                        {isImporting
+                            ? (lang === 'en' ? 'Importing character archive...' : '导入角色包中...')
+                            : isExtracting
                             ? (lang === 'en' ? 'Analyzing recent context...' : '分析最近的上下文...')
                             : (lang === 'en' ? 'Loading memories...' : '加载记忆中...')}
                     </p>

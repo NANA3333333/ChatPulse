@@ -130,7 +130,9 @@ async function ensureCollection(userId, vectorSize = DEFAULT_VECTOR_SIZE) {
             { field_name: 'created_at', field_schema: 'integer' },
             { field_name: 'importance', field_schema: 'integer' },
             { field_name: 'source_started_at', field_schema: 'integer' },
-            { field_name: 'source_ended_at', field_schema: 'integer' }
+            { field_name: 'source_ended_at', field_schema: 'integer' },
+            { field_name: 'memory_library_source', field_schema: 'keyword' },
+            { field_name: 'memory_index_version', field_schema: 'keyword' }
         ];
         for (const field of indexFields) {
             try {
@@ -192,6 +194,21 @@ async function deleteMemoryPoint(userId, pointId) {
     });
 }
 
+async function deleteMemoryPoints(userId, pointIds = []) {
+    const ids = Array.from(new Set((Array.isArray(pointIds) ? pointIds : [pointIds])
+        .map(id => String(id || '').trim())
+        .filter(Boolean)));
+    if (ids.length === 0) return { deleted: 0 };
+    const collectionName = await ensureCollection(userId);
+    await qdrantRequest(`/collections/${collectionName}/points/delete`, {
+        method: 'POST',
+        body: {
+            points: ids.map(normalizePointId)
+        }
+    });
+    return { deleted: ids.length };
+}
+
 async function deleteCharacterPoints(userId, characterId) {
     const collectionName = await ensureCollection(userId);
     await qdrantRequest(`/collections/${collectionName}/points/delete`, {
@@ -245,6 +262,7 @@ module.exports = {
     deleteCharacterPoints,
     deleteUserCollection,
     deleteMemoryPoint,
+    deleteMemoryPoints,
     ensureCollection,
     getCollectionInfo,
     getCollectionName,

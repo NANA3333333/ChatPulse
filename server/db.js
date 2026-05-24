@@ -5,6 +5,18 @@ const fs = require('fs');
 const userDbCache = new Map();
 const deletingUserDbIds = new Set();
 
+const LLM_DEBUG_DEFAULT_MAX_BYTES = 80 * 1024 * 1024;
+const LLM_DEBUG_DEFAULT_MAX_ROWS = 12000;
+const LLM_DEBUG_MIN_KEEP_ROWS = 1000;
+const LLM_DEBUG_PRUNE_INTERVAL_MS = 60 * 1000;
+const DB_STARTUP_VACUUM_MARKER_SUFFIX = '.vacuum-next';
+const DB_STARTUP_VACUUM_MIN_FREE_BYTES = 64 * 1024 * 1024;
+
+function readPositiveIntegerEnv(name, fallback) {
+    const raw = Number(process.env[name]);
+    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
+}
+
 function getUserDb(userId) {
     if (!userId) throw new Error("getUserDb requires a valid userId");
     if (deletingUserDbIds.has(String(userId))) {
@@ -17,8 +29,12 @@ function getUserDb(userId) {
         fs.mkdirSync(dataDir, { recursive: true });
     }
     const dbPath = path.join(dataDir, `chatpulse_user_${userId}.db`);
+    const startupVacuumMarkerPath = `${dbPath}${DB_STARTUP_VACUUM_MARKER_SUFFIX}`;
     const db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
+    const llmDebugMaxBytes = readPositiveIntegerEnv('CP_LLM_DEBUG_MAX_BYTES', LLM_DEBUG_DEFAULT_MAX_BYTES);
+    const llmDebugMaxRows = readPositiveIntegerEnv('CP_LLM_DEBUG_MAX_ROWS', LLM_DEBUG_DEFAULT_MAX_ROWS);
+    let llmDebugLastPruneAt = 0;
 
     // --- ENCLOSED DB FUNCTIONS ---
 
@@ -75,13 +91,18 @@ function getUserDb(userId) {
         const itemList = normalizeArrayField(row.items_json ?? row.items, []);
         const relationshipList = normalizeRelationshipField(row.relationship_json ?? row.relationships, []);
         const sourceMessageIds = normalizeArrayField(row.source_message_ids_json, []);
-        const summary = (row.summary || row.event || '').trim();
-        const content = (row.content || row.event || summary).trim();
+        const legacySummary = (row.summary || row.event || '').trim();
+        const legacyContent = (row.content || row.event || legacySummary).trim();
+        const consolidationSummary = String(row.consolidation_summary || '').trim();
+        const summary = consolidationSummary || legacySummary;
+        const content = consolidationSummary || legacyContent || summary;
         return {
             ...row,
             memory_type: row.memory_type || 'event',
             memory_tier: row.memory_tier || 'ambient',
             memory_focus: row.memory_focus || 'general',
+            legacy_summary: legacySummary,
+            legacy_content: legacyContent,
             summary,
             content,
             people_json: peopleList,
@@ -102,7 +123,30 @@ function getUserDb(userId) {
             source_started_at: Number(row.source_started_at || 0),
             source_ended_at: Number(row.source_ended_at || 0),
             source_time_text: row.source_time_text || '',
-            source_message_count: Number(row.source_message_count || 0)
+            source_message_count: Number(row.source_message_count || 0),
+            source_context: row.source_context || '',
+            scene_tag: row.scene_tag || '',
+            source_app: row.source_app || '',
+            maintenance_status: row.maintenance_status || 'pending',
+            classification_source: row.classification_source || '',
+            classified_at: Number(row.classified_at || 0),
+            retention_score: Number(row.retention_score ?? 1),
+            retention_action: row.retention_action || '',
+            retention_reason: row.retention_reason || '',
+            retention_checked_at: Number(row.retention_checked_at || 0),
+            consolidation_key: row.consolidation_key || '',
+            consolidation_summary: consolidationSummary,
+            memory_library_source: consolidationSummary ? 'new' : 'legacy_backup',
+            consolidated_into_memory_id: Number(row.consolidated_into_memory_id || 0),
+            archive_reason: row.archive_reason || '',
+            forgetting_grace_started_at: Number(row.forgetting_grace_started_at || 0),
+            forgetting_grace_expires_at: Number(row.forgetting_grace_expires_at || 0),
+            temporal_label: row.temporal_label || '',
+            temporal_scope: row.temporal_scope || '',
+            temporal_anchor: row.temporal_anchor || '',
+            temporal_confidence: Number(row.temporal_confidence || 0),
+            temporal_reason: row.temporal_reason || '',
+            temporal_checked_at: Number(row.temporal_checked_at || 0)
         };
     }
 
@@ -136,6 +180,132 @@ function getUserDb(userId) {
             last_hit_at: Number(row.last_hit_at || 0),
             updated_at: Number(row.updated_at || 0)
         };
+    }
+
+    function getLlmDebugLogStats() {
+        try {
+            const row = db.prepare(`
+                SELECT
+                    COUNT(*) AS row_count,
+                    COALESCE(SUM(COALESCE(length(payload), 0) + COALESCE(length(meta), 0)), 0) AS logical_bytes,
+                    MIN(id) AS min_id,
+                    MAX(id) AS max_id
+                FROM llm_debug_logs
+            `).get();
+            return {
+                rowCount: Number(row?.row_count || 0),
+                logicalBytes: Number(row?.logical_bytes || 0),
+                minId: Number(row?.min_id || 0),
+                maxId: Number(row?.max_id || 0)
+            };
+        } catch (e) {
+            return { rowCount: 0, logicalBytes: 0, minId: 0, maxId: 0 };
+        }
+    }
+
+    function enforceLlmDebugLogRetention(options = {}) {
+        const now = Date.now();
+        if (!options.force && now - llmDebugLastPruneAt < LLM_DEBUG_PRUNE_INTERVAL_MS) return;
+        llmDebugLastPruneAt = now;
+
+        try {
+            const stats = getLlmDebugLogStats();
+            if (stats.rowCount <= llmDebugMaxRows && stats.logicalBytes <= llmDebugMaxBytes) return;
+
+            const averageBytes = Math.max(1, Math.ceil(stats.logicalBytes / Math.max(1, stats.rowCount)));
+            const rowsByByteBudget = Math.floor((llmDebugMaxBytes * 0.85) / averageBytes);
+            const minKeepRows = Math.max(1, Math.min(LLM_DEBUG_MIN_KEEP_ROWS, llmDebugMaxRows));
+            const targetRows = Math.max(
+                minKeepRows,
+                Math.min(llmDebugMaxRows, rowsByByteBudget || llmDebugMaxRows, stats.rowCount)
+            );
+            if (targetRows >= stats.rowCount) return;
+
+            const cutoff = db.prepare(`
+                SELECT id
+                FROM llm_debug_logs
+                ORDER BY id DESC
+                LIMIT 1 OFFSET ?
+            `).get(targetRows - 1);
+            if (!cutoff?.id) return;
+
+            const result = db.prepare('DELETE FROM llm_debug_logs WHERE id < ?').run(cutoff.id);
+            if (Number(result.changes || 0) > 0) {
+                console.warn(
+                    `[DB] Pruned ${result.changes} old LLM debug log row(s). ` +
+                    `Kept newest ~${targetRows}; budget=${Math.round(llmDebugMaxBytes / 1024 / 1024)}MB/${llmDebugMaxRows} rows.`
+                );
+            }
+        } catch (e) {
+            console.warn('[DB] Failed to prune LLM debug logs:', e.message);
+        }
+    }
+
+    function ensureQueryIndexes() {
+        const statements = [
+            'CREATE INDEX IF NOT EXISTS idx_messages_character_id_id ON messages(character_id, id DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_memories_character_id_id ON memories(character_id, id DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_memories_character_archive_id ON memories(character_id, is_archived, id DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_emotion_logs_character_id_id ON emotion_logs(character_id, id DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_llm_debug_logs_character_id_id ON llm_debug_logs(character_id, id DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_llm_debug_logs_character_context_id ON llm_debug_logs(character_id, direction, context_type, id DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_token_usage_character_id_id ON token_usage(character_id, id DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_token_usage_character_context ON token_usage(character_id, context_type)'
+        ];
+        for (const statement of statements) {
+            try {
+                db.prepare(statement).run();
+            } catch (e) {
+                console.warn(`[DB] Failed to ensure index: ${e.message}`);
+            }
+        }
+    }
+
+    function getSqliteSizeStats() {
+        try {
+            const pageCount = Number(db.prepare('PRAGMA page_count').get()?.page_count || 0);
+            const freelistCount = Number(db.prepare('PRAGMA freelist_count').get()?.freelist_count || 0);
+            const pageSize = Number(db.prepare('PRAGMA page_size').get()?.page_size || 0);
+            return {
+                pageCount,
+                freelistCount,
+                pageSize,
+                fileBytes: pageCount * pageSize,
+                reusableFreeBytes: freelistCount * pageSize
+            };
+        } catch (e) {
+            return { pageCount: 0, freelistCount: 0, pageSize: 0, fileBytes: 0, reusableFreeBytes: 0 };
+        }
+    }
+
+    function runStartupVacuumIfRequested() {
+        if (!fs.existsSync(startupVacuumMarkerPath)) return;
+
+        try {
+            const before = getSqliteSizeStats();
+            if (before.reusableFreeBytes < DB_STARTUP_VACUUM_MIN_FREE_BYTES) {
+                fs.rmSync(startupVacuumMarkerPath, { force: true });
+                console.log('[DB] Startup VACUUM skipped: not enough reusable free space.');
+                return;
+            }
+
+            console.warn(
+                `[DB] Startup VACUUM requested for ${path.basename(dbPath)}. ` +
+                `Reusable free space: ${Math.round(before.reusableFreeBytes / 1024 / 1024)}MB.`
+            );
+            db.pragma('wal_checkpoint(TRUNCATE)');
+            db.exec('VACUUM');
+            db.pragma('wal_checkpoint(TRUNCATE)');
+            fs.rmSync(startupVacuumMarkerPath, { force: true });
+
+            const after = getSqliteSizeStats();
+            console.warn(
+                `[DB] Startup VACUUM complete. File pages: ${before.pageCount} -> ${after.pageCount}; ` +
+                `file size approx ${Math.round(before.fileBytes / 1024 / 1024)}MB -> ${Math.round(after.fileBytes / 1024 / 1024)}MB.`
+            );
+        } catch (e) {
+            console.error('[DB] Startup VACUUM failed:', e.message);
+        }
     }
 
     function initDb() {
@@ -271,6 +441,28 @@ function getUserDb(userId) {
             source_message_count INTEGER DEFAULT 0,
             memory_tier TEXT DEFAULT 'ambient',
             memory_focus TEXT DEFAULT 'general',
+            maintenance_status TEXT DEFAULT 'pending',
+            classification_source TEXT DEFAULT '',
+            classified_at INTEGER DEFAULT 0,
+            retention_score REAL DEFAULT 1,
+            retention_action TEXT DEFAULT '',
+            retention_reason TEXT DEFAULT '',
+            retention_checked_at INTEGER DEFAULT 0,
+            consolidation_key TEXT DEFAULT '',
+            consolidation_summary TEXT DEFAULT '',
+            consolidated_into_memory_id INTEGER DEFAULT 0,
+            archive_reason TEXT DEFAULT '',
+            forgetting_grace_started_at INTEGER DEFAULT 0,
+            forgetting_grace_expires_at INTEGER DEFAULT 0,
+            source_context TEXT DEFAULT '',
+            scene_tag TEXT DEFAULT '',
+            source_app TEXT DEFAULT '',
+            temporal_label TEXT DEFAULT '',
+            temporal_scope TEXT DEFAULT '',
+            temporal_anchor TEXT DEFAULT '',
+            temporal_confidence REAL DEFAULT 0,
+            temporal_reason TEXT DEFAULT '',
+            temporal_checked_at INTEGER DEFAULT 0,
             FOREIGN KEY (character_id) REFERENCES characters(id)
         );
 
@@ -308,7 +500,12 @@ function getUserDb(userId) {
             private_msg_limit_for_group INTEGER DEFAULT 3,
             serper_api_key TEXT DEFAULT '',
             web_search_keys_json TEXT DEFAULT '{}',
-            web_search_provider TEXT DEFAULT 'auto'
+            web_search_provider TEXT DEFAULT 'auto',
+            memory_maintenance_api_endpoint TEXT DEFAULT '',
+            memory_maintenance_api_key TEXT DEFAULT '',
+            memory_maintenance_model_name TEXT DEFAULT '',
+            memory_maintenance_batch_size INTEGER DEFAULT 30,
+            memory_maintenance_max_tokens INTEGER DEFAULT 8000
         );
         CREATE TABLE IF NOT EXISTS moment_likes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -827,6 +1024,28 @@ function getUserDb(userId) {
         try { db.prepare("ALTER TABLE memories ADD COLUMN source_message_count INTEGER DEFAULT 0").run(); } catch (e) { }
         try { db.prepare("ALTER TABLE memories ADD COLUMN memory_tier TEXT DEFAULT 'ambient'").run(); } catch (e) { }
         try { db.prepare("ALTER TABLE memories ADD COLUMN memory_focus TEXT DEFAULT 'general'").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN maintenance_status TEXT DEFAULT 'pending'").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN classification_source TEXT DEFAULT ''").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN classified_at INTEGER DEFAULT 0").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN retention_score REAL DEFAULT 1").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN retention_action TEXT DEFAULT ''").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN retention_reason TEXT DEFAULT ''").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN retention_checked_at INTEGER DEFAULT 0").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN consolidation_key TEXT DEFAULT ''").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN consolidation_summary TEXT DEFAULT ''").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN consolidated_into_memory_id INTEGER DEFAULT 0").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN archive_reason TEXT DEFAULT ''").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN forgetting_grace_started_at INTEGER DEFAULT 0").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN forgetting_grace_expires_at INTEGER DEFAULT 0").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN source_context TEXT DEFAULT ''").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN scene_tag TEXT DEFAULT ''").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN source_app TEXT DEFAULT ''").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN temporal_label TEXT DEFAULT ''").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN temporal_scope TEXT DEFAULT ''").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN temporal_anchor TEXT DEFAULT ''").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN temporal_confidence REAL DEFAULT 0").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN temporal_reason TEXT DEFAULT ''").run(); } catch (e) { }
+        try { db.prepare("ALTER TABLE memories ADD COLUMN temporal_checked_at INTEGER DEFAULT 0").run(); } catch (e) { }
         try {
             db.prepare(`
                 UPDATE memories
@@ -843,7 +1062,9 @@ function getUserDb(userId) {
                     source_time_text = CASE WHEN COALESCE(source_time_text, '') = '' AND COALESCE(time, '') <> '' THEN COALESCE(time, '') ELSE source_time_text END,
                     source_message_count = CASE WHEN COALESCE(source_message_count, 0) = 0 THEN CASE WHEN json_valid(source_message_ids_json) THEN json_array_length(source_message_ids_json) ELSE 0 END ELSE source_message_count END,
                     memory_tier = CASE WHEN COALESCE(memory_tier, '') = '' THEN 'ambient' ELSE memory_tier END,
-                    memory_focus = CASE WHEN COALESCE(memory_focus, '') = '' THEN 'general' ELSE memory_focus END
+                    memory_focus = CASE WHEN COALESCE(memory_focus, '') = '' THEN 'general' ELSE memory_focus END,
+                    maintenance_status = CASE WHEN COALESCE(maintenance_status, '') = '' THEN 'pending' ELSE maintenance_status END,
+                    retention_score = CASE WHEN retention_score IS NULL THEN 1 ELSE retention_score END
             `).run();
         } catch (e) { }
 
@@ -906,6 +1127,11 @@ function getUserDb(userId) {
         try { db.prepare('ALTER TABLE user_profile ADD COLUMN serper_api_key TEXT DEFAULT ""').run(); } catch (e) { }
         try { db.prepare('ALTER TABLE user_profile ADD COLUMN web_search_keys_json TEXT DEFAULT "{}"').run(); } catch (e) { }
         try { db.prepare('ALTER TABLE user_profile ADD COLUMN web_search_provider TEXT DEFAULT "auto"').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile ADD COLUMN memory_maintenance_api_endpoint TEXT DEFAULT ""').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile ADD COLUMN memory_maintenance_api_key TEXT DEFAULT ""').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile ADD COLUMN memory_maintenance_model_name TEXT DEFAULT ""').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile ADD COLUMN memory_maintenance_batch_size INTEGER DEFAULT 30').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile ADD COLUMN memory_maintenance_max_tokens INTEGER DEFAULT 8000').run(); } catch (e) { }
         // Track last moment posted by each character (cooldown)
         try { db.prepare('ALTER TABLE characters ADD COLUMN last_moment_at INTEGER DEFAULT 0').run(); } catch (e) { }
         // Enhanced jealousy system
@@ -950,6 +1176,10 @@ function getUserDb(userId) {
         try { db.prepare('ALTER TABLE history_window_cache ADD COLUMN hit_count INTEGER NOT NULL DEFAULT 0').run(); } catch (e) { }
         try { db.prepare('ALTER TABLE history_window_cache ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0').run(); } catch (e) { }
         try { db.prepare('ALTER TABLE history_window_cache ADD COLUMN last_hit_at INTEGER NOT NULL DEFAULT 0').run(); } catch (e) { }
+
+        enforceLlmDebugLogRetention({ force: true });
+        ensureQueryIndexes();
+        runStartupVacuumIfRequested();
 
         console.log('[DB] Database initialized successfully.');
     }
@@ -1127,6 +1357,7 @@ function getUserDb(userId) {
             typeof entry.meta === 'string' ? entry.meta : JSON.stringify(entry.meta || {}),
             entry.timestamp || Date.now()
         );
+        enforceLlmDebugLogRetention();
     }
 
     function getLlmDebugLogs(characterId, limit = 50) {
@@ -1576,7 +1807,16 @@ function getUserDb(userId) {
         const messages = db.prepare('SELECT * FROM messages WHERE character_id = ? ORDER BY timestamp ASC').all(characterId);
         const memories = db.prepare('SELECT * FROM memories WHERE character_id = ? ORDER BY created_at ASC').all(characterId);
         const moments = db.prepare('SELECT * FROM moments WHERE character_id = ? ORDER BY timestamp ASC').all(characterId);
-        return { character, messages, memories, moments };
+        const diaries = db.prepare('SELECT * FROM diaries WHERE character_id = ? ORDER BY timestamp ASC').all(characterId);
+        const momentIds = moments.map(moment => moment.id).filter(Boolean);
+        let moment_likes = [];
+        let moment_comments = [];
+        if (momentIds.length > 0) {
+            const placeholders = momentIds.map(() => '?').join(', ');
+            moment_likes = db.prepare(`SELECT * FROM moment_likes WHERE moment_id IN (${placeholders}) ORDER BY timestamp ASC`).all(...momentIds);
+            moment_comments = db.prepare(`SELECT * FROM moment_comments WHERE moment_id IN (${placeholders}) ORDER BY timestamp ASC`).all(...momentIds);
+        }
+        return { character, messages, memories, moments, moment_likes, moment_comments, diaries };
     }
 
     // ─── Memory Queries ─────────────────────────────────────────────────────
@@ -1603,6 +1843,7 @@ function getUserDb(userId) {
             SELECT * FROM memories
             WHERE character_id = ?
               AND COALESCE(is_archived, 0) = 0
+              AND COALESCE(NULLIF(consolidation_summary, ''), '') <> ''
               AND COALESCE(source_started_at, created_at, 0) <= ?
               AND COALESCE(source_ended_at, source_started_at, created_at, 0) >= ?
             ORDER BY
@@ -1636,6 +1877,11 @@ function getUserDb(userId) {
         const sourceMessageIds = normalizeArrayField(memoryData.source_message_ids_json, []);
         const summary = (memoryData.summary || memoryData.event || '').trim();
         const content = (memoryData.content || memoryData.event || summary).trim();
+        const consolidationSummary = String(memoryData.consolidation_summary || summary || content || '').trim();
+        const consolidationKey = String(memoryData.consolidation_key || memoryData.dedupe_key || '').trim();
+        const sourceContext = String(memoryData.source_context || '').trim();
+        const sceneTag = String(memoryData.scene_tag || '').trim();
+        const sourceApp = String(memoryData.source_app || '').trim();
         const legacyPeople = (memoryData.people || peopleList.join(', ')).trim();
         const legacyItems = (memoryData.items || itemList.join(', ')).trim();
         const legacyRelationships = (memoryData.relationships || relationshipList.map(rel => {
@@ -1643,9 +1889,9 @@ function getUserDb(userId) {
             return rel.summary || rel.type || JSON.stringify(rel);
         }).join('; ')).trim();
         const info = db.prepare(`
-        INSERT INTO memories 
-        (character_id, time, location, people, event, relationships, items, importance, embedding, created_at, group_id, memory_type, summary, content, people_json, items_json, relationship_json, emotion, source_message_ids_json, dedupe_key, updated_at, is_archived, source_started_at, source_ended_at, source_time_text, source_message_count, memory_tier, memory_focus) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO memories
+        (character_id, time, location, people, event, relationships, items, importance, embedding, created_at, group_id, memory_type, summary, content, people_json, items_json, relationship_json, emotion, source_message_ids_json, dedupe_key, updated_at, is_archived, source_started_at, source_ended_at, source_time_text, source_message_count, memory_tier, memory_focus, consolidation_key, consolidation_summary, source_context, scene_tag, source_app)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
             characterId,
             memoryData.time || '',
@@ -1674,7 +1920,12 @@ function getUserDb(userId) {
             memoryData.source_time_text || '',
             Number(memoryData.source_message_count || sourceMessageIds.length || 0),
             memoryData.memory_tier || 'ambient',
-            memoryData.memory_focus || 'general'
+            memoryData.memory_focus || 'general',
+            consolidationKey,
+            consolidationSummary,
+            sourceContext,
+            sceneTag,
+            sourceApp
         );
         return info.lastInsertRowid;
     }
@@ -1956,7 +2207,7 @@ function getUserDb(userId) {
     }
 
     function updateUserProfile(data) {
-        const allowedFields = ['name', 'avatar', 'banner', 'bio', 'theme', 'custom_css', 'theme_config', 'group_msg_limit', 'group_skip_rate', 'group_proactive_enabled', 'group_interval_min', 'group_interval_max', 'jealousy_chance', 'wallet', 'private_msg_limit_for_group', 'moments_token_limit', 'moments_reaction_rate', 'serper_api_key', 'web_search_keys_json', 'web_search_provider'];
+        const allowedFields = ['name', 'avatar', 'banner', 'bio', 'theme', 'custom_css', 'theme_config', 'group_msg_limit', 'group_skip_rate', 'group_proactive_enabled', 'group_interval_min', 'group_interval_max', 'jealousy_chance', 'wallet', 'private_msg_limit_for_group', 'moments_token_limit', 'moments_reaction_rate', 'serper_api_key', 'web_search_keys_json', 'web_search_provider', 'memory_maintenance_api_endpoint', 'memory_maintenance_api_key', 'memory_maintenance_model_name', 'memory_maintenance_batch_size', 'memory_maintenance_max_tokens'];
         const fields = Object.keys(data).filter(k => allowedFields.includes(k));
         if (fields.length === 0) return;
         const normalizedData = { ...data };
@@ -1968,6 +2219,12 @@ function getUserDb(userId) {
         }
         if (normalizedData.moments_reaction_rate !== undefined) {
             normalizedData.moments_reaction_rate = Math.max(0, Math.min(100, parseInt(normalizedData.moments_reaction_rate, 10) || 0));
+        }
+        if (normalizedData.memory_maintenance_batch_size !== undefined) {
+            normalizedData.memory_maintenance_batch_size = Math.max(10, Math.min(100, parseInt(normalizedData.memory_maintenance_batch_size, 10) || 30));
+        }
+        if (normalizedData.memory_maintenance_max_tokens !== undefined) {
+            normalizedData.memory_maintenance_max_tokens = Math.max(1000, Math.min(20000, parseInt(normalizedData.memory_maintenance_max_tokens, 10) || 8000));
         }
         const setClause = fields.map(f => `${f} = ?`).join(', ');
         const values = fields.map(f => normalizedData[f]);
@@ -3100,6 +3357,8 @@ function getUserDb(userId) {
         addReplyDispatchLog,
         getEmotionLogs,
         getLlmDebugLogs,
+        getLlmDebugLogStats,
+        enforceLlmDebugLogRetention,
         getReplyDispatchLogs,
         getCharacterHiddenState,
         updateCharacterHiddenState,

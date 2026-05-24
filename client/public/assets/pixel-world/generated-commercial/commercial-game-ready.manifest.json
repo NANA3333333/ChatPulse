@@ -1,0 +1,162 @@
+{
+  "concept": "source/commercial-street-concept.png",
+  "atlas": "commercial-game-ready-atlas.png",
+  "scalePolicy": "Transparent PNGs normalized for UI/game placement; keep CSS image-rendering: pixelated when scaling up.",
+  "assets": [
+    {
+      "id": "building_blue_cafe",
+      "type": "building",
+      "path": "game-ready/building_blue_cafe.png",
+      "sourcePath": "sprites/building_blue_cafe.png",
+      "size": [
+        258,
+        300
+      ],
+      "sourceCleanPath": "source/blue-cafe-clean-source.png"
+    },
+    {
+      "id": "building_green_convenience",
+      "type": "building",
+      "path": "game-ready/building_green_convenience.png",
+      "sourcePath": "sprites/building_green_convenience.png",
+      "size": [
+        349,
+        300
+      ],
+      "sourceCleanPath": "source/green-convenience-structure-source.png"
+    },
+    {
+      "id": "building_pink_shop",
+      "type": "building",
+      "path": "game-ready/building_pink_shop.png",
+      "sourcePath": "sprites/building_pink_shop.png",
+      "size": [
+        269,
+        300
+      ],
+      "sourceCleanPath": "source/pink-shop-clean-source.png"
+    },
+    {
+      "id": "prop_bench",
+      "type": "prop",
+      "path": "game-ready/prop_bench.png",
+      "sourcePath": "sprites/prop_bench.png",
+      "size": [
+        128,
+        95
+      ]
+    },
+    {
+      "id": "prop_bicycle",
+      "type": "prop",
+      "path": "game-ready/prop_bicycle.png",
+      "sourcePath": "sprites/prop_bicycle.png",
+      "size": [
+        128,
+        87
+      ]
+    },
+    {
+      "id": "prop_cafe_table",
+      "type": "prop",
+      "path": "game-ready/prop_cafe_table.png",
+      "sourcePath": "sprites/prop_cafe_table.png",
+      "size": [
+        108,
+        128
+      ]
+    },
+    {
+      "id": "prop_chalkboard",
+      "type": "prop",
+      "path": "game-ready/prop_chalkboard.png",
+      "sourcePath": "sprites/prop_chalkboard.png",
+      "size": [
+        109,
+        128
+      ]
+    },
+    {
+      "id": "prop_flower_box",
+      "type": "prop",
+      "path": "game-ready/prop_flower_box.png",
+      "sourcePath": "sprites/prop_flower_box.png",
+      "size": [
+        128,
+        88
+      ]
+    },
+    {
+      "id": "prop_fruit_stall",
+      "type": "prop",
+      "path": "game-ready/prop_fruit_stall.png",
+      "sourcePath": "sprites/prop_fruit_stall.png",
+      "size": [
+        128,
+        104
+      ]
+    },
+    {
+      "id": "prop_led_24h",
+      "type": "prop",
+      "path": "game-ready/prop_led_24h.png",
+      "sourcePath": "sprites/prop_led_24h.png",
+      "sourceGeneratedPath": "source/led-24h-generated-source.png",
+      "size": [
+        45,
+        96
+      ]
+    },
+    {
+      "id": "prop_mailbox",
+      "type": "prop",
+      "path": "game-ready/prop_mailbox.png",
+      "sourcePath": "sprites/prop_mailbox.png",
+      "size": [
+        65,
+        128
+      ]
+    },
+    {
+      "id": "prop_street_lamp",
+      "type": "prop",
+      "path": "game-ready/prop_street_lamp.png",
+      "sourcePath": "sprites/prop_street_lamp.png",
+      "size": [
+        43,
+        128
+      ]
+    },
+    {
+      "id": "prop_tree_cherry",
+      "type": "prop",
+      "path": "game-ready/prop_tree_cherry.png",
+      "sourcePath": "sprites/prop_tree_cherry.png",
+      "size": [
+        104,
+        128
+      ]
+    },
+    {
+      "id": "prop_tree_green",
+      "type": "prop",
+      "path": "game-ready/prop_tree_green.png",
+      "sourcePath": "sprites/prop_tree_green.png",
+      "size": [
+        95,
+        128
+      ]
+    },
+    {
+      "id": "prop_vending_machine",
+      "type": "prop",
+      "path": "game-ready/prop_vending_machine.png",
+      "sourcePath": "sprites/prop_vending_machine.png",
+      "sourceGeneratedPath": "source/vending-machine-generated-source.png",
+      "size": [
+        52,
+        128
+      ]
+    }
+  ]
+}
