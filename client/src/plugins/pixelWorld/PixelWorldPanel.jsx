@@ -22,6 +22,7 @@ const commercialV2MaxSegmentCount = 24;
 const commercialV2BackgroundColor = '#f4ead8';
 const commercialV2PlayerFrameOrder = ['idle', 'step_a', 'passing', 'step_b'];
 const commercialV2PlayerSize = { width: 64, height: 80, footOffset: 8 };
+const commercialV2PlayerPeerCollision = { widthRatio: 0.42, minWidth: 28, heightRatio: 2.8, minHeight: 42 };
 const commercialV2PlayerInitial = { x: 3500, y: 640, direction: 'front', frame: 0, moving: false, stepTime: 0 };
 const commercialV2PlayerCharacters = [
   {
@@ -65,6 +66,8 @@ const commercialV2PlayerSpeed = 220;
 const commercialV2LayerBaseZIndex = 10000;
 const commercialV2LayerStepZIndex = 20;
 const commercialV2PlayerLayerGap = 10;
+const commercialV2DepthZIndexScale = 10;
+const commercialV2GroundLayerZIndex = commercialV2LayerBaseZIndex - 2000;
 const commercialV2PathCellSize = 24;
 const commercialV2PathWaypointReach = 10;
 const commercialV2PathMaxVisited = 16000;
@@ -117,6 +120,10 @@ const commercialV2SilhouetteCache = new Map();
 
 function getCommercialV2ItemZIndex(layerIndex) {
   return commercialV2LayerBaseZIndex + layerIndex * commercialV2LayerStepZIndex;
+}
+
+function getCommercialV2DepthZIndex(sortY, tie = 0) {
+  return commercialV2LayerBaseZIndex + Math.round((Number(sortY) || 0) * commercialV2DepthZIndexScale) + tie;
 }
 const commercialV2CollisionByType = {
   建筑: { x: 0.08, y: 0.86, w: 0.84, h: 0.12 },
@@ -2537,6 +2544,17 @@ function getCommercialV2SortY(item, asset) {
   return item.y + item.h * getCommercialV2DepthY(asset);
 }
 
+function getCommercialV2ItemRenderZIndex(layerIndex, item, asset) {
+  if (asset && isCommercialV2GroundLayerItem(item, asset)) {
+    return commercialV2GroundLayerZIndex + layerIndex;
+  }
+  return getCommercialV2DepthZIndex(getCommercialV2SortY(item, asset), layerIndex);
+}
+
+function getCommercialV2PlayerRenderZIndex(player, tie = 0) {
+  return getCommercialV2DepthZIndex(player?.y ?? commercialV2PlayerInitial.y, 500 + tie);
+}
+
 function getCommercialV2OcclusionBox(item, asset, silhouette = null) {
   if (!asset || isCommercialV2GroundLayerAsset(asset)) return null;
   const sortYRatio = commercialV2OcclusionSortYRatioByAssetId[asset.id];
@@ -2820,9 +2838,9 @@ function CommercialStreetEditor() {
       item,
       asset,
       layerIndex,
-      zIndex: getCommercialV2ItemZIndex(layerIndex),
+      zIndex: getCommercialV2ItemRenderZIndex(layerIndex, item, asset),
       isGround,
-      playerRule: isGround ? '恒在人物下方 / 忽略碰撞' : '按图层 / 遮挡判断'
+      playerRule: isGround ? '恒在人物下方 / 忽略碰撞' : '按脚点深度 / 遮挡判断'
     };
   }), [assetById, items]);
   const selectedLayerRow = selectedId
@@ -2940,7 +2958,7 @@ function CommercialStreetEditor() {
   function toggleCollisionLines() {
     setShowCollisionLines((enabled) => {
       const next = !enabled;
-      setNotice(next ? '碰撞箱线已显示：绿色线是真实阻挡范围，黄色线是小人脚点；地面层碰撞箱不参与阻挡。' : '碰撞箱线已隐藏，非地面层碰撞仍然默认生效。');
+      setNotice(next ? '碰撞箱线已显示：绿色线是真实阻挡范围，黄色线是角色之间的脚底占位；地面层碰撞箱不参与阻挡。' : '碰撞箱线已隐藏，非地面层碰撞仍然默认生效。');
       return next;
     });
   }
@@ -2988,6 +3006,23 @@ function CommercialStreetEditor() {
     };
   }, [playerDimensions.footOffset, playerDimensions.width, stageSize.width]);
 
+  const getPlayerPeerCollisionBox = useCallback((x, y) => {
+    const width = Math.max(
+      commercialV2PlayerPeerCollision.minWidth,
+      playerDimensions.width * commercialV2PlayerPeerCollision.widthRatio
+    );
+    const height = Math.max(
+      commercialV2PlayerPeerCollision.minHeight,
+      playerDimensions.footOffset * commercialV2PlayerPeerCollision.heightRatio
+    );
+    return {
+      x: wrapLoopCoordinate(x, stageSize.width) - width / 2,
+      y: y - height / 2,
+      w: width,
+      h: height
+    };
+  }, [playerDimensions.footOffset, playerDimensions.width, stageSize.width]);
+
   const getPlayerCollisionProbeBoxes = useCallback((x, y) => {
     const footBox = getPlayerFootBox(x, y);
     const upperProbeHeight = Math.max(8, Math.min(26, playerDimensions.footOffset * 1.6));
@@ -3012,6 +3047,25 @@ function CommercialStreetEditor() {
       && y <= rect.y + rect.h
     )));
   }, [stageSize.width, walkableRects]);
+
+  const isPlayerBlockedByOtherPlayers = useCallback((x, y, options = {}) => {
+    if (options.ignorePlayers) return false;
+    const ignorePlayerId = options.ignorePlayerId || controlledPlayerIdRef.current;
+    const currentPlayers = options.players || playersRef.current;
+    const playerBox = getPlayerPeerCollisionBox(x, y);
+    return commercialV2PlayerCharacters.some((character) => {
+      if (character.id === ignorePlayerId) return false;
+      const otherPlayer = currentPlayers[character.id];
+      if (!otherPlayer) return false;
+      const otherBox = getPlayerPeerCollisionBox(otherPlayer.x, otherPlayer.y);
+      return [-stageSize.width, 0, stageSize.width].some((offset) => boxesOverlap(playerBox, {
+        x: otherBox.x + offset,
+        y: otherBox.y,
+        w: otherBox.w,
+        h: otherBox.h
+      }));
+    });
+  }, [getPlayerPeerCollisionBox, stageSize.width]);
 
   const isPlayerFootBlocked = useCallback((x, y) => {
     if (!collisionRects.length) return false;
@@ -3041,13 +3095,17 @@ function CommercialStreetEditor() {
     }));
   }, [autoRouteBlockRects, getPlayerCollisionProbeBoxes, stageSize.width]);
 
-  const isPlayerPositionAllowed = useCallback((x, y) => (
-    isPlayerPointWalkable(x, y) && !isPlayerFootBlocked(x, y)
-  ), [isPlayerFootBlocked, isPlayerPointWalkable]);
+  const isPlayerPositionAllowed = useCallback((x, y, options = {}) => (
+    isPlayerPointWalkable(x, y)
+    && !isPlayerFootBlocked(x, y)
+    && !isPlayerBlockedByOtherPlayers(x, y, options)
+  ), [isPlayerBlockedByOtherPlayers, isPlayerFootBlocked, isPlayerPointWalkable]);
 
-  const isAutoTravelPositionAllowed = useCallback((x, y) => (
-    isPlayerPointWalkable(x, y) && !isAutoTravelFootBlocked(x, y)
-  ), [isAutoTravelFootBlocked, isPlayerPointWalkable]);
+  const isAutoTravelPositionAllowed = useCallback((x, y, options = {}) => (
+    isPlayerPointWalkable(x, y)
+    && !isAutoTravelFootBlocked(x, y)
+    && !isPlayerBlockedByOtherPlayers(x, y, options)
+  ), [isAutoTravelFootBlocked, isPlayerBlockedByOtherPlayers, isPlayerPointWalkable]);
 
   const isMainRoadPoint = useCallback((x, y) => {
     if (!mainRoadRects.length) return false;
@@ -3124,7 +3182,7 @@ function CommercialStreetEditor() {
     }
     let best = null;
     candidates.forEach((candidate) => {
-      if (!isPlayerPositionAllowed(candidate.x, candidate.y)) return;
+      if (!isPlayerPositionAllowed(candidate.x, candidate.y, { ignorePlayers: true })) return;
       const rawDx = Math.abs(candidate.x - targetPointX);
       const dx = Math.min(rawDx, Math.max(0, stageSize.width - rawDx));
       const distance = dx ** 2 + (candidate.y - targetY) ** 2;
@@ -3186,7 +3244,13 @@ function CommercialStreetEditor() {
   }, [buildSafePlayerStates]);
 
   const getNearestWalkablePlayerPoint = useCallback((x, y, current = null, options = {}) => {
-    const pointAllowed = options.useAutoTravelBlocks ? isAutoTravelPositionAllowed : isPlayerPositionAllowed;
+    const pointOptions = {
+      ignorePlayerId: options.ignorePlayerId || current?.id || controlledPlayerIdRef.current,
+      ignorePlayers: Boolean(options.ignorePlayers)
+    };
+    const pointAllowed = options.useAutoTravelBlocks
+      ? (pointX, pointY) => isAutoTravelPositionAllowed(pointX, pointY, pointOptions)
+      : (pointX, pointY) => isPlayerPositionAllowed(pointX, pointY, pointOptions);
     const approachMinY = Number.isFinite(options.approachMinY) ? Number(options.approachMinY) : null;
     const fallbackToCurrent = options.fallbackToCurrent !== false;
     const fallbackMinY = 178;
@@ -3934,7 +3998,10 @@ function CommercialStreetEditor() {
 
   const resolvePlayerGroundMove = useCallback((current, nextX, nextY, options = {}) => {
     const useAutoTravelBlocks = Boolean(options.useAutoTravelBlocks);
-    const pointAllowed = useAutoTravelBlocks ? isAutoTravelPositionAllowed : isPlayerPositionAllowed;
+    const pointOptions = { ignorePlayerId: current?.id || controlledPlayerIdRef.current };
+    const pointAllowed = useAutoTravelBlocks
+      ? (pointX, pointY) => isAutoTravelPositionAllowed(pointX, pointY, pointOptions)
+      : (pointX, pointY) => isPlayerPositionAllowed(pointX, pointY, pointOptions);
     const wrappedNextX = wrapLoopCoordinate(nextX, stageSize.width);
     if (pointAllowed(wrappedNextX, nextY)) {
       return { x: wrappedNextX, y: nextY };
@@ -3948,7 +4015,7 @@ function CommercialStreetEditor() {
     if (pointAllowed(current.x, current.y)) {
       return { x: current.x, y: current.y };
     }
-    return getNearestWalkablePlayerPoint(wrappedNextX, nextY, current, { useAutoTravelBlocks });
+    return getNearestWalkablePlayerPoint(wrappedNextX, nextY, current, { useAutoTravelBlocks, ...pointOptions });
   }, [getNearestWalkablePlayerPoint, isAutoTravelPositionAllowed, isPlayerPositionAllowed, stageSize.width]);
 
   const centerPlayerInView = useCallback((instant = true) => {
@@ -4984,12 +5051,8 @@ function CommercialStreetEditor() {
       return style;
     }
 
-    function getLayerZIndex(layerIndex) {
-      return getCommercialV2ItemZIndex(layerIndex);
-    }
-
     function getItemZIndex(layerIndex, item, asset, playerZIndex = null) {
-      const zIndex = getLayerZIndex(layerIndex);
+      const zIndex = getCommercialV2ItemRenderZIndex(layerIndex, item, asset);
       if (asset && isCommercialV2GroundLayerItem(item, asset) && Number.isFinite(playerZIndex)) {
         return Math.min(zIndex, playerZIndex - 1);
       }
@@ -5038,11 +5101,14 @@ function CommercialStreetEditor() {
     }
 
     function getPlayerZIndex(targetPlayer) {
+      const characterIndex = Math.max(0, commercialV2PlayerCharacters.findIndex((character) => character.id === targetPlayer.id));
       const occludingLayerIndex = getPlayerOccludingLayerIndex(targetPlayer);
       if (occludingLayerIndex !== null) {
-        return getLayerZIndex(occludingLayerIndex) - 5;
+        const occludingItem = items[occludingLayerIndex];
+        const occludingAsset = occludingItem ? assetById.get(occludingItem.assetId) : null;
+        return getCommercialV2ItemRenderZIndex(occludingLayerIndex, occludingItem, occludingAsset) - 5;
       }
-      return getLayerZIndex(items.length) + commercialV2PlayerLayerGap;
+      return getCommercialV2PlayerRenderZIndex(targetPlayer, characterIndex * commercialV2PlayerLayerGap);
     }
 
     function renderEditorItem(panelItem, asset, offset, isGhost, layerIndex, playerZIndex) {
@@ -5135,11 +5201,19 @@ function CommercialStreetEditor() {
       const left = ((visualX - playerDimensions.width / 2) / stageSize.width) * 100;
       const top = ((targetPlayer.y - playerDimensions.height + playerDimensions.footOffset) / stageSize.height) * 100;
       const bubbleTop = ((targetPlayer.y - playerDimensions.height + playerDimensions.footOffset - 8) / stageSize.height) * 100;
-      const footBox = {
-        x: visualX - Math.max(12, playerDimensions.width * 0.28) / 2,
-        y: targetPlayer.y - Math.max(8, playerDimensions.footOffset * 0.75) / 2,
-        w: Math.max(12, playerDimensions.width * 0.28),
-        h: Math.max(8, playerDimensions.footOffset * 0.75)
+      const peerCollisionWidth = Math.max(
+        commercialV2PlayerPeerCollision.minWidth,
+        playerDimensions.width * commercialV2PlayerPeerCollision.widthRatio
+      );
+      const peerCollisionHeight = Math.max(
+        commercialV2PlayerPeerCollision.minHeight,
+        playerDimensions.footOffset * commercialV2PlayerPeerCollision.heightRatio
+      );
+      const peerCollisionBox = {
+        x: visualX - peerCollisionWidth / 2,
+        y: targetPlayer.y - peerCollisionHeight / 2,
+        w: peerCollisionWidth,
+        h: peerCollisionHeight
       };
       return (
         <React.Fragment key={`player-${targetPlayer.id}-${offset}`}>
@@ -5172,10 +5246,10 @@ function CommercialStreetEditor() {
             <span
               className={`pixel-world-player-footprint ${isControlled ? 'controlled' : ''}`}
               style={{
-                left: `${(footBox.x / stageSize.width) * 100}%`,
-                top: `${(footBox.y / stageSize.height) * 100}%`,
-                width: `${(footBox.w / stageSize.width) * 100}%`,
-                height: `${(footBox.h / stageSize.height) * 100}%`,
+                left: `${(peerCollisionBox.x / stageSize.width) * 100}%`,
+                top: `${(peerCollisionBox.y / stageSize.height) * 100}%`,
+                width: `${(peerCollisionBox.w / stageSize.width) * 100}%`,
+                height: `${(peerCollisionBox.h / stageSize.height) * 100}%`,
                 zIndex: zIndex + 1
               }}
             />
