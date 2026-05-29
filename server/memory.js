@@ -14,6 +14,7 @@ const MEMORY_QUERY_EXPANSION_ENABLED = process.env.MEMORY_QUERY_EXPANSION_ENABLE
 const LOCAL_VECTOR_INDEX_ENABLED = process.env.LOCAL_VECTOR_INDEX_ENABLED === '1';
 const MEMORY_RETRIEVAL_SOURCE_VERSION = 'new-library-consolidation-summary-v1';
 const MEMORY_INDEX_GRANULARITY = 'new_library_card_v1';
+const MEMORY_SMALL_MODEL_MAX_TOKENS = 8000;
 
 // Dynamic import for transformers.js
 let pipeline = null;
@@ -165,6 +166,8 @@ function yieldToEventLoop() {
 // Memory vector indices cache: UserId_CharacterID -> LocalIndex
 const indices = new Map();
 let qdrantAvailability = null;
+let qdrantAvailabilityCheckedAt = 0;
+const QDRANT_AVAILABILITY_CACHE_MS = 30 * 1000;
 const indexRepairAttempts = new Map();
 
 function isRecoverableQdrantError(error) {
@@ -173,11 +176,19 @@ function isRecoverableQdrantError(error) {
 }
 
 async function canUseQdrant() {
-    if (qdrantAvailability !== null) return qdrantAvailability;
+    const now = Date.now();
+    if (
+        qdrantAvailability !== null
+        && (qdrantAvailability || (now - qdrantAvailabilityCheckedAt) < QDRANT_AVAILABILITY_CACHE_MS)
+    ) {
+        return qdrantAvailability;
+    }
+    const previous = qdrantAvailability;
     qdrantAvailability = await qdrant.healthcheck();
-    if (qdrantAvailability) {
+    qdrantAvailabilityCheckedAt = now;
+    if (qdrantAvailability && previous !== true) {
         console.log('[Memory] Qdrant is available. Vector operations will use Qdrant first.');
-    } else {
+    } else if (!qdrantAvailability && previous !== false) {
         console.warn('[Memory] Qdrant is unavailable. Falling back to local vectra indices.');
     }
     return qdrantAvailability;
@@ -702,13 +713,19 @@ ${contextLine}
         const relationshipSummary = summarizeRelationships(memoryData.relationship_json ?? memoryData.relationships);
         const primarySummary = String(memoryData.consolidation_summary || memoryData.summary || memoryData.content || memoryData.event || '').trim();
         const hasNewSummary = !!String(memoryData.consolidation_summary || '').trim();
+        const legacySummary = String(memoryData.legacy_summary || '').trim();
+        const legacyContent = String(memoryData.legacy_content || '').trim();
+        const detailContent = hasNewSummary
+            ? (legacyContent || (String(memoryData.content || '').trim() !== primarySummary ? String(memoryData.content || '').trim() : ''))
+            : String(memoryData.content || '').trim();
         return [
             hasNewSummary ? 'LibrarySource: new_consolidated_memory' : 'LibrarySource: legacy_memory_backup',
             memoryData.memory_type ? `Type: ${memoryData.memory_type}` : '',
             memoryData.memory_tier ? `Tier: ${memoryData.memory_tier}` : '',
             memoryData.memory_focus ? `Focus: ${memoryData.memory_focus}` : '',
             primarySummary ? `Summary: ${primarySummary}` : '',
-            !hasNewSummary && memoryData.content ? `Content: ${memoryData.content}` : '',
+            legacySummary && legacySummary !== primarySummary ? `LegacySummary: ${legacySummary}` : '',
+            detailContent && detailContent !== primarySummary ? `Content: ${detailContent}` : '',
             memoryData.location ? `Location: ${memoryData.location}` : '',
             memoryData.time ? `Time: ${memoryData.time}` : '',
             memoryData.source_time_text ? `SourceTime: ${memoryData.source_time_text}` : '',
@@ -720,8 +737,11 @@ ${contextLine}
     }
 
     function getNewLibraryIndexGroupKey(memoryRow = {}) {
+        const effectiveCharacterId = memoryRow.shared_binding
+            ? (memoryRow.bound_character_id || memoryRow.character_id || '')
+            : (memoryRow.character_id || '');
         return [
-            String(memoryRow.character_id || ''),
+            String(effectiveCharacterId),
             String(memoryRow.consolidation_key || '').trim(),
             String(memoryRow.consolidation_summary || '').trim().toLowerCase()
         ].join('::');
@@ -753,11 +773,15 @@ ${contextLine}
             const relationshipSummary = summarizeRelationships(row.relationship_json ?? row.relationships).join('; ');
             return {
                 id: row.id,
-                point_id: row.id,
+                point_id: row.shared_binding && row.bound_character_id ? `${row.id}:bound:${row.bound_character_id}` : row.id,
                 index_group_key: group.key,
                 source_ids: group.source_ids,
                 row_count: group.row_count,
-                character_id: String(row.character_id || ''),
+                character_id: String(row.shared_binding && row.bound_character_id ? row.bound_character_id : row.character_id || ''),
+                storage_character_id: String(row.character_id || ''),
+                shared_binding: Number(row.shared_binding || 0),
+                bound_character_id: row.bound_character_id || '',
+                bound_character_name: row.bound_character_name || '',
                 group_id: row.group_id || '',
                 memory_type: row.memory_type || 'event',
                 memory_tier: row.memory_tier || 'ambient',
@@ -765,6 +789,8 @@ ${contextLine}
                 importance: Number(row.importance || 5),
                 created_at: Number(row.created_at || Date.now()),
                 updated_at: Number(row.updated_at || row.created_at || Date.now()),
+                legacy_summary: row.legacy_summary || '',
+                legacy_content: row.legacy_content || '',
                 time: row.time || '',
                 is_archived: Number(row.is_archived || 0),
                 dedupe_key: row.dedupe_key || '',
@@ -781,10 +807,12 @@ ${contextLine}
                 event: row.event || row.consolidation_summary || row.summary || '',
                 retrieval_count: Number(row.retrieval_count || 0),
                 last_retrieved_at: Number(row.last_retrieved_at || 0),
+                retention_action: row.retention_action || '',
+                retention_reason: row.retention_reason || '',
                 consolidation_key: row.consolidation_key || '',
                 consolidation_summary: row.consolidation_summary || '',
                 summary: row.consolidation_summary || row.summary || row.event || '',
-                content: row.consolidation_summary || row.content || row.event || ''
+                content: row.legacy_content || row.content || row.consolidation_summary || row.event || ''
             };
         }).sort((a, b) => (
             a.character_id.localeCompare(b.character_id)
@@ -825,6 +853,7 @@ ${contextLine}
                         source_time_text: card.source_time_text || '',
                         source_message_count: Number(card.source_message_count || card.row_count || 0),
                         source_memory_ids: (card.source_ids || []).join(','),
+                        retention_action: card.retention_action || '',
                         consolidation_key: card.consolidation_key || '',
                         consolidation_summary: card.consolidation_summary || '',
                         memory_library_source: 'new',
@@ -929,7 +958,7 @@ ${contextLine}
                     { role: 'system', content: 'You rewrite memory recall questions into compact retrieval keywords. Output one retrieval phrase per line. No JSON. No numbering. No explanation.' },
                     { role: 'user', content: prompt }
                 ],
-                maxTokens: 80,
+                maxTokens: MEMORY_SMALL_MODEL_MAX_TOKENS,
                 temperature: 0,
                 enableCache: true,
                 cacheDb: db,
@@ -1296,6 +1325,7 @@ ${contextLine}
             .map(id => String(id || '').trim())
             .filter(Boolean)));
         if (ids.length === 0) return { deleted: 0, qdrant_deleted: 0, local_deleted: 0, errors: [] };
+        const pointIds = Array.from(new Set(ids.flatMap(id => [id, `${id}:bound:${characterId}`])));
 
         const errors = [];
         let qdrantDeleted = 0;
@@ -1306,10 +1336,10 @@ ${contextLine}
         if (qdrantUsable) {
             try {
                 if (typeof qdrant.deleteMemoryPoints === 'function') {
-                    const result = await qdrant.deleteMemoryPoints(userId, ids);
-                    qdrantDeleted = Number(result?.deleted || ids.length);
+                    const result = await qdrant.deleteMemoryPoints(userId, pointIds);
+                    qdrantDeleted = Number(result?.deleted || pointIds.length);
                 } else {
-                    for (const id of ids) {
+                    for (const id of pointIds) {
                         await qdrant.deleteMemoryPoint(userId, id);
                         qdrantDeleted += 1;
                     }
@@ -1326,7 +1356,7 @@ ${contextLine}
             try {
                 const index = await getVectorIndex(userId, characterId);
                 if (typeof index.deleteItem === 'function') {
-                    for (const id of ids) {
+                    for (const id of pointIds) {
                         try {
                             await index.deleteItem(String(id));
                             localDeleted += 1;
@@ -1338,13 +1368,6 @@ ${contextLine}
             } catch (e) {
                 errors.push(`local:${e.message}`);
             }
-        }
-
-        if (errors.length > 0) {
-            const error = new Error(`Memory index delete failed: ${errors.join('; ')}`);
-            error.details = errors;
-            error.partial = { deleted: ids.length, qdrant_deleted: qdrantDeleted, local_deleted: localDeleted };
-            throw error;
         }
 
         return {
@@ -1740,8 +1763,14 @@ ${contextLine}
 
     function buildMemoryRecallText(memoryRow = {}) {
         const primary = String(memoryRow.consolidation_summary || memoryRow.summary || memoryRow.content || memoryRow.event || '').trim();
+        const legacySummary = String(memoryRow.legacy_summary || '').trim();
+        const legacyContent = String(memoryRow.legacy_content || '').trim();
+        const detailContent = String(memoryRow.content || '').trim();
         return [
             primary,
+            legacySummary && legacySummary !== primary ? legacySummary : '',
+            legacyContent && legacyContent !== primary ? legacyContent : '',
+            detailContent && detailContent !== primary && detailContent !== legacyContent ? detailContent : '',
             memoryRow?.people,
             memoryRow?.relationships,
             memoryRow?.location,
@@ -1760,12 +1789,15 @@ ${contextLine}
     function prepareMemoryForRecall(memoryRow = {}) {
         if (!memoryRow || !hasNewLibrarySummary(memoryRow)) return memoryRow;
         const summary = String(memoryRow.consolidation_summary || '').trim();
+        const legacySummary = String(memoryRow.legacy_summary || memoryRow.summary || '').trim();
+        const legacyContent = String(memoryRow.legacy_content || '').trim()
+            || (String(memoryRow.content || '').trim() !== summary ? String(memoryRow.content || '').trim() : '');
         return {
             ...memoryRow,
-            legacy_summary: memoryRow.legacy_summary || memoryRow.summary || '',
-            legacy_content: memoryRow.legacy_content || memoryRow.content || '',
+            legacy_summary: legacySummary,
+            legacy_content: legacyContent,
             summary,
-            content: summary,
+            content: legacyContent || summary,
             event: memoryRow.event || summary,
             memory_library_source: 'new'
         };
@@ -1824,7 +1856,7 @@ ${contextLine}
         return 0;
     }
 
-    function runLexicalMemoryFallback(db, characterId, queryVariants = [], limit = 5) {
+    function runLexicalMemoryFallback(db, characterId, queryVariants = [], limit = 5, options = {}) {
         try {
             if (!db?.getRawDb) return [];
             const rawDb = db.getRawDb();
@@ -1856,7 +1888,9 @@ ${contextLine}
                 const retrievalWeight = Number(row.retrieval_weight || computeMemoryRetrievalWeight(row) || 1);
                 const tierBoost = computeMemoryTierBoost(row);
                 const profilePriorityBoost = computeUserProfilePriorityBoost(row, normalizedVariants[0] || '', normalizedVariants);
-                const finalScore = lexicalBoost + aliasBridgeBoost + tierBoost + profilePriorityBoost + (importance * 0.025) + ((retrievalWeight - 1) * 0.1);
+                const recencyAdjustment = computeRecencyScoreAdjustment(row, options.temporalIntent, options.nowTs);
+                const retentionAdjustment = computeRetentionSearchAdjustment(row);
+                const finalScore = lexicalBoost + aliasBridgeBoost + tierBoost + profilePriorityBoost + (importance * 0.025) + ((retrievalWeight - 1) * 0.1) + recencyAdjustment + retentionAdjustment;
                 return {
                     row,
                     finalScore,
@@ -1879,7 +1913,7 @@ ${contextLine}
         }
     }
 
-    async function runSemanticMemoryFallback(db, characterId, queryText, limit = 5) {
+    async function runSemanticMemoryFallback(db, characterId, queryText, limit = 5, options = {}) {
         try {
             const rows = buildNewLibraryIndexCards(db.getMemories(characterId))
                 .slice(0, 120);
@@ -1902,7 +1936,9 @@ ${contextLine}
                 const contradictionPenalty = computeRecallContradictionPenalty(row, queryText);
                 const tierBoost = computeMemoryTierBoost(row);
                 const profilePriorityBoost = computeUserProfilePriorityBoost(row, queryText, [queryText]);
-                const finalScore = similarity + tierBoost + profilePriorityBoost + (importance * 0.02) + ((retrievalWeight - 1) * 0.08) - contradictionPenalty;
+                const recencyAdjustment = computeRecencyScoreAdjustment(row, options.temporalIntent, options.nowTs);
+                const retentionAdjustment = computeRetentionSearchAdjustment(row);
+                const finalScore = similarity + tierBoost + profilePriorityBoost + (importance * 0.02) + ((retrievalWeight - 1) * 0.08) + recencyAdjustment + retentionAdjustment - contradictionPenalty;
                 scored.push({ row, finalScore });
             }
 
@@ -1934,6 +1970,10 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
             const relativeText = String(queryInput?.temporal_hint?.relative_text || queryInput?.temporal_hint?.relative || '').trim();
             const absoluteStart = Number(queryInput?.temporal_hint?.absolute_start || 0);
             const absoluteEnd = Number(queryInput?.temporal_hint?.absolute_end || 0);
+            const temporalIntent = normalizeSearchTemporalIntent(
+                queryInput?.temporal_intent || queryInput?.temporalIntent || null,
+                [primaryText, ...explicitQueries].filter(Boolean).join('\n')
+            );
             return {
                 primaryText,
                 explicitQueries,
@@ -1950,6 +1990,7 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
                     ...(Number.isFinite(absoluteStart) && absoluteStart > 0 ? { absolute_start: absoluteStart } : {}),
                     ...(Number.isFinite(absoluteEnd) && absoluteEnd > 0 ? { absolute_end: absoluteEnd } : {})
                 },
+                temporalIntent,
                 limit: Math.max(1, Math.min(20, Number(queryInput.limit || requestedLimit) || requestedLimit))
             };
         }
@@ -1959,8 +2000,73 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
             explicitQueries: [],
             filters: { memory_focus: [], memory_tier: [] },
             temporalHint: {},
+            temporalIntent: normalizeSearchTemporalIntent(null, primaryText),
             limit: requestedLimit
         };
+    }
+
+    function clampUnit(value) {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) return 0;
+        return Math.max(0, Math.min(1, parsed));
+    }
+
+    function inferRecentSearchIntent(text = '') {
+        const raw = String(text || '').trim();
+        if (!raw) return { mode: 'none', confidence: 0, reason: '' };
+        const normalized = raw.toLowerCase();
+        const signals = [
+            {
+                score: 0.82,
+                pattern: /(刚刚|刚才|刚提到|刚聊|刚说|最近|近来|这两天|这几天|前几天|今天|昨天|刚发生|刚收到|刚被)/i,
+                reason: 'explicit_recent_time_expression'
+            },
+            {
+                score: 0.74,
+                pattern: /(新的那个|新那个|新的|这次|这回|另一个|另外一个|不是上次|不是之前|不是以前|不是三月|不是3月)/i,
+                reason: 'new_or_not_previous_reference'
+            },
+            {
+                score: 0.58,
+                pattern: /(刚提|前面说|上面说|刚才聊|刚刚聊|主动找我|主动联系|主动接触|主动挖掘|看了.*账号|小红书.*找)/i,
+                reason: 'contextual_recent_reference'
+            }
+        ];
+        let best = { mode: 'none', confidence: 0, reason: '' };
+        for (const signal of signals) {
+            if (signal.pattern.test(normalized) && signal.score > best.confidence) {
+                best = { mode: 'recent', confidence: signal.score, reason: signal.reason };
+            }
+        }
+        return best;
+    }
+
+    function normalizeSearchTemporalIntent(rawIntent = null, fallbackText = '') {
+        const fallback = inferRecentSearchIntent(fallbackText);
+        let normalized = { mode: 'none', confidence: 0, reason: '' };
+        if (rawIntent && typeof rawIntent === 'object') {
+            const rawMode = String(rawIntent.mode || rawIntent.intent || rawIntent.recency || rawIntent.temporal_mode || '').trim().toLowerCase();
+            const mode = ['recent', 'latest', 'new', 'current'].includes(rawMode)
+                ? 'recent'
+                : (['none', 'neutral', 'unspecified'].includes(rawMode) ? 'none' : '');
+            if (mode === 'recent') {
+                const confidence = clampUnit(rawIntent.confidence ?? rawIntent.score ?? rawIntent.recent_intent_score ?? 0.65);
+                normalized = {
+                    mode: 'recent',
+                    confidence: confidence > 0 ? confidence : 0.65,
+                    reason: String(rawIntent.reason || rawIntent.rationale || '').trim().slice(0, 240)
+                };
+            }
+        } else if (typeof rawIntent === 'string') {
+            const rawMode = rawIntent.trim().toLowerCase();
+            if (['recent', 'latest', 'new', 'current'].includes(rawMode)) {
+                normalized = { mode: 'recent', confidence: 0.65, reason: 'planner_string_recent_intent' };
+            }
+        }
+        if (fallback.mode === 'recent' && fallback.confidence > normalized.confidence) {
+            return fallback;
+        }
+        return normalized;
     }
 
     function startOfLocalDay(input) {
@@ -2132,6 +2238,44 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
         return 0;
     }
 
+    function getMemoryRecencyAnchor(memoryRow) {
+        const end = Number(memoryRow?.source_ended_at || 0);
+        if (end > 0) return end;
+        const start = Number(memoryRow?.source_started_at || 0);
+        if (start > 0) return start;
+        const updatedAt = Number(memoryRow?.updated_at || 0);
+        if (updatedAt > 0) return updatedAt;
+        const createdAt = Number(memoryRow?.created_at || 0);
+        if (createdAt > 0) return createdAt;
+        return 0;
+    }
+
+    function computeRecencyScoreAdjustment(memoryRow, temporalIntent = {}, nowTs = Date.now()) {
+        const mode = String(temporalIntent?.mode || '').trim().toLowerCase();
+        const confidence = clampUnit(temporalIntent?.confidence || 0);
+        if (mode !== 'recent' || confidence < 0.2) return 0;
+        const anchor = getMemoryRecencyAnchor(memoryRow);
+        if (!(anchor > 0)) return 0;
+        const ageDays = Math.max(0, (Number(nowTs || Date.now()) - anchor) / (24 * 60 * 60 * 1000));
+        let freshness = 0;
+        if (ageDays <= 1) freshness = 0.9;
+        else if (ageDays <= 3) freshness = 0.78;
+        else if (ageDays <= 7) freshness = 0.62;
+        else if (ageDays <= 14) freshness = 0.46;
+        else if (ageDays <= 30) freshness = 0.28;
+        else if (ageDays <= 90) freshness = -0.08;
+        else freshness = -0.18;
+        return freshness * confidence;
+    }
+
+    function computeRetentionSearchAdjustment(memoryRow = {}) {
+        const action = String(memoryRow?.retention_action || '').trim().toLowerCase();
+        if (!action) return 0;
+        if (action === 'superseded') return -0.65;
+        if (['archive', 'archived', 'forget', 'delete', 'deprecated', 'drop'].includes(action)) return -0.9;
+        return 0;
+    }
+
     function memoryOverlapsTemporalRange(memoryRow, temporalRange) {
         if (!temporalRange?.start || !temporalRange?.end) return true;
         const memoryRange = getMemoryEffectiveTimeRange(memoryRow);
@@ -2227,6 +2371,8 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
             }
             const baseQuery = normalizedRequest.primaryText || normalizedRequest.explicitQueries[0] || '';
             const temporalRange = resolveTemporalHintRange(normalizedRequest.temporalHint, Date.now());
+            const temporalIntent = normalizedRequest.temporalIntent || { mode: 'none', confidence: 0, reason: '' };
+            const searchNow = Date.now();
             let queryVariants = normalizedRequest.explicitQueries.length > 0
                 ? Array.from(new Set([
                     ...normalizedRequest.explicitQueries,
@@ -2249,6 +2395,7 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
                     queryVariants,
                     filters: normalizedRequest.filters,
                     temporalHint: normalizedRequest.temporalHint,
+                    temporalIntent,
                     temporalRange,
                     resultLimit
                 });
@@ -2302,7 +2449,9 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
                             const profilePriorityBoost = computeUserProfilePriorityBoost(memRow, baseQuery, queryVariants);
                             const temporalAdjustment = computeTemporalScoreAdjustment(memRow, temporalRange)
                                 + computeTemporalAnchorPenalty(memRow, temporalRange);
-                            const finalScore = (res.score * retrievalWeight * (1 + surpriseScore * 0.05) * queryWeight) + lexicalBoost + aliasBridgeBoost + tierBoost + profilePriorityBoost + temporalAdjustment - contradictionPenalty;
+                            const recencyAdjustment = computeRecencyScoreAdjustment(memRow, temporalIntent, searchNow);
+                            const retentionAdjustment = computeRetentionSearchAdjustment(memRow);
+                            const finalScore = (res.score * retrievalWeight * (1 + surpriseScore * 0.05) * queryWeight) + lexicalBoost + aliasBridgeBoost + tierBoost + profilePriorityBoost + temporalAdjustment + recencyAdjustment + retentionAdjustment - contradictionPenalty;
                             const existing = aggregate.get(memoryId);
                             if (!existing || finalScore > existing.finalScore) {
                                 aggregate.set(memoryId, { memRow, finalScore, rawScore: res.score, matchedQuery: variant });
@@ -2314,7 +2463,8 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
                         db,
                         characterId,
                         queryVariants,
-                        Math.max(resultLimit * 2, 8)
+                        Math.max(resultLimit * 2, 8),
+                        { temporalIntent, nowTs: searchNow }
                     ).filter(memRow => memoryMatchesSearchFilters(memRow, normalizedRequest.filters, temporalRange));
                     for (const memRow of lexicalSupplement) {
                         if (!memRow?.id) continue;
@@ -2344,7 +2494,20 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
                     }
                     if (memories.length > 0) {
                         if (typeof onTrace === 'function') {
-                            await onTrace({ phase: 'qdrant_return', count: memories.length });
+                            await onTrace({
+                                phase: 'qdrant_return',
+                                count: memories.length,
+                                results: memories.map(mem => ({
+                                    id: mem.id,
+                                    score: mem._search_score || '',
+                                    matched_query: mem._matched_query || '',
+                                    memory_focus: mem.memory_focus || '',
+                                    memory_tier: mem.memory_tier || '',
+                                    retention_action: mem.retention_action || '',
+                                    source_started_at: mem.source_started_at || 0,
+                                    source_ended_at: mem.source_ended_at || 0
+                                }))
+                            });
                         }
                         return memories;
                     }
@@ -2404,7 +2567,9 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
                         const profilePriorityBoost = computeUserProfilePriorityBoost(memRow, baseQuery, queryVariants);
                         const temporalAdjustment = computeTemporalScoreAdjustment(memRow, temporalRange)
                             + computeTemporalAnchorPenalty(memRow, temporalRange);
-                        const finalScore = (res.score * retrievalWeight * (1 + surpriseScore * 0.05) * queryWeight) + lexicalBoost + aliasBridgeBoost + tierBoost + profilePriorityBoost + temporalAdjustment - contradictionPenalty;
+                        const recencyAdjustment = computeRecencyScoreAdjustment(memRow, temporalIntent, searchNow);
+                        const retentionAdjustment = computeRetentionSearchAdjustment(memRow);
+                        const finalScore = (res.score * retrievalWeight * (1 + surpriseScore * 0.05) * queryWeight) + lexicalBoost + aliasBridgeBoost + tierBoost + profilePriorityBoost + temporalAdjustment + recencyAdjustment + retentionAdjustment - contradictionPenalty;
                         const existing = aggregate.get(memRow.id);
                         if (!existing || finalScore > existing.finalScore) {
                             aggregate.set(memRow.id, { memRow, finalScore, matchedQuery: variant });
@@ -2416,7 +2581,8 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
                     db,
                     characterId,
                     queryVariants,
-                    Math.max(resultLimit * 2, 8)
+                    Math.max(resultLimit * 2, 8),
+                    { temporalIntent, nowTs: searchNow }
                 ).filter(memRow => memoryMatchesSearchFilters(memRow, normalizedRequest.filters, temporalRange));
                 for (const memRow of lexicalSupplement) {
                     if (!memRow?.id) continue;
@@ -2445,7 +2611,20 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
                 }
                 if (memories.length > 0) {
                     if (typeof onTrace === 'function') {
-                        await onTrace({ phase: 'vectra_return', count: memories.length });
+                        await onTrace({
+                            phase: 'vectra_return',
+                            count: memories.length,
+                            results: memories.map(mem => ({
+                                id: mem.id,
+                                score: mem._search_score || '',
+                                matched_query: mem._matched_query || '',
+                                memory_focus: mem.memory_focus || '',
+                                memory_tier: mem.memory_tier || '',
+                                retention_action: mem.retention_action || '',
+                                source_started_at: mem.source_started_at || 0,
+                                source_ended_at: mem.source_ended_at || 0
+                            }))
+                        });
                     }
                     return memories;
                 }
@@ -2454,14 +2633,27 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
             if (typeof onTrace === 'function') {
                 await onTrace({ phase: 'lexical_begin' });
             }
-            const lexicalFallback = runLexicalMemoryFallback(db, characterId, queryVariants, resultLimit)
+            const lexicalFallback = runLexicalMemoryFallback(db, characterId, queryVariants, resultLimit, { temporalIntent, nowTs: searchNow })
                 .filter(memRow => memoryMatchesSearchFilters(memRow, normalizedRequest.filters, temporalRange));
             if (lexicalFallback.length > 0) {
                 if (db.markMemoriesRetrieved) {
                     db.markMemoriesRetrieved(lexicalFallback.map(m => m.id));
                 }
                 if (typeof onTrace === 'function') {
-                    await onTrace({ phase: 'lexical_return', count: lexicalFallback.length });
+                    await onTrace({
+                        phase: 'lexical_return',
+                        count: lexicalFallback.length,
+                        results: lexicalFallback.map(mem => ({
+                            id: mem.id,
+                            score: mem._search_score || '',
+                            matched_query: mem._matched_query || '',
+                            memory_focus: mem.memory_focus || '',
+                            memory_tier: mem.memory_tier || '',
+                            retention_action: mem.retention_action || '',
+                            source_started_at: mem.source_started_at || 0,
+                            source_ended_at: mem.source_ended_at || 0
+                        }))
+                    });
                 }
                 return lexicalFallback;
             }
@@ -2469,13 +2661,26 @@ function normalizeMemorySearchRequest(queryInput, limit = 5) {
             if (typeof onTrace === 'function') {
                 await onTrace({ phase: 'semantic_begin' });
             }
-            const semanticFallback = (await runSemanticMemoryFallback(db, characterId, baseQuery, resultLimit))
+            const semanticFallback = (await runSemanticMemoryFallback(db, characterId, baseQuery, resultLimit, { temporalIntent, nowTs: searchNow }))
                 .filter(memRow => memoryMatchesSearchFilters(memRow, normalizedRequest.filters, temporalRange));
             if (semanticFallback.length > 0 && db.markMemoriesRetrieved) {
                 db.markMemoriesRetrieved(semanticFallback.map(m => m.id));
             }
             if (typeof onTrace === 'function') {
-                await onTrace({ phase: 'semantic_finish', count: semanticFallback.length });
+                await onTrace({
+                    phase: 'semantic_finish',
+                    count: semanticFallback.length,
+                    results: semanticFallback.map(mem => ({
+                        id: mem.id,
+                        score: mem._search_score || '',
+                        matched_query: mem._matched_query || '',
+                        memory_focus: mem.memory_focus || '',
+                        memory_tier: mem.memory_tier || '',
+                        retention_action: mem.retention_action || '',
+                        source_started_at: mem.source_started_at || 0,
+                        source_ended_at: mem.source_ended_at || 0
+                    }))
+                });
             }
             return semanticFallback;
         } catch (e) {
@@ -2597,7 +2802,7 @@ Output exactly in this JSON format (and nothing else):
                     { role: 'system', content: 'You extract structured JSON facts from conversations. Be selective: only return add/update for durable high-value long-term memories, otherwise return none.' },
                     { role: 'user', content: extractionPrompt }
                 ],
-                maxTokens: 300,
+                maxTokens: MEMORY_SMALL_MODEL_MAX_TOKENS,
                 temperature: 0.3,
                 enableCache: true,
                 cacheDb: getDb(),
@@ -2681,7 +2886,7 @@ Output only the summary sentence, without quotes or extra explanation.
                     { role: 'system', content: 'You are an internal mood analyzer. You output ONLY the summarized first-person mindset.' },
                     { role: 'user', content: extractionPrompt }
                 ],
-                maxTokens: 100,
+                maxTokens: MEMORY_SMALL_MODEL_MAX_TOKENS,
                 temperature: 0.3,
                 enableCache: true,
                 cacheDb: getDb(),
@@ -2776,7 +2981,7 @@ ${dialogueText}`;
                     { role: 'system', content: '你是私聊上下文总结器。你只输出对话事实总结，必须准确区分说话人。' },
                     { role: 'user', content: summaryPrompt }
                 ],
-                maxTokens: 3000,
+                maxTokens: MEMORY_SMALL_MODEL_MAX_TOKENS,
                 temperature: 0.1,
                 enableCache: true,
                 cacheDb: getDb(),
@@ -2950,7 +3155,7 @@ ${deltaText}`;
                     { role: 'system', content: 'You are a compact group-conversation state updater. Output strict JSON only.' },
                     { role: 'user', content: digestPrompt }
                 ],
-                maxTokens: 700,
+                maxTokens: MEMORY_SMALL_MODEL_MAX_TOKENS,
                 temperature: 0.2,
                 enableCache: true,
                 cacheDb: getDb(),
@@ -3155,7 +3360,7 @@ Output exactly in this JSON format (and nothing else):
                         { role: 'system', content: 'You extract structured JSON arrays of facts from diverse daily logs. Lean toward extracting memories.' },
                         { role: 'user', content: extractionPrompt }
                     ],
-                    maxTokens: 1500,
+                    maxTokens: MEMORY_SMALL_MODEL_MAX_TOKENS,
                     temperature: 0.3,
                     enableCache: true,
                     cacheDb: getDb(),
@@ -3334,7 +3539,7 @@ Output exactly in this JSON format (and nothing else):
                     { role: 'system', content: 'You extract structured JSON arrays of facts from diverse daily logs. Lean toward extracting memories.' },
                     { role: 'user', content: extractionPrompt }
                 ],
-                maxTokens: 1500,
+                maxTokens: MEMORY_SMALL_MODEL_MAX_TOKENS,
                 temperature: 0.3,
                 enableCache: true,
                 cacheDb: getDb(),
@@ -3681,7 +3886,7 @@ Output exactly in this JSON format (and nothing else):
                         { role: 'system', content: 'You extract structured JSON memory objects from chat logs and keep a rolling summary across batches.' },
                         { role: 'user', content: extractionPrompt }
                     ],
-                    maxTokens: 2200,
+                    maxTokens: MEMORY_SMALL_MODEL_MAX_TOKENS,
                     temperature: 0.2,
                     enableCache: false,
                     cacheDb: getDb(),

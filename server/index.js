@@ -39,7 +39,7 @@ const JWT_SECRET = getJwtSecret();
 const { getEngine } = require('./engine');
 const { getMemory, extractMemoryFromContext, setWsClientsResolver, getEmbeddingDebugStatus } = require('./memory');
 const { getTokenCount } = require('./utils/tokenizer');
-const { getBackgroundQueueStats } = require('./backgroundQueue');
+const { enqueueBackgroundTask, getBackgroundQueueStats } = require('./backgroundQueue');
 const { synthesizeSpeech, getTencentVoiceList } = require('./tts');
 const qdrant = require('./qdrant');
 const crypto = require('crypto');
@@ -51,6 +51,15 @@ function createRequestTraceId(prefix = 'req') {
         ? crypto.randomUUID().slice(0, 8)
         : Math.random().toString(36).slice(2, 10);
     return `${prefix}-${Date.now().toString(36)}-${randomPart}`;
+}
+
+function yieldToServerLoop() {
+    return new Promise(resolve => setImmediate(resolve));
+}
+
+function buildDefaultAvatarUrl(seed = 'User') {
+    const safeSeed = encodeURIComponent(String(seed || 'User').trim() || 'User');
+    return `https://api.dicebear.com/7.x/shapes/svg?seed=${safeSeed}&backgroundColor=e8f0ff,fff5d6,e9f7ef,f5eafa,f1f5f9`;
 }
 
 function getEngineWithPluginHooks(userId) {
@@ -241,7 +250,7 @@ const MEMORY_IMPORT_MAX_ITEMS = 500;
 const MEMORY_BULK_MAX_IDS = 10000;
 const memoryImportUpload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 50 * 1024 * 1024, files: 1 },
+    limits: { fileSize: 128 * 1024 * 1024, files: 1 },
     fileFilter: (req, file, cb) => {
         const ext = path.extname(file.originalname || '').toLowerCase();
         const mime = String(file.mimetype || '').toLowerCase();
@@ -338,6 +347,11 @@ function tryParseJsonValue(text) {
     } catch (e) {
         return { ok: false, error: e };
     }
+}
+
+function safeJsonParse(text, fallback) {
+    const parsed = tryParseJsonValue(String(text || ''));
+    return parsed.ok ? parsed.value : fallback;
 }
 
 function extractMemoryEntriesFromPayload(payload) {
@@ -471,6 +485,1107 @@ function normalizeImportedMemoryEntry(entry, index) {
             group_id: firstImportString(entry.group_id)
         }
     };
+}
+
+const EXTERNAL_MEMORY_IMPORT_MAX_RAW_CHARS = 180000;
+const EXTERNAL_MEMORY_IMPORT_PROMPT_CHARS = 70000;
+const EXTERNAL_MEMORY_IMPORT_MAX_MESSAGES = 360;
+const EXTERNAL_MEMORY_IMPORT_MAX_MEMORIES = 160;
+const EXTERNAL_MEMORY_IMPORT_MAX_MESSAGE_CHARS = 50000;
+const EXTERNAL_MEMORY_IMPORT_LLM_TIMEOUT_MS = Math.max(30000, Number(process.env.CP_EXTERNAL_IMPORT_LLM_TIMEOUT_MS || 180000) || 180000);
+
+function normalizeExternalSourceApp(value = '') {
+    const raw = String(value || '').trim().toLowerCase();
+    if (/silly\s*tavern|sillytavern|tavern/.test(raw)) return 'sillytavern';
+    if (/gemini|bard/.test(raw)) return 'gemini';
+    if (/chatgpt|openai|\bgpt\b/.test(raw)) return 'gpt';
+    return 'external_app';
+}
+
+function getExternalSourceAppLabel(sourceApp = '') {
+    if (sourceApp === 'sillytavern') return 'SillyTavern';
+    if (sourceApp === 'gemini') return 'Gemini';
+    if (sourceApp === 'gpt') return 'GPT';
+    return 'External App';
+}
+
+function getExternalSceneTag(sourceApp = '') {
+    if (sourceApp === 'sillytavern') return 'external_sillytavern';
+    if (sourceApp === 'gemini') return 'external_gemini';
+    if (sourceApp === 'gpt') return 'external_gpt';
+    return 'external_app';
+}
+
+function normalizeExternalImportMode(value = '', sourceApp = '') {
+    const raw = String(value || '').trim().toLowerCase();
+    if (raw === 'multi_role' || raw === 'multi' || raw === 'group') return 'multi_role';
+    if (raw === 'one_to_one' || raw === 'single' || raw === 'private') return 'one_to_one';
+    return sourceApp === 'sillytavern' ? 'multi_role' : 'one_to_one';
+}
+
+function detectExternalSourceApp(filename = '', rawText = '') {
+    const name = String(filename || '').toLowerCase();
+    const text = String(rawText || '').slice(0, 300000);
+    if (/silly\s*tavern|sillytavern|tavern|imported\.jsonl/.test(name)) return 'sillytavern';
+    if (/"chat_metadata"|"swipes"|"mes"|"send_date"|LWB_|<本轮用户输入>|<recall>/i.test(text)) return 'sillytavern';
+    if (/gemini|bard/.test(name) || /"chunkedPrompt"|"model":"gemini/i.test(text)) return 'gemini';
+    if (/chatgpt|openai|conversations\.json/.test(name) || /"mapping"|"conversation_id"|"author"/i.test(text)) return 'gpt';
+    return '';
+}
+
+function cleanExternalSpeakerName(value = '') {
+    return String(value || '')
+        .replace(/^[#@]+/, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 80);
+}
+
+function isLikelyUserSpeaker(name = '') {
+    return /^(user|you|me|myself|human|nana|用户|我|自己)$/i.test(String(name || '').trim());
+}
+
+function extractExternalTextContent(value) {
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'string') return value.trim();
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (Array.isArray(value)) {
+        return value.map(extractExternalTextContent).filter(Boolean).join('\n').trim();
+    }
+    if (typeof value !== 'object') return '';
+    if (Array.isArray(value.parts)) return extractExternalTextContent(value.parts);
+    if (Array.isArray(value.texts)) return extractExternalTextContent(value.texts);
+    if (typeof value.text === 'string') return value.text.trim();
+    if (typeof value.content === 'string') return value.content.trim();
+    if (typeof value.value === 'string') return value.value.trim();
+    if (typeof value.string_value === 'string') return value.string_value.trim();
+    if (value.content && typeof value.content === 'object') return extractExternalTextContent(value.content);
+    return '';
+}
+
+function escapeImportRegex(value = '') {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripExternalNoiseBlocks(text = '') {
+    let output = String(text || '');
+    const blockTags = [
+        'think', 'thinking', 'thought', 'thoughts', 'analysis', 'reasoning',
+        'scratchpad', 'cot', 'chain_of_thought', 'inner_monologue', 'recall'
+    ];
+    for (const tag of blockTags) {
+        output = output.replace(new RegExp(`<\\s*${tag}\\b[^>]*>[\\s\\S]*?<\\s*\\/\\s*${tag}\\s*>`, 'gi'), '\n');
+    }
+    output = output.replace(/^[\s\S]*?<\s*\/\s*(?:think|thinking|thought|thoughts|analysis|reasoning|scratchpad|cot|chain_of_thought|inner_monologue)\s*>/i, '\n');
+    output = output.replace(/<\s*(?:本轮用户输入|当前用户输入|用户输入)[^>]*>[\s\S]*?<\s*\/\s*(?:本轮用户输入|当前用户输入|用户输入)\s*>/gi, '\n');
+    const bracketLabels = [
+        'think', 'thinking', 'analysis', 'reasoning', 'cot', 'chain of thought',
+        '思维链', '推理', '分析', '内心', '心理活动'
+    ];
+    for (const label of bracketLabels) {
+        const escaped = escapeImportRegex(label);
+        output = output.replace(new RegExp(`\\[\\s*${escaped}\\s*\\][\\s\\S]*?\\[\\s*\\/\\s*${escaped}\\s*\\]`, 'gi'), '\n');
+        output = output.replace(new RegExp(`【\\s*${escaped}\\s*】[\\s\\S]*?【\\s*\\/\\s*${escaped}\\s*】`, 'gi'), '\n');
+    }
+    output = output.replace(/```(?:think|thinking|analysis|reasoning|cot|chain[-_\s]*of[-_\s]*thought)[\s\S]*?```/gi, '\n');
+    output = output.replace(/<\|im_(?:start|end)\|>/gi, '\n');
+    output = output.replace(/<\/?s>/gi, '\n');
+    return output;
+}
+
+function isExternalNoiseLine(line = '') {
+    const text = String(line || '').trim();
+    if (!text) return true;
+    if (/^(?:---+|\*\*\*+|={3,})$/.test(text)) return true;
+    if (/^\{\{[^}]{1,100}\}\}$/.test(text)) return true;
+    if (/^<[^>]{1,100}>$/.test(text)) return true;
+    if (/^(?:\[\/?(?:INST|SYS|SYSTEM|PROMPT|THINK|ANALYSIS|REASONING|COT)\]|<\/?(?:START|END)>)/i.test(text)) return true;
+    if (/^###\s*(?:instruction|system|developer|prompt|input|response|assistant|user)\s*:?\s*$/i.test(text)) return true;
+    if (/^(?:system|developer|instruction|prompt|jailbreak|persona|scenario|world\s*info|author'?s?\s*note|prefix|suffix|thinking|reasoning|analysis|chain\s*of\s*thought)\s*[:：]/i.test(text)) return true;
+    if (/^(?:系统|开发者|指令|提示词?|系统提示|越狱|人格|角色设定|世界书|作者注|前缀|后缀|思维链|推理|分析|内心|心理活动)\s*[:：]/.test(text)) return true;
+    if (/^\|?\s*(?:小猫之神|系统|system|developer)\s*\|?\s*/i.test(text)) return true;
+    if (/^(?:以下|下面).{0,60}(?:输入|提示|记忆条目|索引编码|剧情相关|正文)/.test(text)) return true;
+    return false;
+}
+
+function cleanExternalMessageText(text = '') {
+    const original = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const stripped = stripExternalNoiseBlocks(original);
+    const removedStructuredNoise = stripped !== original;
+    let cleaned = stripped
+        .replace(/\{\{\s*char\s*\}\}/gi, '角色')
+        .replace(/\{\{\s*user\s*\}\}/gi, '用户')
+        .replace(/\[\s*(?:\/?INST|\/?SYS|\/?SYSTEM|\/?PROMPT)\s*\]/gi, '\n');
+    const lines = cleaned
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => !isExternalNoiseLine(line));
+    cleaned = lines.join('\n')
+        .replace(/[ \t]{2,}/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    if (!cleaned && original.trim() && !removedStructuredNoise) {
+        cleaned = original
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line && !isExternalNoiseLine(line))
+            .join('\n')
+            .trim();
+    }
+    return cleaned || '';
+}
+
+function cleanExternalMessagesForPrompt(messages = []) {
+    let changed = 0;
+    let dropped = 0;
+    const cleanedMessages = [];
+    for (const message of messages) {
+        const rawText = String(message?.text || '');
+        const cleanedText = cleanExternalMessageText(rawText);
+        if (!cleanedText) {
+            dropped += 1;
+            continue;
+        }
+        if (cleanedText !== rawText.trim()) changed += 1;
+        cleanedMessages.push({
+            ...message,
+            text: cleanedText.slice(0, 2200)
+        });
+    }
+    return {
+        messages: cleanedMessages,
+        stats: {
+            original_messages: messages.length,
+            cleaned_messages: cleanedMessages.length,
+            changed_messages: changed,
+            dropped_messages: dropped
+        }
+    };
+}
+
+function normalizeExternalTimestamp(...values) {
+    for (const value of values) {
+        if (value === undefined || value === null || value === '') continue;
+        if (typeof value === 'number') {
+            if (!Number.isFinite(value) || value <= 0) continue;
+            return value < 100000000000 ? Math.round(value * 1000) : Math.round(value);
+        }
+        const parsed = Date.parse(String(value));
+        if (Number.isFinite(parsed)) return parsed;
+        const numeric = Number(value);
+        if (Number.isFinite(numeric) && numeric > 0) {
+            return numeric < 100000000000 ? Math.round(numeric * 1000) : Math.round(numeric);
+        }
+    }
+    return 0;
+}
+
+function collectExternalMessages(value, out = [], depth = 0, seen = new Set()) {
+    if (out.length >= EXTERNAL_MEMORY_IMPORT_MAX_MESSAGES || depth > 10 || value === undefined || value === null) return out;
+    if (Array.isArray(value)) {
+        for (const item of value) collectExternalMessages(item, out, depth + 1, seen);
+        return out;
+    }
+    if (typeof value !== 'object') return out;
+
+    const role = firstImportString(value.role, value.author?.role, value.sender_role, value.type);
+    const explicitName = firstImportString(value.name, value.sender, value.sender_name, value.author?.name, value.from, value.user);
+    const speaker = cleanExternalSpeakerName(explicitName || role || (value.is_user === true ? 'User' : ''));
+    const text = extractExternalTextContent(value.mes ?? value.message ?? value.text ?? value.content ?? value.parts ?? value.value);
+    const hasMessageShape = !!text && (
+        !!speaker
+        || Object.prototype.hasOwnProperty.call(value, 'mes')
+        || Object.prototype.hasOwnProperty.call(value, 'role')
+        || Object.prototype.hasOwnProperty.call(value, 'author')
+        || Object.prototype.hasOwnProperty.call(value, 'is_user')
+    );
+    if (hasMessageShape) {
+        const timestamp = normalizeExternalTimestamp(value.timestamp, value.created_at, value.updated_at, value.create_time, value.send_date, value.date);
+        const compactText = text.replace(/\s+/g, ' ').trim();
+        const dedupeKey = `${speaker}|${timestamp}|${compactText.slice(0, 120)}`;
+        if (compactText && !seen.has(dedupeKey)) {
+            seen.add(dedupeKey);
+            out.push({
+                id: `m${out.length + 1}`,
+                speaker: speaker || 'Unknown',
+                role: role || (value.is_user === true ? 'user' : ''),
+                timestamp,
+                text: text.trim().slice(0, EXTERNAL_MEMORY_IMPORT_MAX_MESSAGE_CHARS)
+            });
+        }
+        return out;
+    }
+
+    if (value.message && typeof value.message === 'object') {
+        collectExternalMessages(value.message, out, depth + 1, seen);
+    }
+
+    const keys = ['messages', 'mapping', 'conversations', 'conversation', 'chat', 'history', 'data', 'items', 'rows', 'children'];
+    for (const key of keys) {
+        if (value[key] !== undefined) collectExternalMessages(value[key], out, depth + 1, seen);
+    }
+    if (value.mapping && typeof value.mapping === 'object') {
+        for (const item of Object.values(value.mapping)) collectExternalMessages(item?.message || item, out, depth + 1, seen);
+    }
+    return out;
+}
+
+function splitExternalPlainTextMessages(text = '') {
+    const rows = stripBom(text)
+        .replace(/\r\n/g, '\n')
+        .split(/\n+/)
+        .map(line => line.trim())
+        .filter(Boolean);
+    const messages = [];
+    for (const line of rows) {
+        if (messages.length >= EXTERNAL_MEMORY_IMPORT_MAX_MESSAGES) break;
+        const match = line.match(/^([^:：]{1,80})[:：]\s*(.+)$/);
+        const speaker = cleanExternalSpeakerName(match ? match[1] : '');
+        const body = (match ? match[2] : line).trim();
+        if (!body) continue;
+        messages.push({
+            id: `m${messages.length + 1}`,
+            speaker: speaker || 'Unknown',
+            role: isLikelyUserSpeaker(speaker) ? 'user' : '',
+            timestamp: 0,
+            text: body.slice(0, 2200)
+        });
+    }
+    if (messages.length > 0) return messages;
+    return splitPlainTextMemories(text).slice(0, EXTERNAL_MEMORY_IMPORT_MAX_MESSAGES).map((part, idx) => ({
+        id: `m${idx + 1}`,
+        speaker: 'Unknown',
+        role: '',
+        timestamp: 0,
+        text: part.slice(0, 2200)
+    }));
+}
+
+function looksLikeExternalJsonl(filename = '', rawText = '') {
+    if (/\.(?:jsonl|ndjson)$/i.test(String(filename || ''))) return true;
+    const lines = String(rawText || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(0, 8);
+    if (lines.length < 2) return false;
+    return lines.filter(line => /^[\[{]/.test(line)).length >= 2;
+}
+
+function collectExternalJsonlMessages(rawText = '') {
+    const messages = [];
+    const seen = new Set();
+    const lines = String(rawText || '').split(/\r?\n/);
+    let parsedLines = 0;
+    let failedLines = 0;
+    for (const line of lines) {
+        if (messages.length >= EXTERNAL_MEMORY_IMPORT_MAX_MESSAGES) break;
+        const trimmed = line.trim();
+        if (!trimmed || !/^[\[{]/.test(trimmed)) continue;
+        try {
+            const parsed = JSON.parse(trimmed);
+            parsedLines += 1;
+            collectExternalMessages(parsed, messages, 0, seen);
+        } catch (e) {
+            failedLines += 1;
+        }
+    }
+    return { messages, parsedLines, failedLines };
+}
+
+function parseExternalImportRequest(req) {
+    const file = req.files?.[0] || null;
+    const filename = file?.originalname || '';
+    let rawText = '';
+    if (file) {
+        rawText = file.buffer.toString('utf8');
+    } else {
+        rawText = firstImportString(req.body?.text, req.body?.transcript, req.body?.raw_text, req.body?.content);
+        if (!rawText && req.body && typeof req.body === 'object') {
+            rawText = JSON.stringify(req.body);
+        }
+    }
+    rawText = stripBom(rawText).trim();
+    if (!rawText) {
+        const error = new Error('No external conversation text or file was provided.');
+        error.status = 400;
+        throw error;
+    }
+    const fullRawText = rawText;
+    const rawTextForStorage = fullRawText.slice(0, EXTERNAL_MEMORY_IMPORT_MAX_RAW_CHARS);
+    let parsed = null;
+    let jsonlStats = null;
+    let messages = [];
+    if (looksLikeExternalJsonl(filename, fullRawText)) {
+        jsonlStats = collectExternalJsonlMessages(fullRawText);
+        messages = jsonlStats.messages;
+    }
+    if (messages.length === 0 && /^[\[{]/.test(fullRawText)) {
+        try { parsed = JSON.parse(fullRawText); } catch (e) { parsed = null; }
+    }
+    if (messages.length === 0 && parsed) messages = collectExternalMessages(parsed);
+    if (messages.length === 0) messages = splitExternalPlainTextMessages(rawTextForStorage);
+    const cleaned = cleanExternalMessagesForPrompt(messages);
+    return {
+        filename,
+        rawText: rawTextForStorage,
+        cleanedRawText: cleanExternalMessageText(rawTextForStorage).slice(0, EXTERNAL_MEMORY_IMPORT_MAX_RAW_CHARS),
+        messages: cleaned.messages,
+        detectedSourceApp: detectExternalSourceApp(filename, fullRawText),
+        cleanStats: {
+            ...cleaned.stats,
+            jsonl_parsed_lines: jsonlStats?.parsedLines || 0,
+            jsonl_failed_lines: jsonlStats?.failedLines || 0,
+            raw_chars: fullRawText.length,
+            stored_raw_chars: rawTextForStorage.length
+        }
+    };
+}
+
+function loadExternalImportRequestFromDb(rawDb, importId) {
+    const id = Number(importId || 0);
+    if (!id) {
+        const error = new Error('Missing external import id for retry.');
+        error.status = 400;
+        throw error;
+    }
+    const row = rawDb.prepare('SELECT * FROM external_memory_imports WHERE id = ?').get(id);
+    if (!row) {
+        const error = new Error('External import record not found.');
+        error.status = 404;
+        throw error;
+    }
+    const messages = safeJsonParse(row.normalized_messages_json, []);
+    if (!Array.isArray(messages) || messages.length === 0) {
+        const error = new Error('This external import has no stored normalized messages to retry.');
+        error.status = 422;
+        throw error;
+    }
+    return {
+        row,
+        filename: row.filename || '',
+        rawText: row.raw_text || '',
+        cleanedRawText: cleanExternalMessageText(row.raw_text || '').slice(0, EXTERNAL_MEMORY_IMPORT_MAX_RAW_CHARS),
+        messages,
+        detectedSourceApp: normalizeExternalSourceApp(row.source_app || ''),
+        storedSourceApp: normalizeExternalSourceApp(row.source_app || ''),
+        storedImportMode: normalizeExternalImportMode(row.import_mode || '', row.source_app || ''),
+        cleanStats: null
+    };
+}
+
+function inferExternalImportContinueOffset(row = {}, limit = 10) {
+    const summary = safeJsonParse(row.summary_json, {});
+    const explicitOffset = Number(summary?.last_run?.processed || summary?.continue_from?.offset || 0);
+    if (Number.isFinite(explicitOffset) && explicitOffset > 0) return explicitOffset;
+    const safeLimit = Math.max(1, Number(limit || 10) || 10);
+    const saved = normalizeExternalProcessingState(row.memory_ids_json);
+    const maxBatch = saved.reduce((max, item) => {
+        const match = /^b(\d+)_/i.exec(String(item?.candidate_id || ''));
+        return match ? Math.max(max, Number(match[1] || 0)) : max;
+    }, 0);
+    return maxBatch > 0 ? maxBatch * safeLimit : 0;
+}
+
+function buildExternalImportPrompt({ sourceApp, importMode, targetCharacterName, messages, rawText, knownRoleTags = [], userName = '' }) {
+    const appLabel = getExternalSourceAppLabel(sourceApp);
+    const rows = (messages || []).slice(0, EXTERNAL_MEMORY_IMPORT_MAX_MESSAGES).map(message => ({
+        id: message.id,
+        speaker: message.speaker,
+        role: message.role,
+        time: message.timestamp ? new Date(message.timestamp).toISOString() : '',
+        text: message.text
+    }));
+    const transcriptText = rows.length
+        ? JSON.stringify(rows).slice(0, EXTERNAL_MEMORY_IMPORT_PROMPT_CHARS)
+        : cleanExternalMessageText(rawText || '').slice(0, EXTERNAL_MEMORY_IMPORT_PROMPT_CHARS);
+    const knownRoles = (Array.isArray(knownRoleTags) ? knownRoleTags : [])
+        .map(tag => ({
+            name: normalizeExternalCharacterName(tag?.name || tag),
+            aliases: normalizeExternalRoleAliases(tag).slice(0, 8),
+            persona: firstImportString(tag?.profile?.persona, tag?.persona).slice(0, 180)
+        }))
+        .filter(tag => tag.name)
+        .slice(0, 80);
+    const knownRolesText = knownRoles.length ? JSON.stringify(knownRoles) : '[]';
+    const currentUserName = normalizeExternalCharacterName(userName);
+    const targetRule = importMode === 'one_to_one'
+        ? `这是 GPT/Gemini 一对一导出。目标角色名是 "${targetCharacterName || appLabel}"。所有有效记忆都绑定到这个角色；不要输出其他角色标签，除非原文明确另有同伴长期参与。`
+        : `这是 SillyTavern 或多人聊天导出。每条记忆必须返回 character_names: 只包含原文中有明确姓名、且这条记忆确实涉及的非用户角色。没有明确姓名就 needs_review，不要编名字，不要把 User/Nana/用户${currentUserName ? `/${currentUserName}` : ''}放进 character_names。`;
+    const systemPrompt = '你是 ChatPulse 外部聊天记录导入小模型。任务是把外部 App 的聊天记录整理成可进入新版 RAG 记忆库的中文剧情记忆，并标出涉及的角色名。只输出合法 JSON 对象，不要 Markdown，不要解释。';
+    const userPrompt = `来源 App: ${appLabel}
+导入模式: ${importMode}
+${targetRule}
+已捕获角色标签 JSON:
+${knownRolesText}
+
+请从输入里提取长期或阶段性有用的记忆。输入已经预清洗过：思维链、系统提示、前缀/后缀、模板噪声应视为无效来源；只相信聊天正文，不要把提示词或推理文本总结成记忆。
+
+分类枚举:
+- memory_focus: user_profile | relationship | user_current_arc | general
+- memory_tier: core | active | ambient
+- importance: 1-10
+
+输出 JSON:
+{
+  "role_tags": [
+    {"name":"明确角色名","aliases":["可选别名/简称/译名"],"confidence":0.0-1.0,"reason":"一句中文理由"}
+  ],
+  "character_profiles": [
+    {"name":"角色名","persona":"可选，基于原文概括的简短角色设定"}
+  ],
+  "memories": [
+    {
+      "summary":"2-4 句中文正式记忆，概括剧情场景、起因、关键行动、结果或状态变化",
+      "content":"更完整的剧情概况，保留角色关系、冲突、时间/地点线索和后续影响，但不要贴长段原文",
+      "character_names":["明确角色名"],
+      "memory_focus":"user_profile | relationship | user_current_arc | general",
+      "memory_tier":"core | active | ambient",
+      "importance":1-10,
+      "consolidation_key":"english_snake_case_key",
+      "source_refs":["m1","m2"],
+      "source_time_text":"可选，原文有明确时间才写",
+      "reason":"一句中文理由"
+    }
+  ],
+  "needs_review": [
+    {"source_refs":["m3"],"reason":"为什么不确定"}
+  ]
+}
+
+约束:
+- summary/content 必须是简体中文。
+- summary 不是短标题，不能只写“某人做了某事”。每条 summary 通常 80-260 个中文字符，至少说明“在哪里/什么阶段、为什么发生、谁做了什么、造成了什么结果或关系变化”；只有极简单事实才可以更短。
+- content 通常 150-600 个中文字符，用来保留剧情脉络：场景、动机、冲突、角色反应、状态变化、未解决线索。不要复制大段原文，不要输出露骨细节，但也不要压缩成一句话。
+- 一条记忆只覆盖一个可召回事件、阶段状态或关系变化；不要把整段关系史糊成一条，也不要拆到失去剧情上下文。
+- SillyTavern 记录往往是连续剧情日志，必须给出可读的剧情概况；优先总结“这一小段发生了什么、谁参与、对后续有什么意义”，不要只抽取孤立关键词。
+- source_refs 必须来自输入消息 id。
+- GPT/Gemini 一对一模式默认绑定到目标角色。
+- SillyTavern 多人模式只返回明确姓名的角色标签；多人共同经历可以让多个角色共享同一条记忆。
+- role_tags.name、character_profiles.name 和 character_names 是机器角色标签，不是中文自然语言字段：必须保留原文里明确出现的姓名写法和大小写，不要翻译、音译或改写角色名。例如原文写 Conrad/Dominic/Baron，就输出 Conrad/Dominic/Baron，不要改成康拉德/多米尼克/巴伦；原文只写中文名时才用中文名。
+- 如果“已捕获角色标签 JSON”非空，character_names 必须优先使用其中的 name 原文作为标准名；简称、姓氏、中文译名、英文名、全名变体都要归并到已有标准名，禁止把同一个人重复输出成新角色。
+- role_tags 只输出本批新出现、且不属于已捕获角色标签的新角色；已有角色不要重复输出。若只是补充别名，可以在同一个标准 name 下输出 aliases。
+- 如果无法判断某个名字是不是已捕获角色的别名，且原文没有明确姓名证据，就放进 needs_review，不要创建新角色。
+- 最多输出 ${EXTERNAL_MEMORY_IMPORT_MAX_MEMORIES} 条 memories。
+
+输入消息 JSON:
+${transcriptText}`;
+    return { system_prompt: systemPrompt, user_prompt: userPrompt, row_count: rows.length };
+}
+
+function normalizeExternalCharacterName(name = '', fallback = '') {
+    const cleaned = cleanExternalSpeakerName(name || fallback)
+        .replace(/[<>\[\]{}"'`]+/g, '')
+        .trim();
+    if (!cleaned || isLikelyUserSpeaker(cleaned)) return '';
+    return cleaned.slice(0, 60);
+}
+
+function getExternalNameCompareKey(name = '') {
+    return String(name || '')
+        .normalize('NFKC')
+        .toLowerCase()
+        .replace(/black wood/g, 'blackwood')
+        .replace(/van croft/g, 'vancroft')
+        .replace(/[·・•．.。_\-—–/\\|()[\]{}'"`“”‘’\s:：,，;；]+/g, '')
+        .trim();
+}
+
+function isExternalImportUserName(name = '', userName = '') {
+    const normalized = normalizeExternalCharacterName(name);
+    if (!normalized) return true;
+    if (isLikelyUserSpeaker(normalized)) return true;
+    const userKey = getExternalNameCompareKey(userName);
+    return !!userKey && getExternalNameCompareKey(normalized) === userKey;
+}
+
+function getExternalNameTokens(name = '') {
+    return String(name || '')
+        .normalize('NFKC')
+        .toLowerCase()
+        .replace(/[·・•．.。_\-—–/\\|()[\]{}'"`“”‘’:,，;；]+/g, ' ')
+        .split(/\s+/)
+        .map(token => token.trim())
+        .filter(token => token.length >= 3);
+}
+
+function normalizeExternalRoleAliases(tag = {}) {
+    const values = [];
+    const add = (value) => {
+        if (Array.isArray(value)) {
+            for (const item of value) add(item);
+            return;
+        }
+        const normalized = normalizeExternalCharacterName(value);
+        if (normalized && !values.some(existing => getExternalNameCompareKey(existing) === getExternalNameCompareKey(normalized))) {
+            values.push(normalized);
+        }
+    };
+    add(tag?.aliases);
+    add(tag?.alias);
+    add(tag?.english_name);
+    add(tag?.chinese_name);
+    add(tag?.profile?.aliases);
+    add(tag?.profile?.alias);
+    add(tag?.profile?.english_name);
+    add(tag?.profile?.chinese_name);
+    return values;
+}
+
+function getExternalRoleCandidateNames(tag = {}) {
+    const names = [];
+    const add = (value) => {
+        const normalized = normalizeExternalCharacterName(value);
+        if (normalized && !names.some(existing => getExternalNameCompareKey(existing) === getExternalNameCompareKey(normalized))) {
+            names.push(normalized);
+        }
+    };
+    add(tag?.name || tag);
+    for (const alias of normalizeExternalRoleAliases(tag)) add(alias);
+    add(tag?.profile?.name);
+    return names;
+}
+
+function resolveExternalKnownRoleName(name = '', knownRoleTags = []) {
+    const normalized = normalizeExternalCharacterName(name);
+    if (!normalized) return '';
+    const targetKey = getExternalNameCompareKey(normalized);
+    if (!targetKey) return '';
+    const candidates = (Array.isArray(knownRoleTags) ? knownRoleTags : [])
+        .map(tag => {
+            const canonical = normalizeExternalCharacterName(tag?.name || tag);
+            if (!canonical) return null;
+            const names = getExternalRoleCandidateNames(tag);
+            return { canonical, names };
+        })
+        .filter(Boolean);
+    for (const candidate of candidates) {
+        if (candidate.names.some(item => getExternalNameCompareKey(item) === targetKey)) {
+            return candidate.canonical;
+        }
+    }
+    const containmentMatches = candidates.filter(candidate => candidate.names.some(item => {
+        const key = getExternalNameCompareKey(item);
+        if (!key || key === targetKey) return false;
+        const minLength = /[\u4e00-\u9fff]/.test(targetKey + key) ? 2 : 4;
+        return targetKey.length >= minLength && key.length >= minLength && (key.includes(targetKey) || targetKey.includes(key));
+    }));
+    if (containmentMatches.length === 1) {
+        return containmentMatches[0].canonical;
+    }
+    const targetTokens = getExternalNameTokens(normalized);
+    if (targetTokens.length > 0) {
+        const tokenMatches = candidates.filter(candidate => {
+            const candidateTokens = new Set(candidate.names.flatMap(getExternalNameTokens));
+            if (candidateTokens.size === 0) return false;
+            return targetTokens.some(token => candidateTokens.has(token));
+        });
+        if (tokenMatches.length === 1) return tokenMatches[0].canonical;
+    }
+    return normalized;
+}
+
+function normalizeExternalImportResult(parsed = {}, context = {}) {
+    const sourceApp = context.sourceApp || 'external_app';
+    const importMode = context.importMode || 'one_to_one';
+    const targetName = normalizeExternalCharacterName(context.targetCharacterName, getExternalSourceAppLabel(sourceApp));
+    const userName = normalizeExternalCharacterName(context.userName || '');
+    const knownRoleTags = Array.isArray(context.knownRoleTags) ? context.knownRoleTags : [];
+    const messageById = new Map((context.messages || []).map(message => [String(message.id), message]));
+    const roleMap = new Map();
+    const profileMap = new Map();
+    const addRole = (name, patch = {}) => {
+        const rawNormalized = normalizeExternalCharacterName(name, importMode === 'one_to_one' ? targetName : '');
+        if (!rawNormalized || (importMode === 'multi_role' && isExternalImportUserName(rawNormalized, userName))) return '';
+        const normalized = importMode === 'multi_role'
+            ? resolveExternalKnownRoleName(rawNormalized, knownRoleTags)
+            : rawNormalized;
+        if (!normalized || (importMode === 'multi_role' && isExternalImportUserName(normalized, userName))) return '';
+        const existing = roleMap.get(normalized.toLowerCase()) || { name: normalized, confidence: 0.8, reason: '' };
+        roleMap.set(normalized.toLowerCase(), {
+            ...existing,
+            ...patch,
+            name: existing.name || normalized,
+            confidence: Math.max(Number(existing.confidence || 0), Number(patch.confidence || 0)),
+            aliases: Array.from(new Set([
+                ...(Array.isArray(existing.aliases) ? existing.aliases : []),
+                ...normalizeExternalRoleAliases(patch),
+                ...(normalized !== rawNormalized ? [rawNormalized] : [])
+            ].map(alias => normalizeExternalCharacterName(alias)).filter(Boolean)))
+        });
+        return existing.name || normalized;
+    };
+    for (const tag of knownRoleTags) {
+        addRole(tag?.name || tag, {
+            ...tag,
+            confidence: clampImportNumber(tag?.confidence, 0.9, 0, 1),
+            reason: firstImportString(tag?.reason, '已捕获角色标签。')
+        });
+    }
+    if (importMode === 'one_to_one') addRole(targetName || getExternalSourceAppLabel(sourceApp), { confidence: 1, reason: '一对一导入目标角色。' });
+    for (const tag of Array.isArray(parsed.role_tags) ? parsed.role_tags : []) {
+        addRole(tag?.name, {
+            confidence: clampImportNumber(tag?.confidence, 0.8, 0, 1),
+            reason: firstImportString(tag?.reason)
+        });
+    }
+    for (const profile of Array.isArray(parsed.character_profiles) ? parsed.character_profiles : []) {
+        const name = addRole(profile?.name, { confidence: 0.85, reason: '小模型从导入记录中识别。' });
+        if (name) profileMap.set(name.toLowerCase(), {
+            name,
+            persona: firstImportString(profile?.persona, profile?.description).slice(0, 1500)
+        });
+    }
+
+    const candidates = [];
+    const rawMemories = (Array.isArray(parsed.memories) ? parsed.memories : []).slice(0, EXTERNAL_MEMORY_IMPORT_MAX_MEMORIES);
+    for (let idx = 0; idx < rawMemories.length; idx++) {
+        const item = rawMemories[idx] || {};
+        const summary = firstImportString(item.summary, item.content, item.memory, item.text).slice(0, 1200);
+        const content = firstImportString(item.content, item.summary, item.memory, item.text).slice(0, 3000);
+        if (!summary || !hasCjkText(summary)) continue;
+        let names = Array.isArray(item.character_names) ? item.character_names : (Array.isArray(item.characters) ? item.characters : []);
+        if (importMode === 'one_to_one' && names.length === 0) names = [targetName || getExternalSourceAppLabel(sourceApp)];
+        names = Array.from(new Set(names
+            .map(name => addRole(name, { confidence: importMode === 'one_to_one' ? 1 : 0.8 }))
+            .filter(Boolean)));
+        if (importMode === 'multi_role' && names.length === 0) continue;
+        const sourceRefs = Array.from(new Set((Array.isArray(item.source_refs) ? item.source_refs : [])
+            .map(ref => String(ref || '').trim())
+            .filter(ref => messageById.has(ref))))
+            .slice(0, 20);
+        const sourceMessages = sourceRefs.map(ref => messageById.get(ref)).filter(Boolean);
+        const timestamps = sourceMessages.map(message => Number(message.timestamp || 0)).filter(ts => ts > 0).sort((a, b) => a - b);
+        const sourceStartedAt = timestamps[0] || 0;
+        const sourceEndedAt = timestamps[timestamps.length - 1] || sourceStartedAt || 0;
+        const focus = MEMORY_MAINTENANCE_FOCUS.has(String(item.memory_focus || '').trim()) ? String(item.memory_focus).trim() : 'general';
+        const tier = MEMORY_MAINTENANCE_TIERS.has(String(item.memory_tier || '').trim()) ? String(item.memory_tier).trim() : 'ambient';
+        const keySeed = firstImportString(item.consolidation_key, item.key, summary)
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '_')
+            .replace(/^_+|_+$/g, '')
+            .slice(0, 90) || `external_memory_${idx + 1}`;
+        candidates.push({
+            id: `c${idx + 1}`,
+            summary,
+            content: content || summary,
+            character_names: names,
+            memory_focus: focus,
+            memory_tier: tier,
+            importance: Math.round(clampImportNumber(item.importance, 5, 1, 10)),
+            consolidation_key: keySeed,
+            source_refs: sourceRefs,
+            source_started_at: sourceStartedAt,
+            source_ended_at: sourceEndedAt,
+            source_time_text: firstImportString(item.source_time_text) || (sourceStartedAt ? (sourceStartedAt === sourceEndedAt ? new Date(sourceStartedAt).toLocaleString('zh-CN') : `${new Date(sourceStartedAt).toLocaleString('zh-CN')} - ${new Date(sourceEndedAt).toLocaleString('zh-CN')}`) : ''),
+            source_message_count: sourceRefs.length || sourceMessages.length || 0,
+            reason: firstImportString(item.reason).slice(0, 500)
+        });
+    }
+    const roleTags = Array.from(roleMap.values())
+        .filter(tag => candidates.some(candidate => candidate.character_names.includes(tag.name)) || importMode === 'one_to_one')
+        .map(tag => ({
+            ...tag,
+            profile: profileMap.get(tag.name.toLowerCase()) || { name: tag.name, persona: '' }
+        }));
+    return {
+        source_app: sourceApp,
+        import_mode: importMode,
+        role_tags: roleTags,
+        candidates,
+        needs_review: Array.isArray(parsed.needs_review) ? parsed.needs_review.slice(0, 30) : []
+    };
+}
+
+function chunkExternalImportMessages(messages = [], limit = 10, maxBatches = null) {
+    const safeLimit = Math.max(1, Math.min(100, Number(limit || 10) || 10));
+    const chunks = [];
+    for (let start = 0; start < messages.length; start += safeLimit) {
+        if (maxBatches !== null && chunks.length >= maxBatches) break;
+        chunks.push(messages.slice(start, start + safeLimit));
+    }
+    return chunks;
+}
+
+function mergeExternalImportRoleTags(existing = [], incoming = []) {
+    const map = new Map();
+    const seedTags = Array.isArray(existing) ? existing : [];
+    const allTags = [...seedTags, ...(Array.isArray(incoming) ? incoming : [])];
+    for (const tag of allTags) {
+        const rawName = normalizeExternalCharacterName(tag?.name || tag);
+        const name = seedTags.length && !seedTags.some(seed => getExternalNameCompareKey(seed?.name || seed) === getExternalNameCompareKey(rawName))
+            ? resolveExternalKnownRoleName(rawName, seedTags)
+            : rawName;
+        if (!name) continue;
+        const key = name.toLowerCase();
+        const prev = map.get(key) || { name, confidence: 0, reason: '', profile: { name, persona: '' } };
+        const aliases = Array.from(new Set([
+            ...(Array.isArray(prev.aliases) ? prev.aliases : []),
+            ...normalizeExternalRoleAliases(tag),
+            ...(rawName && rawName !== name ? [rawName] : [])
+        ].map(alias => normalizeExternalCharacterName(alias)).filter(Boolean)));
+        map.set(key, {
+            ...prev,
+            ...tag,
+            name: prev.name || name,
+            confidence: Math.max(Number(prev.confidence || 0), Number(tag?.confidence || 0)),
+            reason: firstImportString(prev.reason, tag?.reason),
+            aliases,
+            profile: {
+                ...(prev.profile || {}),
+                ...(tag?.profile || {}),
+                name
+            }
+        });
+    }
+    return Array.from(map.values());
+}
+
+function buildExternalImportDirectDedupeKey({ importId, sourceApp, characterId, candidate }) {
+    const refs = Array.isArray(candidate?.source_refs) ? candidate.source_refs.join('_') : '';
+    const seed = firstImportString(candidate?.consolidation_key, candidate?.id, candidate?.summary, refs)
+        .toLowerCase()
+        .replace(/[^a-z0-9\u4e00-\u9fff]+/gi, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 100) || 'memory';
+    return `external-import-direct:${sourceApp}:${characterId}:${importId}:${seed}`.slice(0, 240);
+}
+
+function getExternalImportSharedLibraryId(sourceApp = '') {
+    const app = String(sourceApp || 'external_app')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'external-app';
+    return `external-shared-${app}`;
+}
+
+function shouldUseSharedExternalImportLibrary(sourceApp = '', importMode = '') {
+    return sourceApp === 'sillytavern' || importMode === 'multi_role';
+}
+
+function ensureExternalSharedImportCharacter(db, id, name) {
+    if (!db || !id) return;
+    if (typeof db.getCharacter === 'function' && db.getCharacter(id)) return;
+    if (typeof db.updateCharacter === 'function') {
+        db.updateCharacter(id, {
+            id,
+            name: name || '外部共享导入库',
+            persona: '外部多人聊天导入的共享记忆库。它不作为聊天角色显示，只承载被多个角色标签绑定的导入记忆。',
+            is_blocked: 1,
+            status: 'shared_library',
+            llm_debug_capture: 0,
+            sweep_initialized: 1
+        });
+    }
+}
+
+async function saveExternalImportCandidatesDirect({ db, memory, settings, importId, sourceApp, importMode = '', normalized, dryRun = false }) {
+    const sceneTag = getExternalSceneTag(sourceApp);
+    const useSharedLibrary = shouldUseSharedExternalImportLibrary(sourceApp, importMode || normalized?.import_mode);
+    const sharedLibraryId = getExternalImportSharedLibraryId(sourceApp);
+    const sharedLibraryName = `${getExternalSourceAppLabel(sourceApp)} 共享导入库`;
+    const roleProfiles = new Map((normalized.role_tags || []).map(tag => [
+        normalizeExternalCharacterName(tag.name).toLowerCase(),
+        tag.profile || tag
+    ]));
+    const characterByName = new Map();
+    const characters = [];
+    const saved = [];
+    const skipped = [];
+    const errors = [];
+
+    const ensureCharacter = (name) => {
+        const normalizedName = normalizeExternalCharacterName(name);
+        if (!normalizedName) return null;
+        const key = normalizedName.toLowerCase();
+        if (characterByName.has(key)) return characterByName.get(key);
+        if (dryRun) {
+            const existing = findCharacterByName(db, normalizedName);
+            const character = existing || { id: makeCharacterIdFromName(db, normalizedName), name: normalizedName };
+            characterByName.set(key, character);
+            characters.push({
+                id: character.id,
+                name: character.name,
+                created: !existing,
+                dry_run: true
+            });
+            return character;
+        }
+        const result = ensureImportedCharacter(db, normalizedName, roleProfiles.get(key) || {}, settings);
+        if (result.character) {
+            characterByName.set(key, result.character);
+            characters.push({
+                id: result.character.id,
+                name: result.character.name,
+                created: result.created
+            });
+        }
+        return result.character || null;
+    };
+
+    for (const tag of normalized.role_tags || []) {
+        ensureCharacter(tag.name);
+    }
+
+    for (const candidate of normalized.candidates || []) {
+        const names = Array.from(new Set((Array.isArray(candidate.character_names) ? candidate.character_names : [])
+            .map(name => normalizeExternalCharacterName(name))
+            .filter(Boolean)));
+        if (!names.length) {
+            skipped.push({ candidate_id: candidate.id, reason: 'missing_character_names' });
+            continue;
+        }
+        const boundCharacters = [];
+        for (const name of names) {
+            const character = ensureCharacter(name);
+            if (character) {
+                boundCharacters.push(character);
+            } else {
+                skipped.push({ candidate_id: candidate.id, name, reason: 'character_not_created' });
+            }
+        }
+        if (!boundCharacters.length) continue;
+        await yieldToServerLoop();
+
+        const storageCharacter = useSharedLibrary
+            ? { id: sharedLibraryId, name: sharedLibraryName }
+            : boundCharacters[0];
+        if (useSharedLibrary && !dryRun) {
+            ensureExternalSharedImportCharacter(db, storageCharacter.id, storageCharacter.name);
+        }
+        const dedupeKey = buildExternalImportDirectDedupeKey({
+            importId,
+            sourceApp,
+            characterId: storageCharacter.id,
+            candidate
+        });
+        const sourceRefs = Array.from(new Set((Array.isArray(candidate.source_refs) ? candidate.source_refs : [])
+            .map(ref => String(ref || '').trim())
+            .filter(Boolean)));
+        const sourceMessageIds = sourceRefs.length
+            ? sourceRefs.map(ref => `external-import:${importId}:${ref}`)
+            : [`external-import:${importId}:${candidate.id || dedupeKey}`];
+        const summary = firstImportString(candidate.summary, candidate.content).slice(0, 1200);
+        const content = firstImportString(candidate.content, candidate.summary).slice(0, 3000);
+        if (!summary || !hasCjkText(summary)) {
+            skipped.push({ candidate_id: candidate.id, names, reason: 'empty_or_non_chinese_summary' });
+            continue;
+        }
+        const existing = db.getMemoryByDedupeKey?.(storageCharacter.id, dedupeKey);
+        const boundCharacterRefs = boundCharacters.map(item => ({ id: item.id, name: item.name }));
+        const boundCharacterNames = boundCharacters.map(item => item.name);
+        if (dryRun) {
+            saved.push({
+                dry_run: true,
+                candidate_id: candidate.id,
+                character_id: storageCharacter.id,
+                character_name: storageCharacter.name,
+                shared_library: useSharedLibrary,
+                bound_characters: boundCharacterRefs,
+                character_names: boundCharacterNames,
+                action: existing ? 'would_update' : 'would_create',
+                summary
+            });
+            continue;
+        }
+        try {
+            const memoryId = await memory.saveExtractedMemory(storageCharacter.id, {
+                memory_type: 'event',
+                summary,
+                content: content || summary,
+                event: summary,
+                importance: Math.round(clampImportNumber(candidate.importance, 5, 1, 10)),
+                memory_tier: MEMORY_MAINTENANCE_TIERS.has(candidate.memory_tier) ? candidate.memory_tier : 'ambient',
+                memory_focus: MEMORY_MAINTENANCE_FOCUS.has(candidate.memory_focus) ? candidate.memory_focus : 'general',
+                maintenance_status: 'classified',
+                classification_source: useSharedLibrary ? 'external-import-shared' : 'external-import-direct',
+                classified_at: Date.now(),
+                retention_score: 1,
+                retention_action: 'keep',
+                retention_reason: useSharedLibrary ? 'external_import_shared' : 'external_import_direct',
+                retention_checked_at: Date.now(),
+                consolidation_key: candidate.consolidation_key || dedupeKey,
+                consolidation_summary: summary,
+                dedupe_key: dedupeKey,
+                source_context: 'external_app',
+                scene_tag: sceneTag,
+                source_app: sourceApp,
+                people_json: boundCharacterNames,
+                source_message_ids_json: sourceMessageIds,
+                source_started_at: Number(candidate.source_started_at || 0),
+                source_ended_at: Number(candidate.source_ended_at || candidate.source_started_at || 0),
+                source_time_text: candidate.source_time_text || '',
+                source_message_count: Number(candidate.source_message_count || sourceRefs.length || 0)
+            }, null, { allowUnindexed: true, throwOnError: true, allowRoutineCity: true });
+            if (useSharedLibrary && memoryId && typeof db.bindExternalMemoryToCharacters === 'function') {
+                db.bindExternalMemoryToCharacters(importId, memoryId, boundCharacters);
+                for (const boundCharacter of boundCharacters) {
+                    if (typeof memory.refreshMemoryIndexEntries === 'function') {
+                        try {
+                            await memory.refreshMemoryIndexEntries(boundCharacter.id, [memoryId]);
+                        } catch (e) {
+                            console.warn(`[External Import] Shared memory index refresh failed for ${boundCharacter.id}:`, e.message);
+                        }
+                    }
+                }
+            }
+            saved.push({
+                candidate_id: candidate.id,
+                character_id: storageCharacter.id,
+                character_name: storageCharacter.name,
+                shared_library: useSharedLibrary,
+                bound_characters: boundCharacterRefs,
+                character_names: boundCharacterNames,
+                memory_id: memoryId,
+                action: existing ? 'updated' : 'created',
+                summary
+            });
+            await yieldToServerLoop();
+        } catch (e) {
+            errors.push({
+                candidate_id: candidate.id,
+                character_id: storageCharacter.id,
+                character_name: storageCharacter.name,
+                shared_library: useSharedLibrary,
+                bound_characters: boundCharacterRefs,
+                error: e.message || 'save failed'
+            });
+        }
+    }
+
+    return {
+        characters,
+        saved,
+        skipped,
+        errors,
+        saved_count: saved.length,
+        error_count: errors.length
+    };
+}
+
+function groupExternalImportSavedItems(saved = []) {
+    const map = new Map();
+    for (const item of Array.isArray(saved) ? saved : []) {
+        const summary = String(item?.summary || '').trim();
+        if (!summary) continue;
+        const key = String(item?.candidate_id || summary).trim() || summary;
+        const current = map.get(key) || {
+            summary,
+            candidate_id: item?.candidate_id || '',
+            character_names: [],
+            memory_ids: []
+        };
+        const names = Array.isArray(item?.character_names) && item.character_names.length
+            ? item.character_names
+            : (Array.isArray(item?.bound_characters) ? item.bound_characters.map(character => character?.name) : [item?.character_name]);
+        for (const name of names) {
+            const characterName = String(name || '').trim();
+            if (characterName && !current.character_names.includes(characterName)) {
+                current.character_names.push(characterName);
+            }
+        }
+        if (item?.memory_id) current.memory_ids.push(item.memory_id);
+        map.set(key, current);
+    }
+    return Array.from(map.values());
+}
+
+function countUniqueExternalImportSavedItems(saved = []) {
+    return groupExternalImportSavedItems(saved).length;
+}
+
+function formatExternalImportSavedSamples(saved = [], limit = 5) {
+    return groupExternalImportSavedItems(saved)
+        .slice(0, Math.max(0, Number(limit || 0) || 0))
+        .map(item => {
+            const names = item.character_names.slice(0, 4).join(' / ');
+            const suffix = names ? `（绑定：${names}${item.character_names.length > 4 ? ' 等' : ''}）` : '';
+            return `${item.summary}${suffix}`;
+        });
+}
+
+function countExternalImportSavedBindings(saved = []) {
+    return (Array.isArray(saved) ? saved : []).reduce((sum, item) => {
+        const names = Array.isArray(item?.character_names) && item.character_names.length
+            ? item.character_names
+            : (Array.isArray(item?.bound_characters) ? item.bound_characters : []);
+        return sum + Math.max(1, names.length || 0);
+    }, 0);
+}
+
+function getExternalImportSavedCharacterIds(saved = []) {
+    const ids = new Set();
+    for (const item of Array.isArray(saved) ? saved : []) {
+        if (Array.isArray(item?.bound_characters)) {
+            for (const character of item.bound_characters) {
+                const id = String(character?.id || '').trim();
+                if (id) ids.add(id);
+            }
+        }
+        if (!item?.shared_library) {
+            const id = String(item?.character_id || '').trim();
+            if (id) ids.add(id);
+        }
+    }
+    return Array.from(ids);
+}
+
+function findCharacterByName(db, name = '') {
+    const target = String(name || '').trim().toLowerCase();
+    if (!target || typeof db.getCharacters !== 'function') return null;
+    const characters = db.getCharacters() || [];
+    const exact = characters.find(character => String(character.name || '').trim().toLowerCase() === target);
+    if (exact) return exact;
+    const targetKey = getExternalNameCompareKey(name);
+    if (!targetKey) return null;
+    const candidates = characters
+        .map(character => ({ character, key: getExternalNameCompareKey(character.name || '') }))
+        .filter(item => item.key);
+    const containmentMatches = candidates.filter(item => {
+        const minLength = /[\u4e00-\u9fff]/.test(targetKey + item.key) ? 2 : 4;
+        return targetKey.length >= minLength && item.key.length >= minLength && (item.key.includes(targetKey) || targetKey.includes(item.key));
+    });
+    if (containmentMatches.length === 1) return containmentMatches[0].character;
+    const targetTokens = getExternalNameTokens(name);
+    if (targetTokens.length > 0) {
+        const tokenMatches = candidates.filter(item => {
+            const tokens = new Set(getExternalNameTokens(item.character.name || ''));
+            return targetTokens.some(token => tokens.has(token));
+        });
+        if (tokenMatches.length === 1) return tokenMatches[0].character;
+    }
+    return null;
+}
+
+function makeCharacterIdFromName(db, name = '') {
+    const base = String(name || 'imported-character')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9\u4e00-\u9fff]+/gi, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 36) || 'imported-character';
+    let candidate = base;
+    let suffix = 1;
+    while (db.getCharacter?.(candidate)) {
+        suffix += 1;
+        candidate = `${base}-${suffix}`;
+    }
+    return candidate;
+}
+
+function ensureImportedCharacter(db, name, profile = {}, settings = {}) {
+    const existing = findCharacterByName(db, name);
+    if (existing) return { character: existing, created: false };
+    const id = makeCharacterIdFromName(db, name);
+    db.updateCharacter(id, {
+        id,
+        name,
+        avatar: buildDefaultAvatarUrl(name),
+        persona: firstImportString(profile?.persona, `${name} 是从外部聊天记录导入的角色，后续可以在角色设置里补全人格。`),
+        affinity: 50,
+        wallet: 200,
+        memory_api_endpoint: settings.api_endpoint || '',
+        memory_api_key: settings.api_key || '',
+        memory_model_name: settings.model_name || ''
+    });
+    return { character: db.getCharacter(id), created: true };
 }
 
 function sanitizeDownloadName(value, fallback = 'character') {
@@ -1170,15 +2285,198 @@ function getMemoryMaintenanceBatch(rawDb, characterId, options = {}) {
           AND COALESCE(is_archived, 0) = 0
           AND (COALESCE(maintenance_status, '') = '' OR maintenance_status = 'pending')
     `).get(characterId)?.count || 0;
+    const externalPendingCount = status === 'pending' ? getExternalImportPendingCountForCharacter(rawDb, characterId) : 0;
+    if (status === 'pending' && rows.length === 0) {
+        const externalOffset = Math.max(0, offset - Number(totalMatching || 0));
+        const externalBatch = getExternalImportMaintenanceBatch(rawDb, characterId, { limit, offset: externalOffset });
+        if (externalBatch.items.length > 0) {
+            return {
+                ...externalBatch,
+                remaining_pending: Number(remainingPending || 0) + externalPendingCount,
+                total_matching: Number(totalMatching || 0) + externalPendingCount,
+                total_batches: Math.max(0, Math.ceil((Number(totalMatching || 0) + externalPendingCount) / limit))
+            };
+        }
+    }
     const now = Date.now();
     return {
+        source_kind: 'legacy_memory',
         items: rows.map(row => buildMemoryMaintenancePayload(row, now)),
         next_after_id: rows.length > 0 ? rows[rows.length - 1].id : afterId,
-        remaining_pending: Number(remainingPending || 0),
+        remaining_pending: Number(remainingPending || 0) + externalPendingCount,
         offset,
         batch_index: Math.floor(offset / limit) + 1,
-        total_matching: Number(totalMatching || 0),
-        total_batches: Math.max(0, Math.ceil(Number(totalMatching || 0) / limit))
+        total_matching: Number(totalMatching || 0) + externalPendingCount,
+        total_batches: Math.max(0, Math.ceil((Number(totalMatching || 0) + externalPendingCount) / limit))
+    };
+}
+
+function normalizeExternalProcessingState(value) {
+    const raw = safeJsonParse(value, []);
+    if (!Array.isArray(raw)) return [];
+    return raw.map(item => {
+        if (item && typeof item === 'object' && !Array.isArray(item)) return item;
+        const numericId = Number(item || 0);
+        return numericId > 0 ? { memory_id: numericId } : null;
+    }).filter(Boolean);
+}
+
+function makeExternalProcessingKey(importId, candidateId, characterId) {
+    return `${Number(importId || 0)}:${String(candidateId || '')}:${String(characterId || '')}`;
+}
+
+function getExternalImportRows(rawDb) {
+    // External app imports are now summarized directly into the new library.
+    // Keep historical rows for source traceability, but do not feed them into
+    // the legacy maintenance scanner again.
+    return [];
+}
+
+function getExternalCharacterName(rawDb, characterId) {
+    try {
+        const row = rawDb.prepare('SELECT name FROM characters WHERE id = ?').get(characterId);
+        return row?.name || '';
+    } catch (e) {
+        return '';
+    }
+}
+
+function buildExternalImportPendingItems(rawDb, characterId) {
+    const characterName = normalizeExternalCharacterName(getExternalCharacterName(rawDb, characterId)).toLowerCase();
+    if (!characterName) return [];
+    const items = [];
+    for (const row of getExternalImportRows(rawDb)) {
+        const selectedIds = safeJsonParse(row.selected_character_ids_json, [])
+            .map(id => String(id || ''))
+            .filter(Boolean);
+        if (!selectedIds.includes(String(characterId))) continue;
+        const state = normalizeExternalProcessingState(row.memory_ids_json);
+        const processedKeys = new Set(state
+            .filter(item => String(item.character_id || '') === String(characterId) && item.candidate_id)
+            .map(item => item.key || makeExternalProcessingKey(row.id, item.candidate_id, characterId)));
+        const summary = safeJsonParse(row.summary_json, {});
+        const candidates = Array.isArray(summary.candidates) ? summary.candidates : [];
+        const sourceApp = row.source_app || summary.source_app || 'external_app';
+        const appLabel = getExternalSourceAppLabel(sourceApp);
+        const sceneTag = getExternalSceneTag(sourceApp);
+        for (const candidate of candidates) {
+            const candidateNames = (Array.isArray(candidate.character_names) ? candidate.character_names : [])
+                .map(name => normalizeExternalCharacterName(name).toLowerCase())
+                .filter(Boolean);
+            const oneToOneFallback = candidateNames.length === 0 && String(row.import_mode || '') === 'one_to_one' && selectedIds.length === 1;
+            if (!candidateNames.includes(characterName) && !oneToOneFallback) continue;
+            const key = makeExternalProcessingKey(row.id, candidate.id, characterId);
+            if (processedKeys.has(key)) continue;
+            items.push({
+                importRow: row,
+                candidate,
+                key,
+                sourceApp,
+                appLabel,
+                sceneTag
+            });
+        }
+    }
+    return items;
+}
+
+function getExternalImportPendingCountForCharacter(rawDb, characterId) {
+    return buildExternalImportPendingItems(rawDb, characterId).length;
+}
+
+function getExternalImportPendingStatsByCharacter(rawDb) {
+    let characters = [];
+    try {
+        characters = rawDb.prepare('SELECT id, name FROM characters ORDER BY name COLLATE NOCASE ASC').all();
+    } catch (e) {
+        return new Map();
+    }
+    const stats = new Map();
+    for (const character of characters) {
+        const count = getExternalImportPendingCountForCharacter(rawDb, character.id);
+        if (count > 0) {
+            stats.set(String(character.id), {
+                character_id: character.id,
+                name: character.name || character.id,
+                pending: count,
+                total: count
+            });
+        }
+    }
+    return stats;
+}
+
+function getExternalImportMaintenanceBatch(rawDb, characterId, options = {}) {
+    const limit = Math.max(1, Math.min(100, Number(options.limit || 30) || 30));
+    const offset = Math.max(0, Number(options.offset || 0) || 0);
+    const allItems = buildExternalImportPendingItems(rawDb, characterId);
+    const now = Date.now();
+    const items = allItems.slice(offset, offset + limit).map((entry, index) => {
+        const candidate = entry.candidate || {};
+        const sourceStartedAt = Number(candidate.source_started_at || 0);
+        const sourceEndedAt = Number(candidate.source_ended_at || sourceStartedAt || 0);
+        return {
+            id: index + 1,
+            character_id: characterId,
+            summary: candidate.summary || candidate.content || '',
+            content: candidate.content || candidate.summary || '',
+            event: candidate.summary || candidate.content || '',
+            current: {
+                memory_type: 'external_import_staged',
+                memory_focus: MEMORY_MAINTENANCE_FOCUS.has(candidate.memory_focus) ? candidate.memory_focus : 'general',
+                memory_tier: MEMORY_MAINTENANCE_TIERS.has(candidate.memory_tier) ? candidate.memory_tier : 'ambient',
+                importance: Math.round(clampImportNumber(candidate.importance, 5, 1, 10)),
+                maintenance_status: 'pending',
+                retention_action: 'keep',
+                retention_score: 1,
+                consolidation_key: candidate.consolidation_key || '',
+                consolidation_summary: '',
+                source_context: 'external_app',
+                scene_tag: entry.sceneTag,
+                source_app: entry.appLabel,
+                temporal_label: '',
+                temporal_scope: '',
+                temporal_anchor: ''
+            },
+            signals: {
+                retrieval_count: 0,
+                last_retrieved_at: 0,
+                created_at: Number(entry.importRow?.created_at || now),
+                updated_at: Number(entry.importRow?.committed_at || entry.importRow?.created_at || now),
+                source_started_at: sourceStartedAt,
+                source_ended_at: sourceEndedAt,
+                source_time_text: candidate.source_time_text || '',
+                source_message_count: Number(candidate.source_message_count || candidate.source_refs?.length || 0)
+            },
+            retention: {
+                retention_score: 1,
+                suggested_action: 'keep',
+                reason: '外部导入暂存原料，等待自动总结。',
+                threshold: null,
+                days_until_threshold: null,
+                forgetting_window: null
+            },
+            external_import: {
+                import_id: Number(entry.importRow?.id || 0),
+                candidate_id: String(candidate.id || ''),
+                character_id: String(characterId),
+                key: entry.key,
+                source_message_ids_json: [`external-import:${entry.importRow?.id}:${candidate.id}`],
+                source_refs: Array.isArray(candidate.source_refs) ? candidate.source_refs : [],
+                source_app: entry.appLabel,
+                scene_tag: entry.sceneTag
+            }
+        };
+    });
+    return {
+        source_kind: 'external_import',
+        items,
+        next_after_id: 0,
+        remaining_pending: allItems.length,
+        offset,
+        batch_index: Math.floor(offset / limit) + 1,
+        total_matching: allItems.length,
+        total_batches: Math.max(0, Math.ceil(allItems.length / limit))
     };
 }
 
@@ -1505,9 +2803,20 @@ function extractJsonObjectFromText(text = '') {
     const start = raw.indexOf('{');
     const end = raw.lastIndexOf('}');
     if (start === -1 || end === -1 || end <= start) {
-        throw new Error('Small model did not return a JSON object.');
+        const error = new Error('小模型没有返回 JSON 对象，后端找不到完整的 { ... }。');
+        error.code = 'small_model_json_missing';
+        error.payload = { raw_response: raw };
+        throw error;
     }
-    return JSON.parse(raw.slice(start, end + 1));
+    const jsonText = raw.slice(start, end + 1);
+    try {
+        return JSON.parse(jsonText);
+    } catch (e) {
+        const error = new Error(`小模型返回的 JSON 格式不合法：${e.message}`);
+        error.code = 'small_model_invalid_json';
+        error.payload = { raw_response: raw, json_preview: clipMemoryDisplayText(jsonText, 1600) };
+        throw error;
+    }
 }
 
 function hasCjkText(value = '') {
@@ -1982,11 +3291,15 @@ function getMemoryMaintenanceStats(rawDb, characterId) {
         GROUP BY COALESCE(memory_tier, 'ambient')
         ORDER BY count DESC
     `).all(characterId);
+    const externalPending = getExternalImportPendingCountForCharacter(rawDb, characterId);
+    const legacyPending = Number(row.pending || 0);
     return {
-        total: Number(row.total || 0),
+        total: Number(row.total || 0) + externalPending,
         active: Number(row.active || 0),
         archived: Number(row.archived || 0),
-        pending: Number(row.pending || 0),
+        pending: legacyPending + externalPending,
+        legacy_pending: legacyPending,
+        external_pending: externalPending,
         classified: Number(row.classified || 0),
         needs_review: Number(row.needs_review || 0),
         archive_candidates: Number(row.archive_candidates || 0),
@@ -2016,6 +3329,17 @@ function buildMemoryMaintenanceAttemptError(error, attemptNumber) {
     };
 }
 
+function isNonRetryableMemoryMaintenanceError(error) {
+    const text = [
+        error?.message,
+        error?.payload?.raw_response,
+        error?.payload?.error,
+        error?.response?.status,
+        error?.status
+    ].filter(Boolean).join('\n');
+    return /(401|403|unauthorized|forbidden|invalid\s*(api\s*)?key|invalid_key|permission|auth)/i.test(text);
+}
+
 function buildMemoryMaintenanceNoProgressAttempt(result, statsAfterBatch, attemptNumber) {
     return {
         attempt: attemptNumber,
@@ -2032,6 +3356,191 @@ function buildMemoryMaintenanceNoProgressAttempt(result, statsAfterBatch, attemp
         },
         normalized_errors: (result?.normalized?.errors || []).slice(0, 6),
         raw_response_preview: result?.raw_response ? clipMemoryDisplayText(result.raw_response, 1600) : ''
+    };
+}
+
+function appendExternalImportProcessingEntries(rawDb, entries = []) {
+    const grouped = new Map();
+    for (const entry of entries) {
+        const importId = Number(entry?.import_id || 0);
+        if (!importId) continue;
+        if (!grouped.has(importId)) grouped.set(importId, []);
+        grouped.get(importId).push(entry);
+    }
+    for (const [importId, groupEntries] of grouped.entries()) {
+        const row = rawDb.prepare('SELECT id, memory_ids_json FROM external_memory_imports WHERE id = ?').get(importId);
+        if (!row) continue;
+        const current = normalizeExternalProcessingState(row.memory_ids_json);
+        const byKey = new Map();
+        for (const item of current) {
+            const key = item.key || makeExternalProcessingKey(importId, item.candidate_id, item.character_id);
+            if (key) byKey.set(key, { ...item, key });
+        }
+        for (const entry of groupEntries) {
+            const key = entry.key || makeExternalProcessingKey(importId, entry.candidate_id, entry.character_id);
+            if (!key) continue;
+            byKey.set(key, {
+                ...entry,
+                key,
+                processed_at: entry.processed_at || Date.now()
+            });
+        }
+        rawDb.prepare('UPDATE external_memory_imports SET memory_ids_json = ? WHERE id = ?')
+            .run(JSON.stringify(Array.from(byKey.values())), importId);
+    }
+}
+
+async function applyExternalImportMigrationItems(rawDb, memory, characterId, normalized = {}, batch = {}, source = 'external-import-auto-migration') {
+    const now = Date.now();
+    const inputRows = Array.isArray(batch.items) ? batch.items : [];
+    const itemById = new Map(inputRows.map(item => [Number(item.id || 0), item]));
+    const errors = [];
+    const affectedIds = [];
+    const processingEntries = [];
+    const processedVirtualIds = new Set();
+    const updateFormalStmt = rawDb.prepare(`
+        UPDATE memories
+        SET maintenance_status = 'classified',
+            classification_source = ?,
+            classified_at = ?,
+            retention_action = ?,
+            retention_reason = ?,
+            retention_checked_at = ?,
+            temporal_label = ?,
+            temporal_scope = ?,
+            temporal_anchor = ?,
+            temporal_confidence = ?,
+            temporal_reason = ?,
+            temporal_checked_at = ?,
+            updated_at = ?
+        WHERE id = ? AND character_id = ?
+    `);
+
+    const newMemories = Array.isArray(normalized.newMemories) ? normalized.newMemories : [];
+    for (const mem of newMemories) {
+        const sourceIds = Array.from(new Set((Array.isArray(mem?.source_ids) ? mem.source_ids : [])
+            .map(id => Number(id || 0))
+            .filter(id => itemById.has(id))));
+        if (!sourceIds.length) continue;
+        const sourceItems = sourceIds.map(id => itemById.get(id)).filter(Boolean);
+        const summary = String(mem.summary || '').trim();
+        if (!summary) continue;
+        const sourceContext = MEMORY_SOURCE_CONTEXTS.has(String(mem.source_context || '').trim()) ? String(mem.source_context).trim() : 'external_app';
+        const firstExternal = sourceItems[0]?.external_import || {};
+        const sceneTag = MEMORY_SCENE_TAGS.has(String(mem.scene_tag || '').trim())
+            ? String(mem.scene_tag).trim()
+            : (firstExternal.scene_tag || 'external_app');
+        const sourceApp = firstExternal.source_app || 'External';
+        const startedValues = sourceItems.map(item => Number(item.signals?.source_started_at || 0)).filter(Boolean);
+        const endedValues = sourceItems.map(item => Number(item.signals?.source_ended_at || item.signals?.source_started_at || 0)).filter(Boolean);
+        const sourceMessageIds = Array.from(new Set(sourceItems.flatMap(item => item.external_import?.source_message_ids_json || [])));
+        const sourceTimeText = firstImportString(...sourceItems.map(item => item.signals?.source_time_text).filter(Boolean));
+        const timeBinding = mem.time_binding && typeof mem.time_binding === 'object' ? mem.time_binding : {};
+        const isTimeBound = timeBinding.is_time_bound === true;
+        const temporalLabel = isTimeBound && MEMORY_TEMPORAL_BINDING_LABELS.has(String(timeBinding.label || '').trim()) ? String(timeBinding.label).trim() : '';
+        const temporalScope = isTimeBound && MEMORY_TEMPORAL_BINDING_SCOPES.has(String(timeBinding.scope || '').trim()) ? String(timeBinding.scope).trim() : '';
+        const sourceKey = sourceItems.map(item => item.external_import?.key || item.id).join('_');
+        const consolidationKey = String(mem.consolidation_key || sourceKey || summary)
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '_')
+            .replace(/^_+|_+$/g, '')
+            .slice(0, 120) || `external_import_${now}`;
+        const dedupeKey = `external-import-formal:${characterId}:${sourceKey}:${consolidationKey}`;
+        try {
+            const memoryId = await memory.saveExtractedMemory(characterId, {
+                memory_type: 'formal_memory',
+                summary,
+                content: summary,
+                event: summary,
+                importance: Math.round(clampImportNumber(mem.importance, sourceItems[0]?.current?.importance || 5, 1, 10)),
+                memory_focus: MEMORY_MAINTENANCE_FOCUS.has(mem.memory_focus) ? mem.memory_focus : 'general',
+                memory_tier: MEMORY_MAINTENANCE_TIERS.has(mem.memory_tier) ? mem.memory_tier : 'ambient',
+                consolidation_key: consolidationKey,
+                consolidation_summary: summary,
+                source_context: sourceContext,
+                scene_tag: sceneTag,
+                source_app: sourceApp,
+                source_message_ids_json: sourceMessageIds,
+                source_started_at: startedValues.length ? Math.min(...startedValues) : 0,
+                source_ended_at: endedValues.length ? Math.max(...endedValues) : 0,
+                source_time_text: sourceTimeText || '',
+                source_message_count: sourceMessageIds.length || sourceItems.reduce((sum, item) => sum + Number(item.signals?.source_message_count || 0), 0),
+                dedupe_key: dedupeKey
+            }, null);
+            if (memoryId) {
+                affectedIds.push(Number(memoryId));
+                const retentionAction = String(mem.action || '').trim() === 'merge_create' ? 'merge_candidate' : 'keep';
+                const reason = hasCjkText(mem.reason) ? String(mem.reason || '') : '外部导入自动总结生成。';
+                updateFormalStmt.run(
+                    source,
+                    now,
+                    retentionAction,
+                    reason.slice(0, 500),
+                    now,
+                    temporalLabel,
+                    temporalScope,
+                    temporalLabel ? String(timeBinding.time_anchor || '').trim().slice(0, 120) : '',
+                    temporalLabel ? clampNumber(timeBinding.confidence, 0.5, 0, 1) : 0,
+                    temporalLabel ? (hasCjkText(timeBinding.reason) ? String(timeBinding.reason || '').slice(0, 500) : '小模型未提供中文理由。') : '',
+                    temporalLabel ? now : 0,
+                    now,
+                    memoryId,
+                    characterId
+                );
+                for (const item of sourceItems) {
+                    processedVirtualIds.add(Number(item.id || 0));
+                    processingEntries.push({
+                        import_id: item.external_import?.import_id,
+                        candidate_id: item.external_import?.candidate_id,
+                        character_id: String(characterId),
+                        key: item.external_import?.key,
+                        action: 'created',
+                        memory_id: Number(memoryId)
+                    });
+                }
+            }
+        } catch (e) {
+            errors.push({ source_ids: sourceIds, error: e.message || 'Failed to save external formal memory.' });
+        }
+    }
+
+    for (const action of Array.isArray(normalized.oldActions) ? normalized.oldActions : []) {
+        const id = Number(action?.id || 0);
+        const item = itemById.get(id);
+        if (!item || processedVirtualIds.has(id)) continue;
+        processedVirtualIds.add(id);
+        processingEntries.push({
+            import_id: item.external_import?.import_id,
+            candidate_id: item.external_import?.candidate_id,
+            character_id: String(characterId),
+            key: item.external_import?.key,
+            action: String(action.action || 'needs_review').trim() || 'needs_review',
+            reason: String(action.reason || '').slice(0, 500)
+        });
+    }
+
+    for (const applyItem of Array.isArray(normalized.applyItems) ? normalized.applyItems : []) {
+        const id = Number(applyItem?.id || 0);
+        const item = itemById.get(id);
+        if (!item || processedVirtualIds.has(id)) continue;
+        processedVirtualIds.add(id);
+        processingEntries.push({
+            import_id: item.external_import?.import_id,
+            candidate_id: item.external_import?.candidate_id,
+            character_id: String(characterId),
+            key: item.external_import?.key,
+            action: applyItem.maintenance_status || 'needs_review',
+            reason: String(applyItem.retention_reason || '').slice(0, 500)
+        });
+    }
+
+    appendExternalImportProcessingEntries(rawDb, processingEntries);
+    return {
+        updated: processingEntries.length,
+        inserted: affectedIds.length,
+        affected_ids: affectedIds,
+        errors,
+        external_processed: processingEntries.length
     };
 }
 
@@ -2099,18 +3608,29 @@ async function runMemoryMaintenanceBatch(rawDb, memory, character, settings, opt
     let indexRefresh = null;
     let indexRefreshWarning = '';
     if (!parseBooleanFlag(options.dry_run)) {
-        applyResult = applyMemoryMaintenanceItems(
-            rawDb,
-            characterId,
-            normalized.applyItems,
-            options.source || 'small-model-migration',
-            { replaceSourceIds: normalized.applyItems.length > 0 ? batch.items.map(item => item.id) : [] }
-        );
-        try {
-            indexRefresh = await refreshMaintenanceMemoryIndex(memory, characterId, applyResult);
-        } catch (e) {
-            indexRefreshWarning = e.message || 'Memory index refresh failed.';
-            console.error(`[Memory Maintenance] Failed to refresh memory index for ${characterId}:`, indexRefreshWarning);
+        if (batch.source_kind === 'external_import') {
+            applyResult = await applyExternalImportMigrationItems(
+                rawDb,
+                memory,
+                characterId,
+                normalized,
+                batch,
+                options.source || 'external-import-auto-migration'
+            );
+        } else {
+            applyResult = applyMemoryMaintenanceItems(
+                rawDb,
+                characterId,
+                normalized.applyItems,
+                options.source || 'small-model-migration',
+                { replaceSourceIds: normalized.applyItems.length > 0 ? batch.items.map(item => item.id) : [] }
+            );
+            try {
+                indexRefresh = await refreshMaintenanceMemoryIndex(memory, characterId, applyResult);
+            } catch (e) {
+                indexRefreshWarning = e.message || 'Memory index refresh failed.';
+                console.error(`[Memory Maintenance] Failed to refresh memory index for ${characterId}:`, indexRefreshWarning);
+            }
         }
     }
     return {
@@ -2120,6 +3640,7 @@ async function runMemoryMaintenanceBatch(rawDb, memory, character, settings, opt
         dry_run: parseBooleanFlag(options.dry_run),
         prompt,
         batch: {
+            source_kind: batch.source_kind || 'legacy_memory',
             item_count: batch.items.length,
             ids: batch.items.map(item => item.id),
             next_after_id: batch.next_after_id,
@@ -2364,6 +3885,72 @@ function clipMemoryDisplayText(value, max = 520) {
     return `${text.slice(0, max - 1)}…`;
 }
 
+const MEMORY_LIBRARY_ROW_COLUMNS = [
+    'id',
+    'character_id',
+    'time',
+    'location',
+    'people',
+    'event',
+    'relationships',
+    'items',
+    'importance',
+    'created_at',
+    'group_id',
+    'last_retrieved_at',
+    'retrieval_count',
+    'memory_type',
+    'summary',
+    'content',
+    'people_json',
+    'items_json',
+    'relationship_json',
+    'emotion',
+    'source_message_ids_json',
+    'dedupe_key',
+    'updated_at',
+    'is_archived',
+    'source_started_at',
+    'source_ended_at',
+    'source_time_text',
+    'source_message_count',
+    'memory_tier',
+    'memory_focus',
+    'maintenance_status',
+    'classification_source',
+    'classified_at',
+    'retention_score',
+    'retention_action',
+    'retention_reason',
+    'retention_checked_at',
+    'consolidation_key',
+    'consolidation_summary',
+    'consolidated_into_memory_id',
+    'archive_reason',
+    'forgetting_grace_started_at',
+    'forgetting_grace_expires_at',
+    'source_context',
+    'scene_tag',
+    'source_app',
+    'temporal_label',
+    'temporal_scope',
+    'temporal_anchor',
+    'temporal_confidence',
+    'temporal_reason',
+    'temporal_checked_at'
+];
+
+function quoteSqlIdentifier(name) {
+    return `"${String(name || '').replace(/"/g, '""')}"`;
+}
+
+function getMemoryLibraryRowSelect(rawDb, alias = '') {
+    const columns = getTableColumnSet(rawDb, 'memories');
+    const prefix = alias ? `${quoteSqlIdentifier(alias)}.` : '';
+    const selected = MEMORY_LIBRARY_ROW_COLUMNS.filter(column => columns.has(column));
+    return selected.map(column => `${prefix}${quoteSqlIdentifier(column)}`).join(', ');
+}
+
 function parseMemorySourceIds(value) {
     if (Array.isArray(value)) return value.map(item => String(item || '').trim()).filter(Boolean);
     const raw = String(value || '').trim();
@@ -2546,7 +4133,8 @@ function updateFormalMemoryGraceRows(rawDb, sourceIds = [], patch = {}) {
     tx(ids);
 }
 
-function applyFormalMemoryForgettingState(item, rawDb, now = Date.now()) {
+function applyFormalMemoryForgettingState(item, rawDb, now = Date.now(), options = {}) {
+    const persistGrace = options.persistGrace !== false;
     const rows = Array.isArray(item._source_rows) ? item._source_rows : [];
     const virtualRow = {
         id: item.id,
@@ -2576,11 +4164,15 @@ function applyFormalMemoryForgettingState(item, rawDb, now = Date.now()) {
         const expiresAt = existingExpiresAt > startedAt ? existingExpiresAt : startedAt + MEMORY_FORGETTING_GRACE_MS;
         virtualRow.forgetting_grace_started_at = startedAt;
         virtualRow.forgetting_grace_expires_at = expiresAt;
-        updateFormalMemoryGraceRows(rawDb, item.source_ids, { started_at: startedAt, expires_at: expiresAt });
+        if (persistGrace) {
+            updateFormalMemoryGraceRows(rawDb, item.source_ids, { started_at: startedAt, expires_at: expiresAt });
+        }
     } else {
         virtualRow.forgetting_grace_started_at = 0;
         virtualRow.forgetting_grace_expires_at = 0;
-        updateFormalMemoryGraceRows(rawDb, item.source_ids, { started_at: 0, expires_at: 0 });
+        if (persistGrace) {
+            updateFormalMemoryGraceRows(rawDb, item.source_ids, { started_at: 0, expires_at: 0 });
+        }
     }
     const forgettingWindow = computeMemoryForgettingWindow(virtualRow, retention, now);
     item.text = item.summary || '';
@@ -2604,8 +4196,10 @@ function buildNewMemorySummaryLibrary(rawDb, charById, definitions, baseWhere, b
     const now = Number(options.now || Date.now());
     const showAll = !!options.showAll;
     const forgettingLimit = options.forgettingLimit || 120;
+    const limitPerGroup = showAll ? null : clampMemoryLibraryLimit(options.limitPerGroup, 28, 120);
+    const rowSelect = getMemoryLibraryRowSelect(rawDb);
     const rows = rawDb.prepare(`
-        SELECT *
+        SELECT ${rowSelect}
         FROM memories
         WHERE ${baseWhere.join(' AND ')}
           AND COALESCE(NULLIF(consolidation_summary, ''), '') <> ''
@@ -2687,7 +4281,7 @@ function buildNewMemorySummaryLibrary(rawDb, charById, definitions, baseWhere, b
         grouped.set(groupKey, item);
     }
     const items = Array.from(grouped.values())
-        .map(item => applyFormalMemoryForgettingState(item, rawDb, now))
+        .map(item => applyFormalMemoryForgettingState(item, rawDb, now, { persistGrace: false }))
         .sort((a, b) => Number(b.updated_at || 0) - Number(a.updated_at || 0));
     const curveItems = items
         .filter(item => !item.protected && item.days_until_threshold !== null && item.days_until_threshold !== undefined)
@@ -2699,7 +4293,9 @@ function buildNewMemorySummaryLibrary(rawDb, charById, definitions, baseWhere, b
             label: def.label,
             description: def.description,
             count: categoryItems.length,
-            items: categoryItems
+            limit: showAll ? categoryItems.length : limitPerGroup,
+            has_more: !showAll && categoryItems.length > limitPerGroup,
+            items: showAll ? categoryItems : categoryItems.slice(0, limitPerGroup)
         };
     }).filter(group => group.count > 0 || ['user_profile', 'relationship', 'user_current_arc', 'general'].includes(group.key));
     const sourceGroups = MEMORY_SOURCE_CONTEXT_DEFINITIONS.map(def => {
@@ -2714,7 +4310,9 @@ function buildNewMemorySummaryLibrary(rawDb, charById, definitions, baseWhere, b
             label: def.label,
             description: def.description,
             count: sourceItems.length,
-            items: sourceItems
+            limit: showAll ? sourceItems.length : limitPerGroup,
+            has_more: !showAll && sourceItems.length > limitPerGroup,
+            items: showAll ? sourceItems : sourceItems.slice(0, limitPerGroup)
         };
     });
     return {
@@ -2730,6 +4328,10 @@ function getMemoryMaintenanceLibrary(rawDb, options = {}) {
     const showAll = parseBooleanFlag(options.all);
     const limitPerGroup = showAll ? null : clampMemoryLibraryLimit(options.limit_per_group, 28, 120);
     const forgettingLimit = showAll ? null : clampMemoryLibraryLimit(options.forgetting_limit, 70, 160);
+    const timelineShowAll = showAll || parseBooleanFlag(options.timeline_all);
+    const timelineLimit = timelineShowAll
+        ? null
+        : clampMemoryLibraryLimit(options.timeline_limit, Math.max(limitPerGroup || 36, 720), 3000);
     const characterId = String(options.character_id || '').trim();
     const temporalFilter = String(options.temporal_filter || 'all').trim();
     const timelineFilter = normalizeMemoryTimelineFilter(options.timeline_filter || 'strong_time_bound');
@@ -2737,6 +4339,7 @@ function getMemoryMaintenanceLibrary(rawDb, options = {}) {
     const characters = rawDb.prepare('SELECT id, name, avatar FROM characters ORDER BY name COLLATE NOCASE ASC').all();
     const charById = new Map(characters.map(c => [String(c.id), c]));
     const now = Date.now();
+    const rowSelect = getMemoryLibraryRowSelect(rawDb);
     const baseWhere = ['COALESCE(is_archived, 0) = 0'];
     const baseParams = [];
     if (sourceMode === 'new') {
@@ -2751,7 +4354,7 @@ function getMemoryMaintenanceLibrary(rawDb, options = {}) {
         baseParams.push(...getMemoryTemporalSignalParams());
     }
     const graceRows = rawDb.prepare(`
-        SELECT *
+        SELECT ${rowSelect}
         FROM memories
         WHERE ${baseWhere.join(' AND ')}
     `).all(...baseParams);
@@ -2781,7 +4384,7 @@ function getMemoryMaintenanceLibrary(rawDb, options = {}) {
         const params = [...baseParams, def.key];
         const count = Number(rawDb.prepare(`SELECT COUNT(*) AS c FROM memories WHERE ${where.join(' AND ')}`).get(...params)?.c || 0);
         const rows = rawDb.prepare(`
-            SELECT *
+            SELECT ${rowSelect}
             FROM memories
             WHERE ${where.join(' AND ')}
             ORDER BY COALESCE(NULLIF(updated_at, 0), NULLIF(created_at, 0), id) DESC, id DESC
@@ -2817,49 +4420,38 @@ function getMemoryMaintenanceLibrary(rawDb, options = {}) {
         : countFormalMemoryGroups(rawDb, [...timelineBaseWhere, getMemoryStrongTimelineSql()], [...timelineBaseParams, ...getMemoryStrongTimelineParams()]);
     const timelineRows = rawDb.prepare(`
         WITH eligible AS (
-            SELECT *,
+            SELECT ${rowSelect},
                    ${formalGroupExpr} AS formal_group_key,
                    COALESCE(NULLIF(source_ended_at, 0), NULLIF(source_started_at, 0), NULLIF(created_at, 0), id) AS row_sort_at
             FROM memories
             WHERE ${timelineWhere.join(' AND ')}
         ),
-        grouped AS (
-            SELECT formal_group_key,
-                   MAX(row_sort_at) AS formal_sort_at,
-                   COUNT(*) AS source_count,
-                   GROUP_CONCAT(id) AS source_ids,
-                   SUM(COALESCE(retrieval_count, 0)) AS source_retrieval_count,
-                   MAX(COALESCE(importance, 0)) AS source_importance
+        ranked AS (
+            SELECT eligible.*,
+                   MAX(row_sort_at) OVER (PARTITION BY formal_group_key) AS formal_sort_at,
+                   COUNT(*) OVER (PARTITION BY formal_group_key) AS source_count,
+                   GROUP_CONCAT(id) OVER (PARTITION BY formal_group_key) AS source_ids,
+                   SUM(COALESCE(retrieval_count, 0)) OVER (PARTITION BY formal_group_key) AS source_retrieval_count,
+                   MAX(COALESCE(importance, 0)) OVER (PARTITION BY formal_group_key) AS source_importance,
+                   ROW_NUMBER() OVER (PARTITION BY formal_group_key ORDER BY row_sort_at DESC, id DESC) AS formal_rank
             FROM eligible
-            GROUP BY formal_group_key
         )
-        SELECT e.*,
-               g.formal_group_key,
-               g.formal_sort_at,
-               g.source_count,
-               g.source_ids,
-               g.source_retrieval_count,
-               g.source_importance
-        FROM grouped g
-        JOIN eligible e ON e.id = (
-            SELECT e2.id
-            FROM eligible e2
-            WHERE e2.formal_group_key = g.formal_group_key
-            ORDER BY e2.row_sort_at DESC, e2.id DESC
-            LIMIT 1
-        )
-        ORDER BY g.formal_sort_at DESC, e.id DESC
-        ${showAll ? '' : 'LIMIT ?'}
-    `).all(...timelineParams, ...(showAll ? [] : [limitPerGroup]));
+        SELECT *
+        FROM ranked
+        WHERE formal_rank = 1
+        ORDER BY formal_sort_at DESC, id DESC
+        ${timelineShowAll ? '' : 'LIMIT ?'}
+    `).all(...timelineParams, ...(timelineShowAll ? [] : [timelineLimit]));
 
     const newLibrary = buildNewMemorySummaryLibrary(rawDb, charById, definitions, baseWhere, baseParams, {
         now,
         showAll,
-        forgettingLimit
+        forgettingLimit,
+        limitPerGroup
     });
 
     const forgettingRows = rawDb.prepare(`
-        SELECT *
+        SELECT ${rowSelect}
         FROM memories
         WHERE ${baseWhere.join(' AND ')}
     `).all(...baseParams);
@@ -2885,8 +4477,9 @@ function getMemoryMaintenanceLibrary(rawDb, options = {}) {
             temporal_signal_count: timelineSignalCount,
             source_count: timelineSourceCount,
             confidence_threshold: MEMORY_TIMELINE_CONFIDENCE_THRESHOLD,
+            limit: timelineShowAll ? timelineCount : timelineLimit,
             items: timelineRows.map(row => buildMemoryLibraryItem(row, charById, now)),
-            has_more: !showAll && timelineCount > timelineRows.length
+            has_more: !timelineShowAll && timelineCount > timelineRows.length
         },
         new_library: newLibrary,
         forgetting_groups: sourceMode === 'new' ? (newLibrary.forgetting_groups || []) : legacyForgettingGroups
@@ -2896,12 +4489,26 @@ function getMemoryMaintenanceLibrary(rawDb, options = {}) {
 function getMemoryMaintenanceOverview(rawDb) {
     const characters = rawDb.prepare('SELECT id, name, avatar FROM characters ORDER BY name COLLATE NOCASE ASC').all();
     const charById = new Map(characters.map(c => [String(c.id), c]));
-    const allRows = rawDb.prepare('SELECT * FROM memories ORDER BY id ASC').all();
+    const rowSelect = getMemoryLibraryRowSelect(rawDb);
+    const allRows = rawDb.prepare(`SELECT ${rowSelect} FROM memories ORDER BY id ASC`).all();
     const rows = allRows.filter(row => String(row.consolidation_summary || '').trim());
+    const legacyRows = allRows.filter(row => {
+        const sourceContext = String(row.source_context || '').trim();
+        const source = String(row.classification_source || '').trim();
+        const dedupeKey = String(row.dedupe_key || '').trim();
+        const hasFormalSummary = !!String(row.consolidation_summary || '').trim();
+        const externalFormalOnly = sourceContext === 'external_app'
+            && hasFormalSummary
+            && (source === 'external-import-direct'
+                || source === 'small-model-auto-migration'
+                || dedupeKey.startsWith('external-import-direct:')
+                || dedupeKey.startsWith('external-import-formal:'));
+        return !externalFormalOnly;
+    });
     const formalNewKeys = new Set();
     const formalNewKeysByCharacter = new Map();
     const legacyByCharacter = new Map();
-    for (const row of allRows) {
+    for (const row of legacyRows) {
         const key = String(row.character_id || '');
         if (!key) continue;
         const character = charById.get(key) || { id: key, name: key };
@@ -2924,13 +4531,32 @@ function getMemoryMaintenanceOverview(rawDb) {
             legacyStats.pending += 1;
         }
     }
+    const externalPendingByCharacter = getExternalImportPendingStatsByCharacter(rawDb);
+    for (const [key, externalStats] of externalPendingByCharacter.entries()) {
+        const character = charById.get(key) || { id: key, name: externalStats.name || key };
+        if (!legacyByCharacter.has(key)) {
+            legacyByCharacter.set(key, {
+                character_id: character.id,
+                name: character.name || key,
+                total: 0,
+                pending: 0,
+                new_total: 0
+            });
+        }
+        const legacyStats = legacyByCharacter.get(key);
+        legacyStats.external_pending = Number(externalStats.pending || 0);
+        legacyStats.external_total = Number(externalStats.total || 0);
+        legacyStats.pending += Number(externalStats.pending || 0);
+        legacyStats.total += Number(externalStats.total || 0);
+    }
     const now = Date.now();
     const totals = {
         total: rows.length,
         migrated_card_total: rows.length,
         formal_total: 0,
-        legacy_total: allRows.length,
-        legacy_pending: allRows.filter(row => !String(row.maintenance_status || 'pending') || String(row.maintenance_status || 'pending') === 'pending').length,
+        legacy_total: legacyRows.length,
+        legacy_pending: legacyRows.filter(row => !String(row.maintenance_status || 'pending') || String(row.maintenance_status || 'pending') === 'pending').length,
+        external_pending: Array.from(externalPendingByCharacter.values()).reduce((sum, item) => sum + Number(item.pending || 0), 0),
         active: 0,
         archived: 0,
         pending: 0,
@@ -2939,6 +4565,7 @@ function getMemoryMaintenanceOverview(rawDb) {
         recalled_memories: 0,
         never_recalled: 0
     };
+    totals.legacy_pending += totals.external_pending;
     const byFocus = {};
     const byTier = {};
     const byAction = {};
@@ -3072,6 +4699,8 @@ function getMemoryMaintenanceOverview(rawDb) {
         const charStats = byCharacter.get(legacyStats.character_id);
         charStats.legacy_total = legacyStats.total;
         charStats.legacy_pending = legacyStats.pending;
+        charStats.external_pending = Number(legacyStats.external_pending || 0);
+        charStats.external_total = Number(legacyStats.external_total || 0);
         charStats.migrated_total = legacyStats.new_total;
         charStats.migrated_card_total = legacyStats.new_total;
         charStats.formal_total = formalNewKeysByCharacter.get(legacyStats.character_id)?.size || 0;
@@ -3079,10 +4708,9 @@ function getMemoryMaintenanceOverview(rawDb) {
     }
     for (const charStats of byCharacter.values()) {
         if (charStats.legacy_total === undefined) {
-            charStats.legacy_total = charStats.total;
-            charStats.legacy_pending = charStats.pending;
-            charStats.migrated_total = charStats.total;
-            charStats.migrated_card_total = charStats.total;
+            charStats.legacy_total = 0;
+            charStats.legacy_pending = 0;
+            charStats.migrated_total = 0;
             charStats.formal_total = formalNewKeysByCharacter.get(charStats.character_id)?.size || charStats.formal_total || 0;
             charStats.needs_migration = false;
         }
@@ -3219,6 +4847,61 @@ function normalizeManualMemoryPatch(body = {}) {
     return patch;
 }
 
+function buildMemoryIndexTargets(db, rows = []) {
+    const targetsByMemoryId = new Map();
+    const ids = Array.from(new Set((Array.isArray(rows) ? rows : [])
+        .map(row => Number(row?.id || 0))
+        .filter(id => id > 0)));
+
+    for (const row of rows || []) {
+        const memoryId = Number(row?.id || 0);
+        if (!memoryId) continue;
+        const targets = targetsByMemoryId.get(memoryId) || new Map();
+        const characterId = String(row?.character_id || '').trim();
+        if (characterId) {
+            targets.set(characterId, {
+                characterId,
+                previousRow: { ...row }
+            });
+        }
+        targetsByMemoryId.set(memoryId, targets);
+    }
+
+    const rawDb = typeof db?.getRawDb === 'function' ? db.getRawDb() : null;
+    if (rawDb && ids.length > 0) {
+        try {
+            const placeholders = ids.map(() => '?').join(',');
+            const bindings = rawDb.prepare(`
+                SELECT memory_id, character_id, character_name
+                FROM external_memory_role_bindings
+                WHERE memory_id IN (${placeholders})
+            `).all(...ids);
+            const rowsById = new Map((rows || []).map(row => [Number(row?.id || 0), row]));
+            for (const binding of bindings || []) {
+                const memoryId = Number(binding.memory_id || 0);
+                const characterId = String(binding.character_id || '').trim();
+                if (!memoryId || !characterId) continue;
+                const sourceRow = rowsById.get(memoryId) || {};
+                const targets = targetsByMemoryId.get(memoryId) || new Map();
+                targets.set(characterId, {
+                    characterId,
+                    previousRow: {
+                        ...sourceRow,
+                        shared_binding: 1,
+                        bound_character_id: characterId,
+                        bound_character_name: String(binding.character_name || '')
+                    }
+                });
+                targetsByMemoryId.set(memoryId, targets);
+            }
+        } catch (e) {
+            console.warn('[Memory] Failed to read external memory role bindings for index cleanup:', e.message);
+        }
+    }
+
+    return targetsByMemoryId;
+}
+
 function rescueMemoryMaintenanceItems(rawDb, ids = []) {
     const safeIds = Array.from(new Set((Array.isArray(ids) ? ids : [])
         .map(id => Number(id || 0))
@@ -3288,6 +4971,13 @@ function getMemoryMaintenanceRunSnapshot(run) {
         user_id: run.user_id,
         characterId: run.characterId,
         character: run.character,
+        task_mode: run.task_mode || '',
+        import_id: run.import_id || null,
+        source_app: run.source_app || '',
+        import_mode: run.import_mode || '',
+        filename: run.filename || '',
+        continue_from_offset: run.continue_from_offset || 0,
+        total_messages: run.total_messages || 0,
         phase: run.phase || 'queued',
         running: !!run.running,
         success: run.success,
@@ -3837,6 +5527,8 @@ app.get('/api/memory-maintenance/library', authMiddleware, (req, res) => {
                 source: req.query.source || 'new',
                 temporal_filter: req.query.temporal_filter,
                 timeline_filter: req.query.timeline_filter || 'strong_time_bound',
+                timeline_all: req.query.timeline_all,
+                timeline_limit: req.query.timeline_limit,
                 limit_per_group: req.query.limit_per_group,
                 forgetting_limit: req.query.forgetting_limit
             })
@@ -3952,6 +5644,7 @@ app.post('/api/characters', authMiddleware, (req, res) => {
         const prevCharacter = typeof db.getCharacter === 'function' ? db.getCharacter(data.id) : null;
 
         db.updateCharacter(data.id, data);
+        // Changing S only changes future batch size; keep summaries/baseline so failed pending messages stay pending.
         if (prevCharacter && Object.prototype.hasOwnProperty.call(data, 'context_msg_limit')) {
             const prevLimit = Number(prevCharacter.context_msg_limit || 60);
             const nextLimit = Number(data.context_msg_limit || prevLimit);
@@ -3959,19 +5652,6 @@ app.post('/api/characters', authMiddleware, (req, res) => {
                 db.clearConversationDigest?.(data.id);
                 const rawDb = typeof db.getRawDb === 'function' ? db.getRawDb() : null;
                 rawDb?.prepare('DELETE FROM history_window_cache WHERE character_id = ?').run(data.id);
-                rawDb?.prepare('DELETE FROM private_context_summaries WHERE character_id = ?').run(data.id);
-                const nextCharacter = typeof db.getCharacter === 'function' ? db.getCharacter(data.id) : null;
-                const rawWindow = Math.max(0, Number(nextCharacter?.context_msg_limit || 60) || 60);
-                const visibleMessages = db.getVisibleMessages(data.id, 0) || [];
-                const overflowMessages = rawWindow > 0 ? visibleMessages.slice(0, Math.max(0, visibleMessages.length - rawWindow)) : visibleMessages;
-                db.updateCharacter(data.id, { private_summary_baseline_message_id: Number(overflowMessages[overflowMessages.length - 1]?.id || 0) });
-            }
-        }
-        if (prevCharacter && Object.prototype.hasOwnProperty.call(data, 'private_summary_threshold')) {
-            const prevThreshold = Number(prevCharacter.private_summary_threshold || 30);
-            const nextThreshold = Number(data.private_summary_threshold || prevThreshold);
-            if (prevThreshold !== nextThreshold) {
-                const rawDb = typeof db.getRawDb === 'function' ? db.getRawDb() : null;
                 rawDb?.prepare('DELETE FROM private_context_summaries WHERE character_id = ?').run(data.id);
                 const nextCharacter = typeof db.getCharacter === 'function' ? db.getCharacter(data.id) : null;
                 const rawWindow = Math.max(0, Number(nextCharacter?.context_msg_limit || 60) || 60);
@@ -4001,6 +5681,7 @@ app.put('/api/characters/:id', authMiddleware, (req, res) => {
         const prevCharacter = typeof db.getCharacter === 'function' ? db.getCharacter(id) : null;
 
         db.updateCharacter(id, data);
+        // Changing S only changes future batch size; keep summaries/baseline so failed pending messages stay pending.
         if (prevCharacter && Object.prototype.hasOwnProperty.call(data, 'context_msg_limit')) {
             const prevLimit = Number(prevCharacter.context_msg_limit || 60);
             const nextLimit = Number(data.context_msg_limit || prevLimit);
@@ -4008,19 +5689,6 @@ app.put('/api/characters/:id', authMiddleware, (req, res) => {
                 db.clearConversationDigest?.(id);
                 const rawDb = typeof db.getRawDb === 'function' ? db.getRawDb() : null;
                 rawDb?.prepare('DELETE FROM history_window_cache WHERE character_id = ?').run(id);
-                rawDb?.prepare('DELETE FROM private_context_summaries WHERE character_id = ?').run(id);
-                const nextCharacter = typeof db.getCharacter === 'function' ? db.getCharacter(id) : null;
-                const rawWindow = Math.max(0, Number(nextCharacter?.context_msg_limit || 60) || 60);
-                const visibleMessages = db.getVisibleMessages(id, 0) || [];
-                const overflowMessages = rawWindow > 0 ? visibleMessages.slice(0, Math.max(0, visibleMessages.length - rawWindow)) : visibleMessages;
-                db.updateCharacter(id, { private_summary_baseline_message_id: Number(overflowMessages[overflowMessages.length - 1]?.id || 0) });
-            }
-        }
-        if (prevCharacter && Object.prototype.hasOwnProperty.call(data, 'private_summary_threshold')) {
-            const prevThreshold = Number(prevCharacter.private_summary_threshold || 30);
-            const nextThreshold = Number(data.private_summary_threshold || prevThreshold);
-            if (prevThreshold !== nextThreshold) {
-                const rawDb = typeof db.getRawDb === 'function' ? db.getRawDb() : null;
                 rawDb?.prepare('DELETE FROM private_context_summaries WHERE character_id = ?').run(id);
                 const nextCharacter = typeof db.getCharacter === 'function' ? db.getCharacter(id) : null;
                 const rawWindow = Math.max(0, Number(nextCharacter?.context_msg_limit || 60) || 60);
@@ -4483,7 +6151,7 @@ The JSON MUST have the EXACT following keys:
             }
 
             // Set defaults and formatting
-            parsed.avatar = `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(parsed.name || 'AI')}&backgroundColor=f0f0f0`;
+            parsed.avatar = buildDefaultAvatarUrl(parsed.name || 'AI');
             parsed.api_endpoint = api_endpoint;
             parsed.api_key = api_key;
             parsed.model_name = model_name;
@@ -4703,6 +6371,19 @@ app.post('/api/data/:characterId/import', authMiddleware, (req, res) => {
 function normalizeMemorySourceRef(value) {
     const raw = String(value || '').trim();
     if (!raw) return { raw, kind: 'unknown', id: 0, key: 'unknown:' };
+    const externalImport = raw.match(/^external[-_]?import:(\d+):([A-Za-z0-9_-]+)$/i);
+    if (externalImport) {
+        const importId = Number(externalImport[1] || 0);
+        const candidateId = String(externalImport[2] || '').trim();
+        return {
+            raw,
+            kind: 'external_app',
+            id: importId,
+            import_id: importId,
+            candidate_id: candidateId,
+            key: `external_app:${importId}:${candidateId}`
+        };
+    }
     const prefixed = raw.match(/^([a-z_-]+):(.+)$/i);
     const prefix = prefixed ? String(prefixed[1] || '').toLowerCase() : '';
     const idText = prefixed ? String(prefixed[2] || '').trim() : raw;
@@ -4720,6 +6401,12 @@ function buildMemorySourcePayload(rawDb, refs = []) {
     const groupStmt = rawDb.prepare('SELECT id, group_id, sender_id, sender_name, content, timestamp FROM group_messages WHERE id = ?');
     const cityStmt = rawDb.prepare('SELECT id, character_id, action_type, content, location, timestamp FROM city_logs WHERE id = ?');
     const characterStmt = rawDb.prepare('SELECT name FROM characters WHERE id = ?');
+    let externalImportStmt = null;
+    try {
+        externalImportStmt = rawDb.prepare('SELECT * FROM external_memory_imports WHERE id = ?');
+    } catch (e) {
+        externalImportStmt = null;
+    }
     const characterNameCache = new Map();
     const getCharacterName = (characterId) => {
         const key = String(characterId || '');
@@ -4780,6 +6467,40 @@ function buildMemorySourcePayload(rawDb, refs = []) {
                     timestamp: Number(row.timestamp || 0),
                     content: row.content || '',
                     found: true
+                };
+            }
+        }
+        if (ref.kind === 'external_app') {
+            const row = externalImportStmt ? externalImportStmt.get(ref.import_id || ref.id) : null;
+            if (row) {
+                const summary = tryParseJsonValue(row.summary_json || '{}').ok
+                    ? tryParseJsonValue(row.summary_json || '{}').value
+                    : {};
+                const messages = tryParseJsonValue(row.normalized_messages_json || '[]').ok
+                    ? tryParseJsonValue(row.normalized_messages_json || '[]').value
+                    : [];
+                const candidates = Array.isArray(summary?.candidates) ? summary.candidates : [];
+                const candidate = candidates.find(item => String(item.id || '') === String(ref.candidate_id || '')) || {};
+                const sourceRefs = Array.isArray(candidate.source_refs) ? candidate.source_refs : [];
+                const messageById = new Map((Array.isArray(messages) ? messages : []).map(message => [String(message.id), message]));
+                const sourceMessages = sourceRefs.map(id => messageById.get(String(id))).filter(Boolean);
+                const content = sourceMessages.length > 0
+                    ? sourceMessages.map(message => `${message.speaker || 'Unknown'}: ${message.text || ''}`).join('\n')
+                    : (candidate.content || candidate.summary || row.raw_text || '');
+                const timestamps = sourceMessages.map(message => Number(message.timestamp || 0)).filter(ts => ts > 0);
+                return {
+                    source_key: ref.key,
+                    raw_ref: ref.raw,
+                    kind: ref.kind,
+                    id: ref.import_id || ref.id,
+                    candidate_id: ref.candidate_id || '',
+                    source_app: row.source_app || '',
+                    speaker: getExternalSourceAppLabel(row.source_app || ''),
+                    role: row.import_mode || 'external_import',
+                    timestamp: timestamps.length ? Math.min(...timestamps) : Number(row.created_at || 0),
+                    content: clipMemoryDisplayText(content, 4000),
+                    found: true,
+                    filename: row.filename || ''
                 };
             }
         }
@@ -5092,6 +6813,833 @@ app.post('/api/memories/:characterId/import', authMiddleware, (req, res) => {
     });
 });
 
+app.post('/api/memory-import/external/preview', authMiddleware, (req, res) => {
+    console.log(`[External Import] Preview route hit user=${req.user?.username || 'unknown'} contentType=${req.headers['content-type'] || ''}`);
+    memoryImportUpload.any()(req, res, async function (err) {
+        if (err instanceof multer.MulterError) {
+            return res.status(400).json({ error: err.message });
+        }
+        if (err) {
+            return res.status(400).json({ error: err.message });
+        }
+
+        const db = req.db;
+        try {
+            const settings = getMemoryMaintenanceSettings(db);
+            if (!settings.api_endpoint || !settings.api_key || !settings.model_name) {
+                return res.status(400).json({ error: '请先配置“记忆库管理小模型”的 URL、Key 和模型。' });
+            }
+            const external = parseExternalImportRequest(req);
+            const requestedSourceApp = normalizeExternalSourceApp(req.body?.source_app || req.body?.source || req.body?.app);
+            const sourceApp = external.detectedSourceApp || requestedSourceApp;
+            const importMode = external.detectedSourceApp === 'sillytavern'
+                ? 'multi_role'
+                : normalizeExternalImportMode(req.body?.import_mode || req.body?.mode, sourceApp);
+            const targetCharacterName = normalizeExternalCharacterName(req.body?.target_character_name || req.body?.character_name, getExternalSourceAppLabel(sourceApp));
+            const prompt = buildExternalImportPrompt({
+                sourceApp,
+                importMode,
+                targetCharacterName,
+                messages: external.messages,
+                rawText: external.rawText,
+                knownRoleTags: [],
+                userName: req.user.username
+            });
+            const previewStartedAt = Date.now();
+            console.log(`[External Import] Preview start user=${req.user.username} source=${sourceApp} requested=${requestedSourceApp} detected=${external.detectedSourceApp || ''} mode=${importMode} messages=${external.messages.length} promptChars=${prompt.user_prompt.length} changed=${external.cleanStats?.changed_messages || 0} dropped=${external.cleanStats?.dropped_messages || 0} jsonlParsed=${external.cleanStats?.jsonl_parsed_lines || 0} rawChars=${external.cleanStats?.raw_chars || 0}`);
+            const response = await callLLM({
+                endpoint: settings.api_endpoint,
+                key: settings.api_key,
+                model: settings.model_name,
+                messages: [
+                    { role: 'system', content: prompt.system_prompt },
+                    { role: 'user', content: prompt.user_prompt }
+                ],
+                maxTokens: Math.max(1500, Math.min(20000, Number(settings.max_output_tokens || 8000) || 8000)),
+                temperature: 0.1,
+                returnUsage: true,
+                responseFormat: { type: 'json_object' },
+                requestTimeoutMs: EXTERNAL_MEMORY_IMPORT_LLM_TIMEOUT_MS,
+                maxAttempts: 1
+            });
+            const rawText = typeof response === 'string' ? response : response.content;
+            const parsed = extractJsonObjectFromText(rawText);
+            const normalized = normalizeExternalImportResult(parsed, {
+                sourceApp,
+                importMode,
+                targetCharacterName,
+                messages: external.messages,
+                knownRoleTags: [],
+                userName: req.user.username
+            });
+            if (!normalized.candidates.length) {
+                console.warn(`[External Import] Preview produced no candidates user=${req.user.username} source=${sourceApp} mode=${importMode} roles=${normalized.role_tags?.length || 0} needsReview=${normalized.needs_review?.length || 0} raw=${clipMemoryDisplayText(rawText, 600)}`);
+                return res.status(422).json({
+                    error: '小模型没有提取出可导入的新记忆。可以换更明确的导出文件，或改成手动粘贴关键片段。',
+                    raw_response: clipMemoryDisplayText(rawText, 1600),
+                    role_tags: normalized.role_tags || [],
+                    needs_review: normalized.needs_review || []
+                });
+            }
+            const rawDb = typeof db.getRawDb === 'function' ? db.getRawDb() : null;
+            if (!rawDb) return res.status(500).json({ error: 'Raw database handle is unavailable.' });
+            const now = Date.now();
+            const info = rawDb.prepare(`
+                INSERT INTO external_memory_imports
+                    (source_app, import_mode, filename, raw_text, normalized_messages_json, summary_json, role_tags_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                sourceApp,
+                importMode,
+                external.filename || '',
+                external.rawText || '',
+                JSON.stringify(external.messages || []),
+                JSON.stringify(normalized),
+                JSON.stringify(normalized.role_tags || []),
+                now
+            );
+            console.log(`[External Import] Preview success id=${info.lastInsertRowid} user=${req.user.username} roles=${normalized.role_tags.length} candidates=${normalized.candidates.length} durationMs=${Date.now() - previewStartedAt}`);
+            res.json({
+                success: true,
+                import: {
+                    id: info.lastInsertRowid,
+                    source_app: sourceApp,
+                    import_mode: importMode,
+                    filename: external.filename || '',
+                    message_count: external.messages.length,
+                    created_at: now,
+                    detected_source_app: external.detectedSourceApp || ''
+                },
+                role_tags: normalized.role_tags,
+                candidates: normalized.candidates,
+                needs_review: normalized.needs_review,
+                model: {
+                    name: settings.model_name,
+                    usage: response?.usage || null,
+                    finishReason: response?.finishReason || ''
+                },
+                prompt_stats: {
+                    row_count: prompt.row_count,
+                    prompt_chars: prompt.user_prompt.length,
+                    clean_stats: external.cleanStats || null
+                },
+                raw_response_preview: clipMemoryDisplayText(rawText, 1600)
+            });
+        } catch (e) {
+            console.error('External memory import preview failed:', e);
+            const isTimeout = /timed out|abort/i.test(String(e.message || ''));
+            res.status(e.status || (isTimeout ? 504 : 500)).json({ error: e.message });
+        }
+    });
+});
+
+app.post('/api/memory-import/external/auto-run', authMiddleware, (req, res) => {
+    memoryImportUpload.any()(req, res, async function (err) {
+        if (err instanceof multer.MulterError) {
+            return res.status(400).json({ error: err.message });
+        }
+        if (err) {
+            return res.status(400).json({ error: err.message });
+        }
+
+        const db = req.db;
+        const memory = req.memory;
+        const rawDb = typeof db.getRawDb === 'function' ? db.getRawDb() : null;
+        if (!rawDb) return res.status(500).json({ error: 'Raw database handle is unavailable.' });
+
+        let runState = null;
+        try {
+            const settings = getMemoryMaintenanceSettings(db);
+            if (!settings.api_endpoint || !settings.api_key || !settings.model_name) {
+                return res.status(400).json({ error: '请先配置“记忆库管理小模型”的 URL、Key 和模型。' });
+            }
+
+            let continueImportId = Number(req.body?.continue_import_id || req.body?.import_id || 0);
+            if (!continueImportId && parseBooleanFlag(req.body?.retry_latest_external_import)) {
+                const latestImport = rawDb.prepare(`
+                    SELECT id
+                    FROM external_memory_imports
+                    WHERE COALESCE(normalized_messages_json, '') <> ''
+                    ORDER BY id DESC
+                    LIMIT 1
+                `).get();
+                continueImportId = Number(latestImport?.id || 0);
+            }
+            const external = continueImportId
+                ? loadExternalImportRequestFromDb(rawDb, continueImportId)
+                : parseExternalImportRequest(req);
+            const requestedSourceApp = normalizeExternalSourceApp(req.body?.source_app || req.body?.source || req.body?.app);
+            const sourceApp = external.storedSourceApp || external.detectedSourceApp || requestedSourceApp;
+            const importMode = external.storedImportMode || (external.detectedSourceApp === 'sillytavern'
+                ? 'multi_role'
+                : normalizeExternalImportMode(req.body?.import_mode || req.body?.mode, sourceApp));
+            const targetCharacterName = normalizeExternalCharacterName(req.body?.target_character_name || req.body?.character_name, getExternalSourceAppLabel(sourceApp));
+            const limit = Math.max(1, Math.min(100, Number(req.body?.limit || settings.batch_size || 10) || 10));
+            const requestedContinueOffset = Math.max(0, Math.floor(Number(req.body?.continue_from_offset ?? req.body?.start_offset ?? 0) || 0));
+            const rawMaxBatches = req.body?.max_batches;
+            const runUntilEmpty = rawMaxBatches === undefined
+                || rawMaxBatches === null
+                || String(rawMaxBatches || '').trim() === ''
+                || String(rawMaxBatches || '').trim().toLowerCase() === 'all'
+                || req.body?.run_until_empty === true
+                || req.body?.run_until_empty === 'true';
+            const maxBatches = runUntilEmpty ? null : Math.max(1, Math.floor(Number(rawMaxBatches || 1) || 1));
+            const maxRerolls = Math.max(0, Math.min(3, Math.floor(Number(req.body?.max_rerolls ?? 0) || 0)));
+            const dryRun = parseBooleanFlag(req.body?.dry_run);
+            const backgroundRun = req.body?.background === true || req.body?.background === 'true';
+            const runCharacterId = '__external_import__';
+
+            if (backgroundRun) {
+                const activeRun = findActiveMemoryMaintenanceRun(req.user.id, runCharacterId);
+                if (activeRun) {
+                    return res.json({
+                        success: true,
+                        accepted: true,
+                        reused: true,
+                        run: getMemoryMaintenanceRunSnapshot(activeRun)
+                    });
+                }
+            }
+
+            let importId = continueImportId || 0;
+            const importStartedAt = Date.now();
+            let previousSaved = [];
+            if (!dryRun && continueImportId) {
+                previousSaved = normalizeExternalProcessingState(external.row?.memory_ids_json);
+            }
+            if (!dryRun && !continueImportId) {
+                const info = rawDb.prepare(`
+                    INSERT INTO external_memory_imports
+                        (source_app, import_mode, filename, raw_text, normalized_messages_json, summary_json, role_tags_json, memory_ids_json, created_at, committed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                    sourceApp,
+                    importMode,
+                    external.filename || '',
+                    external.rawText || '',
+                    JSON.stringify(external.messages || []),
+                    JSON.stringify({ source_app: sourceApp, import_mode: importMode, role_tags: [], candidates: [], needs_review: [] }),
+                    '[]',
+                    '[]',
+                    importStartedAt,
+                    importStartedAt
+                );
+                importId = Number(info.lastInsertRowid || 0);
+            }
+
+            const totalMessages = external.messages || [];
+            const inferredContinueOffset = continueImportId && requestedContinueOffset <= 0
+                ? inferExternalImportContinueOffset(external.row, limit)
+                : requestedContinueOffset;
+            const continueOffset = Math.min(totalMessages.length, Math.max(0, inferredContinueOffset));
+            const chunks = chunkExternalImportMessages(totalMessages.slice(continueOffset), limit, maxBatches);
+            const runId = `external-import-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+            const wsClients = getWsClients(req.user.id);
+            const characterLabel = importMode === 'multi_role' ? '外部导入' : (targetCharacterName || getExternalSourceAppLabel(sourceApp));
+            runState = {
+                run_id: runId,
+                user_id: req.user.id,
+                characterId: runCharacterId,
+                character: { id: runCharacterId, name: characterLabel },
+                task_mode: 'external_import',
+                import_id: importId || null,
+                source_app: sourceApp,
+                import_mode: importMode,
+                filename: external.filename || '',
+                continue_from_offset: continueOffset,
+                total_messages: totalMessages.length,
+                phase: 'queued',
+                running: true,
+                success: undefined,
+                limit,
+                max_batches: maxBatches,
+                run_until_empty: runUntilEmpty,
+                max_rerolls: maxRerolls,
+                processed: 0,
+                updated: 0,
+                applied_errors: 0,
+                started_at: Date.now(),
+                updated_at: Date.now(),
+                finished_at: 0,
+                events: []
+            };
+            memoryMaintenanceRuns.set(runId, runState);
+
+            const runs = [];
+            const errors = [];
+            const previousSummary = continueImportId ? safeJsonParse(external.row?.summary_json, {}) : {};
+            const allCandidates = Array.isArray(previousSummary.candidates) ? [...previousSummary.candidates] : [];
+            let allRoleTags = Array.isArray(previousSummary.role_tags) ? [...previousSummary.role_tags] : [];
+            const allNeedsReview = Array.isArray(previousSummary.needs_review) ? [...previousSummary.needs_review] : [];
+            const allSaved = [...previousSaved];
+            let processed = continueOffset;
+            let updated = previousSaved.length ? countUniqueExternalImportSavedItems(previousSaved) : 0;
+            let appliedErrors = 0;
+            let lastRawResponse = '';
+            let lastPrompt = null;
+            let stoppedReason = '';
+
+            const sendProgress = (phase, extra = {}) => {
+                const payload = {
+                    type: 'memory_maintenance_progress',
+                    data: {
+                        run_id: runId,
+                        task_mode: 'external_import',
+                        import_id: importId || null,
+                        source_app: sourceApp,
+                        import_mode: importMode,
+                        filename: external.filename || '',
+                        continue_from_offset: continueOffset,
+                        total_messages: totalMessages.length,
+                        phase,
+                        characterId: runCharacterId,
+                        character: { id: runCharacterId, name: characterLabel },
+                        limit,
+                        max_batches: maxBatches,
+                        run_until_empty: runUntilEmpty,
+                        max_rerolls: maxRerolls,
+                        processed,
+                        updated,
+                        applied_errors: appliedErrors,
+                        timestamp: Date.now(),
+                        ...extra
+                    }
+                };
+                const eventData = payload.data;
+                runState.phase = phase;
+                runState.updated_at = eventData.timestamp;
+                runState.running = !['done', 'stopped'].includes(phase);
+                runState.processed = eventData.processed ?? runState.processed;
+                runState.updated = eventData.updated ?? runState.updated;
+                runState.applied_errors = eventData.applied_errors ?? runState.applied_errors;
+                runState.batch_number = eventData.batch_number ?? runState.batch_number;
+                runState.attempt = eventData.attempt ?? runState.attempt;
+                runState.reroll = eventData.reroll ?? runState.reroll;
+                runState.message = eventData.message || runState.message || '';
+                runState.new_memory_samples = eventData.new_memory_samples || runState.new_memory_samples || [];
+                runState.stopped_reason = eventData.stopped_reason || runState.stopped_reason || '';
+                runState.can_continue = eventData.can_continue ?? runState.can_continue;
+                runState.continue_from = eventData.continue_from || runState.continue_from || null;
+                runState.errors = eventData.errors || runState.errors || [];
+                runState.stats = eventData.stats || runState.stats || null;
+                if (!runState.running) {
+                    runState.success = eventData.success;
+                    runState.finished_at = eventData.timestamp;
+                }
+                runState.events.push(eventData);
+                if (runState.events.length > 100) runState.events.splice(0, runState.events.length - 100);
+                broadcastToWsClients(wsClients, payload);
+            };
+
+            const executeExternalImportRun = async () => {
+                await yieldToServerLoop();
+                sendProgress('start', {
+                    message: continueOffset > 0
+                        ? `外部导入从断点继续：跳过已处理 ${continueOffset} 条，剩余 ${Math.max(0, totalMessages.length - continueOffset)} 条，按每批 ${limit} 条处理。`
+                        : `外部导入自动总结已开始：${totalMessages.length} 条正文，按每批 ${limit} 条处理。`,
+                    pending_before: Math.max(0, totalMessages.length - continueOffset)
+                });
+
+                if (!chunks.length) {
+                    stoppedReason = 'empty';
+                }
+
+            for (let idx = 0; idx < chunks.length; idx++) {
+                const batchNumber = Math.floor(continueOffset / limit) + idx + 1;
+                const chunk = chunks[idx];
+                const rollAttempts = [];
+                let batchSaved = null;
+                let batchNormalized = null;
+                let batchRawResponse = '';
+                let shouldStop = false;
+
+                sendProgress('batch_start', {
+                    batch_number: batchNumber,
+                    pending_before: Math.max(0, totalMessages.length - continueOffset - idx * limit),
+                    message: `第 ${batchNumber} 批开始：读取 ${chunk.length} 条导入正文。`
+                });
+
+                for (let reroll = 0; reroll <= maxRerolls; reroll++) {
+                    const attemptNumber = reroll + 1;
+                    sendProgress('attempt_start', {
+                        batch_number: batchNumber,
+                        attempt: attemptNumber,
+                        reroll,
+                        message: reroll > 0 ? `第 ${batchNumber} 批重试第 ${reroll} 次。` : `第 ${batchNumber} 批调用小模型。`
+                    });
+                    try {
+                        const prompt = buildExternalImportPrompt({
+                            sourceApp,
+                            importMode,
+                            targetCharacterName,
+                            messages: chunk,
+                            rawText: '',
+                            knownRoleTags: allRoleTags,
+                            userName: req.user.username
+                        });
+                        lastPrompt = prompt;
+                        const response = await callLLM({
+                            endpoint: settings.api_endpoint,
+                            key: settings.api_key,
+                            model: settings.model_name,
+                            messages: [
+                                { role: 'system', content: prompt.system_prompt },
+                                { role: 'user', content: prompt.user_prompt }
+                            ],
+                            maxTokens: Math.max(1500, Math.min(20000, Number(settings.max_output_tokens || 8000) || 8000)),
+                            temperature: 0.1,
+                            returnUsage: true,
+                            responseFormat: { type: 'json_object' },
+                            requestTimeoutMs: EXTERNAL_MEMORY_IMPORT_LLM_TIMEOUT_MS,
+                            maxAttempts: 1
+                        });
+                        batchRawResponse = typeof response === 'string' ? response : response.content;
+                        lastRawResponse = batchRawResponse || lastRawResponse;
+                        const parsed = extractJsonObjectFromText(batchRawResponse);
+                        batchNormalized = normalizeExternalImportResult(parsed, {
+                            sourceApp,
+                            importMode,
+                            targetCharacterName,
+                            messages: chunk,
+                            knownRoleTags: allRoleTags,
+                            userName: req.user.username
+                        });
+                        batchNormalized.candidates = (batchNormalized.candidates || []).map(candidate => ({
+                            ...candidate,
+                            id: `b${batchNumber}_${candidate.id || Math.random().toString(16).slice(2, 8)}`
+                        }));
+                        allRoleTags = mergeExternalImportRoleTags(allRoleTags, batchNormalized.role_tags || []);
+                        allCandidates.push(...batchNormalized.candidates);
+                        allNeedsReview.push(...(batchNormalized.needs_review || []));
+                        batchSaved = await saveExternalImportCandidatesDirect({
+                            db,
+                            memory,
+                            settings,
+                            importId,
+                            sourceApp,
+                            importMode,
+                            normalized: batchNormalized,
+                            dryRun
+                        });
+                        break;
+                    } catch (e) {
+                        lastRawResponse = e?.payload?.raw_response || lastRawResponse;
+                        const attemptError = buildMemoryMaintenanceAttemptError(e, attemptNumber);
+                        rollAttempts.push(attemptError);
+                        const nonRetryable = isNonRetryableMemoryMaintenanceError(e);
+                        sendProgress('attempt_error', {
+                            batch_number: batchNumber,
+                            attempt: attemptNumber,
+                            reroll,
+                            attempt_error: attemptError,
+                            will_reroll: !nonRetryable && reroll < maxRerolls,
+                            message: nonRetryable ? '小模型鉴权失败，已停止外部导入。' : undefined
+                        });
+                        if (nonRetryable || reroll >= maxRerolls) {
+                            errors.push({
+                                batch_number: batchNumber,
+                                error: e.message || 'External import batch failed.',
+                                attempts: rollAttempts,
+                                raw_response_preview: clipMemoryDisplayText(lastRawResponse, 1600)
+                            });
+                            stoppedReason = nonRetryable ? 'auth_error' : 'error';
+                            shouldStop = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (shouldStop) break;
+                if (!batchSaved || !batchNormalized) {
+                    stoppedReason = 'error';
+                    errors.push({ batch_number: batchNumber, error: '小模型没有返回可用结果。', attempts: rollAttempts });
+                    break;
+                }
+
+                const batchUniqueSaved = countUniqueExternalImportSavedItems(batchSaved.saved || []);
+                const batchBindingCount = countExternalImportSavedBindings(batchSaved.saved || []);
+                processed += chunk.length;
+                updated += batchUniqueSaved;
+                appliedErrors += Number(batchSaved.error_count || 0);
+                allSaved.push(...(batchSaved.saved || []));
+                if (batchSaved.errors?.length) {
+                    errors.push({ batch_number: batchNumber, error: '部分记忆保存失败。', attempts: rollAttempts, save_errors: batchSaved.errors });
+                }
+                const runRecord = {
+                    batch_number: batchNumber,
+                    item_count: chunk.length,
+                    new_memory_count: batchNormalized.candidates.length,
+                    updated: batchUniqueSaved,
+                    saved_bindings: batchBindingCount,
+                    errors: Number(batchSaved.error_count || 0),
+                    skipped: batchSaved.skipped || [],
+                    rerolls: rollAttempts.length,
+                    model: settings.model_name
+                };
+                runs.push(runRecord);
+                sendProgress('batch_success', {
+                    ...runRecord,
+                    processed,
+                    updated,
+                    applied_errors: appliedErrors,
+                    remaining_pending_after_batch: Math.max(0, totalMessages.length - processed),
+                    new_memory_samples: formatExternalImportSavedSamples(batchSaved.saved || [], 5),
+                    message: dryRun
+                        ? `第 ${batchNumber} 批完成：预览 ${batchUniqueSaved} 条，不写库。`
+                        : (batchBindingCount > batchUniqueSaved
+                            ? `第 ${batchNumber} 批完成：写入 ${batchUniqueSaved} 条共享记忆，绑定 ${batchBindingCount} 次角色。`
+                            : `第 ${batchNumber} 批完成：写入 ${batchUniqueSaved} 条。`)
+                });
+            }
+
+            if (!stoppedReason) {
+                stoppedReason = allSaved.length > 0 || dryRun ? 'completed' : 'no_candidates';
+            }
+
+            if (!dryRun && importId) {
+                rawDb.prepare(`
+                    UPDATE external_memory_imports
+                    SET summary_json = ?,
+                        role_tags_json = ?,
+                        memory_ids_json = ?,
+                        committed_at = ?
+                    WHERE id = ?
+                `).run(
+                    JSON.stringify({
+                        source_app: sourceApp,
+                        import_mode: importMode,
+                        role_tags: allRoleTags,
+                        candidates: allCandidates,
+                        needs_review: allNeedsReview.slice(0, 200),
+                        last_run: {
+                            processed,
+                            updated,
+                            limit,
+                            max_batches: maxBatches,
+                            run_until_empty: runUntilEmpty,
+                            stopped_reason: stoppedReason || '',
+                            errors: errors.slice(-3),
+                            finished_at: Date.now()
+                        },
+                        continue_from: {
+                            import_id: importId,
+                            offset: processed,
+                            pending: Math.max(0, totalMessages.length - processed),
+                            total: totalMessages.length
+                        }
+                    }),
+                    JSON.stringify(allRoleTags),
+                    JSON.stringify(allSaved),
+                    Date.now(),
+                    importId
+                );
+            }
+
+            const characterIds = getExternalImportSavedCharacterIds(allSaved);
+            for (const characterId of characterIds) {
+                broadcastToWsClients(wsClients, { type: 'memory_update', characterId });
+            }
+            broadcastToWsClients(wsClients, { type: 'refresh_contacts' });
+            const savedBindingCount = countExternalImportSavedBindings(allSaved);
+            const savedCharacters = Array.from(new Map(allSaved.flatMap(item => {
+                if (Array.isArray(item?.bound_characters) && item.bound_characters.length > 0) {
+                    return item.bound_characters.map(character => [character.id, { id: character.id, name: character.name }]);
+                }
+                return item?.character_id ? [[item.character_id, { id: item.character_id, name: item.character_name }]] : [];
+            }).filter(([id]) => id)).values());
+
+            const responsePayload = {
+                success: errors.length === 0,
+                mode: 'external_import_auto',
+                dry_run: dryRun,
+                import_id: importId || null,
+                source_app: sourceApp,
+                detected_source_app: external.detectedSourceApp || '',
+                import_mode: importMode,
+                filename: external.filename || '',
+                limit,
+                max_batches: maxBatches,
+                run_until_empty: runUntilEmpty,
+                max_rerolls: maxRerolls,
+                processed,
+                updated,
+                applied_errors: appliedErrors,
+                stopped_reason: stoppedReason,
+                roles: allRoleTags,
+                characters: savedCharacters,
+                saved: allSaved,
+                errors,
+                runs,
+                prompt: lastPrompt,
+                raw_response_preview: clipMemoryDisplayText(lastRawResponse, 1600),
+                can_continue: ['error', 'no_progress'].includes(stoppedReason) && processed < totalMessages.length,
+                continue_from: {
+                    import_id: importId || null,
+                    offset: processed,
+                    pending: Math.max(0, totalMessages.length - processed),
+                    total: totalMessages.length
+                },
+                stats: {
+                    message_count: totalMessages.length,
+                    batch_count: chunks.length,
+                    candidates: allCandidates.length,
+                    saved: allSaved.length,
+                    saved_bindings: savedBindingCount,
+                    needs_review: allNeedsReview.length
+                }
+            };
+            sendProgress(responsePayload.success ? 'done' : 'stopped', {
+                import_id: responsePayload.import_id,
+                source_app: sourceApp,
+                import_mode: importMode,
+                filename: external.filename || '',
+                stopped_reason: responsePayload.stopped_reason,
+                success: responsePayload.success,
+                can_continue: responsePayload.can_continue,
+                continue_from: responsePayload.continue_from,
+                stats: responsePayload.stats,
+                errors: errors.slice(-3),
+                runs_count: runs.length,
+                new_memory_samples: formatExternalImportSavedSamples(allSaved, 5),
+                message: responsePayload.success
+                    ? (dryRun
+                        ? `外部导入预览完成：处理 ${processed} 条正文，候选 ${updated} 条，未写库。`
+                        : (savedBindingCount > updated
+                            ? `外部导入完成：处理 ${processed} 条正文，写入 ${updated} 条共享记忆，绑定 ${savedBindingCount} 次角色。`
+                            : `外部导入完成：处理 ${processed} 条正文，写入 ${updated} 条正式记忆。`))
+                    : `外部导入停止：${responsePayload.stopped_reason || 'error'}。`
+            });
+            if (!res.headersSent) {
+                res.status(responsePayload.success ? 200 : 422).json(responsePayload);
+            }
+            return responsePayload;
+            };
+
+            const failExternalImportRun = (e) => {
+                console.error('External memory import auto-run failed:', e);
+                runState.running = false;
+                runState.success = false;
+                runState.finished_at = Date.now();
+                runState.stopped_reason = 'error';
+                runState.errors = [{ error: e.message || 'External import failed.' }];
+                sendProgress('stopped', {
+                    stopped_reason: 'error',
+                    success: false,
+                    errors: runState.errors,
+                    message: `外部导入停止：${e.message || 'error'}。`
+                });
+                if (!res.headersSent) {
+                    res.status(e.status || 500).json({ error: e.message });
+                }
+            };
+
+            if (backgroundRun) {
+                res.json({
+                    success: true,
+                    accepted: true,
+                    run: getMemoryMaintenanceRunSnapshot(runState)
+                });
+                enqueueBackgroundTask({
+                    key: `memory-import:${req.user.id}`,
+                    dedupeKey: `memory-import:${req.user.id}:external`,
+                    maxPending: 2,
+                    task: executeExternalImportRun
+                }).then((queueResult) => {
+                    if (queueResult?.skipped) {
+                        const reason = queueResult.reason || 'queue_full';
+                        sendProgress('stopped', {
+                            stopped_reason: reason,
+                            success: false,
+                            errors: [{ error: reason }],
+                            message: reason === 'duplicate'
+                                ? '这个账号已有外部导入在跑。'
+                                : '这个账号的外部导入队列已满。'
+                        });
+                    }
+                }).catch(failExternalImportRun);
+                return;
+            }
+
+            await executeExternalImportRun();
+        } catch (e) {
+            console.error('External memory import auto-run failed:', e);
+            if (runState) {
+                runState.running = false;
+                runState.success = false;
+                runState.finished_at = Date.now();
+                runState.stopped_reason = 'error';
+                runState.errors = [{ error: e.message || 'External import failed.' }];
+            }
+            if (!res.headersSent) {
+                res.status(e.status || 500).json({ error: e.message });
+            }
+        }
+    });
+});
+
+app.get('/api/memory-import/external/latest', authMiddleware, (req, res) => {
+    const db = req.db;
+    try {
+        const rawDb = typeof db.getRawDb === 'function' ? db.getRawDb() : null;
+        if (!rawDb) return res.status(500).json({ error: 'Raw database handle is unavailable.' });
+        const row = rawDb.prepare(`
+            SELECT id,
+                   source_app,
+                   import_mode,
+                   filename,
+                   created_at,
+                   committed_at,
+                   summary_json,
+                   role_tags_json,
+                   normalized_messages_json
+            FROM external_memory_imports
+            WHERE COALESCE(committed_at, 0) = 0
+            ORDER BY id DESC
+            LIMIT 1
+        `).get();
+        if (!row) {
+            return res.json({ success: true, import: null });
+        }
+        const normalized = safeJsonParse(row.summary_json, {});
+        const roleTags = Array.isArray(normalized.role_tags)
+            ? normalized.role_tags
+            : safeJsonParse(row.role_tags_json, []);
+        const candidates = Array.isArray(normalized.candidates) ? normalized.candidates : [];
+        const messages = safeJsonParse(row.normalized_messages_json, []);
+        res.json({
+            success: true,
+            import: {
+                id: row.id,
+                source_app: row.source_app || '',
+                import_mode: row.import_mode || '',
+                filename: row.filename || '',
+                message_count: Array.isArray(messages) ? messages.length : 0,
+                created_at: row.created_at || 0,
+                committed_at: row.committed_at || 0,
+                restored: true
+            },
+            role_tags: Array.isArray(roleTags) ? roleTags : [],
+            candidates,
+            needs_review: Array.isArray(normalized.needs_review) ? normalized.needs_review : [],
+            restored: true
+        });
+    } catch (e) {
+        console.error('Load latest external memory import failed:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/memory-import/external/:importId/commit', authMiddleware, async (req, res) => {
+    const db = req.db;
+    const memory = req.memory;
+    try {
+        const importId = Number(req.params.importId || 0);
+        if (!importId) return res.status(400).json({ error: 'Missing import id.' });
+        const rawDb = typeof db.getRawDb === 'function' ? db.getRawDb() : null;
+        if (!rawDb) return res.status(500).json({ error: 'Raw database handle is unavailable.' });
+        const row = rawDb.prepare('SELECT * FROM external_memory_imports WHERE id = ?').get(importId);
+        if (!row) return res.status(404).json({ error: 'External import preview not found.' });
+        const parsedSummary = tryParseJsonValue(row.summary_json || '{}');
+        const summary = parsedSummary.ok ? parsedSummary.value : {};
+        const candidates = Array.isArray(summary.candidates) ? summary.candidates : [];
+        const roleTags = Array.isArray(summary.role_tags) ? summary.role_tags : [];
+        const rawSelectedNames = Array.isArray(req.body?.selected_role_names)
+            ? req.body.selected_role_names
+            : (Array.isArray(req.body?.role_names) ? req.body.role_names : []);
+        const requestedNames = Array.from(new Set(rawSelectedNames
+            .map(name => normalizeExternalCharacterName(name))
+            .filter(Boolean)));
+        const defaultNames = roleTags.map(tag => normalizeExternalCharacterName(tag.name)).filter(Boolean);
+        const selectedNames = requestedNames.length ? requestedNames : defaultNames;
+        if (!selectedNames.length) return res.status(400).json({ error: '请选择至少一个角色标签。' });
+
+        const settings = getMemoryMaintenanceSettings(db);
+        const selectedSet = new Set(selectedNames.map(name => name.toLowerCase()));
+        const profilesByName = new Map(roleTags.map(tag => [String(tag.name || '').trim().toLowerCase(), tag.profile || tag]));
+        const selectedRoleTags = roleTags.filter(tag => selectedSet.has(normalizeExternalCharacterName(tag.name).toLowerCase()));
+        const selectedCandidates = [];
+        for (const candidate of candidates) {
+            let candidateNames = (Array.isArray(candidate.character_names) ? candidate.character_names : [])
+                .map(name => normalizeExternalCharacterName(name))
+                .filter(name => selectedSet.has(name.toLowerCase()));
+            if (!candidateNames.length && String(row.import_mode || '') === 'one_to_one' && selectedNames.length === 1) {
+                candidateNames = selectedNames.slice(0, 1);
+            }
+            if (!candidateNames.length) continue;
+            selectedCandidates.push({
+                ...candidate,
+                character_names: Array.from(new Set(candidateNames))
+            });
+        }
+        if (selectedCandidates.length <= 0) {
+            return res.status(400).json({ error: '所选角色没有匹配到可写入的导入候选。' });
+        }
+
+        const normalized = {
+            source_app: row.source_app || summary.source_app || 'external_app',
+            import_mode: row.import_mode || summary.import_mode || 'multi_role',
+            role_tags: selectedRoleTags.length
+                ? selectedRoleTags
+                : selectedNames.map(name => ({ name, confidence: 1, reason: '用户选择导入。', profile: profilesByName.get(name.toLowerCase()) || { name, persona: '' } })),
+            candidates: selectedCandidates,
+            needs_review: Array.isArray(summary.needs_review) ? summary.needs_review : []
+        };
+        const applyResult = await saveExternalImportCandidatesDirect({
+            db,
+            memory,
+            settings,
+            importId,
+            sourceApp: normalized.source_app,
+            importMode: normalized.import_mode,
+            normalized,
+            dryRun: false
+        });
+        if (applyResult.saved_count <= 0 && applyResult.error_count > 0) {
+            return res.status(422).json({ error: '导入候选保存失败。', errors: applyResult.errors });
+        }
+
+        rawDb.prepare(`
+            UPDATE external_memory_imports
+            SET selected_character_ids_json = ?,
+                memory_ids_json = ?,
+                committed_at = ?
+            WHERE id = ?
+        `).run(
+            JSON.stringify(applyResult.characters.map(character => character.id)),
+            JSON.stringify(applyResult.saved),
+            Date.now(),
+            importId
+        );
+
+        const wsClients = getWsClients(req.user.id);
+        for (const item of applyResult.saved || []) {
+            if (item.character_id) {
+                broadcastToWsClients(wsClients, { type: 'memory_update', characterId: item.character_id });
+            }
+        }
+        wsClients.forEach(c => {
+            if (c.readyState === 1) {
+                c.send(JSON.stringify({ type: 'refresh_contacts' }));
+            }
+        });
+
+        res.json({
+            success: applyResult.saved_count > 0,
+            import_id: importId,
+            imported_as: 'external_direct',
+            characters: applyResult.characters,
+            queued: 0,
+            imported: applyResult.saved_count,
+            ids: applyResult.saved.map(item => item.memory_id).filter(Boolean),
+            skipped: applyResult.skipped,
+            errors: applyResult.errors
+        });
+    } catch (e) {
+        console.error('External memory import commit failed:', e);
+        res.status(e.status || 500).json({ error: e.message });
+    }
+});
+
 app.get('/api/memories/:characterId/maintenance/stats', authMiddleware, (req, res) => {
     const db = req.db;
     try {
@@ -5385,18 +7933,13 @@ app.post('/api/memories/:characterId/maintenance/temporal-binding-auto-run', aut
             broadcastToWsClients(wsClients, payload);
         };
 
-        sendProgress('start', {
-            message: '自动补充已开始。',
-            total_matching: totalMatching,
-            total_batches: totalBatches
-        });
-        if (backgroundRun) {
-            res.json({
-                success: true,
-                accepted: true,
-                run: getMemoryMaintenanceRunSnapshot(runState)
+        const executeTemporalBindingRun = async () => {
+            await yieldToServerLoop();
+            sendProgress('start', {
+                message: '自动补充已开始。',
+                total_matching: totalMatching,
+                total_batches: totalBatches
             });
-        }
 
         for (let idx = 0; idx < maxBatches; idx++) {
             const batchNumber = idx + 1;
@@ -5476,13 +8019,26 @@ app.post('/api/memories/:characterId/maintenance/temporal-binding-auto-run', aut
                     lastRawResponse = e?.payload?.raw_response || lastRawResponse;
                     const attemptError = buildMemoryMaintenanceAttemptError(e, attemptNumber);
                     rollAttempts.push(attemptError);
+                    const nonRetryable = isNonRetryableMemoryMaintenanceError(e);
                     sendProgress('attempt_error', {
                         batch_number: batchNumber,
                         attempt: attemptNumber,
                         reroll,
                         attempt_error: attemptError,
-                        will_reroll: reroll < maxRerolls
+                        will_reroll: !nonRetryable && reroll < maxRerolls,
+                        message: nonRetryable ? '小模型鉴权失败，已停止自动补充；请检查 URL、Key 和模型名。' : undefined
                     });
+                    if (nonRetryable) {
+                        errors.push({
+                            batch_number: batchNumber,
+                            error: `Small model authentication failed: ${e.message}`,
+                            attempts: rollAttempts,
+                            payload: e.payload || null
+                        });
+                        stoppedReason = 'auth_error';
+                        shouldStopAfterBatch = true;
+                        break;
+                    }
                     if (reroll < maxRerolls) continue;
                     errors.push({
                         batch_number: batchNumber,
@@ -5579,6 +8135,55 @@ app.post('/api/memories/:characterId/maintenance/temporal-binding-auto-run', aut
         if (!res.headersSent) {
             res.status(responsePayload.success ? 200 : 422).json(responsePayload);
         }
+        return responsePayload;
+        };
+
+        const failTemporalBindingRun = (e) => {
+            console.error('Memory temporal binding auto-run failed:', e);
+            runState.running = false;
+            runState.success = false;
+            runState.finished_at = Date.now();
+            runState.stopped_reason = 'error';
+            runState.errors = [{ error: e.message || 'Memory temporal binding failed.' }];
+            sendProgress('stopped', {
+                stopped_reason: 'error',
+                success: false,
+                errors: runState.errors,
+                message: `自动补充停止：${e.message || 'error'}。`
+            });
+            if (!res.headersSent) {
+                res.status(500).json({ error: e.message });
+            }
+        };
+
+        if (backgroundRun) {
+            res.json({
+                success: true,
+                accepted: true,
+                run: getMemoryMaintenanceRunSnapshot(runState)
+            });
+            enqueueBackgroundTask({
+                key: `memory-maintenance:${req.user.id}`,
+                dedupeKey: `memory-maintenance:${req.user.id}:${characterId}:supplement`,
+                maxPending: 2,
+                task: executeTemporalBindingRun
+            }).then((queueResult) => {
+                if (queueResult?.skipped) {
+                    const reason = queueResult.reason || 'queue_full';
+                    sendProgress('stopped', {
+                        stopped_reason: reason,
+                        success: false,
+                        errors: [{ error: reason }],
+                        message: reason === 'duplicate'
+                            ? '这个角色已有自动补充在跑。'
+                            : '这个账号的自动补充队列已满。'
+                    });
+                }
+            }).catch(failTemporalBindingRun);
+            return;
+        }
+
+        await executeTemporalBindingRun();
     } catch (e) {
         console.error('Memory temporal binding auto-run failed:', e);
         if (!res.headersSent) {
@@ -5779,18 +8384,13 @@ app.post('/api/memories/:characterId/maintenance/auto-run', authMiddleware, asyn
             broadcastToWsClients(wsClients, payload);
         };
 
-        sendProgress('start', {
-            message: req.body?.continue_from_breakpoint
-                ? '从断点继续自动总结。'
-                : '自动总结已开始。'
-        });
-        if (backgroundRun) {
-            res.json({
-                success: true,
-                accepted: true,
-                run: getMemoryMaintenanceRunSnapshot(runState)
+        const executeMemoryMaintenanceRun = async () => {
+            await yieldToServerLoop();
+            sendProgress('start', {
+                message: req.body?.continue_from_breakpoint
+                    ? '从断点继续自动总结。'
+                    : '自动总结已开始。'
             });
-        }
 
         for (let idx = 0; maxBatches === null || idx < maxBatches; idx++) {
             const batchNumber = idx + 1;
@@ -5879,13 +8479,26 @@ app.post('/api/memories/:characterId/maintenance/auto-run', authMiddleware, asyn
                     lastRawResponse = e?.payload?.raw_response || lastRawResponse;
                     const attemptError = buildMemoryMaintenanceAttemptError(e, attemptNumber);
                     rollAttempts.push(attemptError);
+                    const nonRetryable = isNonRetryableMemoryMaintenanceError(e);
                     sendProgress('attempt_error', {
                         batch_number: batchNumber,
                         attempt: attemptNumber,
                         reroll,
                         attempt_error: attemptError,
-                        will_reroll: reroll < maxRerolls
+                        will_reroll: !nonRetryable && reroll < maxRerolls,
+                        message: nonRetryable ? '小模型鉴权失败，已停止自动总结；请检查 URL、Key 和模型名。' : undefined
                     });
+                    if (nonRetryable) {
+                        errors.push({
+                            batch_number: batchNumber,
+                            error: `Small model authentication failed: ${e.message}`,
+                            attempts: rollAttempts,
+                            payload: e.payload || null
+                        });
+                        stoppedReason = 'auth_error';
+                        shouldStopAfterBatch = true;
+                        break;
+                    }
                     if (reroll < maxRerolls) continue;
                     errors.push({
                         batch_number: batchNumber,
@@ -6016,6 +8629,55 @@ app.post('/api/memories/:characterId/maintenance/auto-run', authMiddleware, asyn
         if (!res.headersSent) {
             res.status(responsePayload.success ? 200 : 422).json(responsePayload);
         }
+        return responsePayload;
+        };
+
+        const failMemoryMaintenanceRun = (e) => {
+            console.error('Memory maintenance auto-run failed:', e);
+            runState.running = false;
+            runState.success = false;
+            runState.finished_at = Date.now();
+            runState.stopped_reason = 'error';
+            runState.errors = [{ error: e.message || 'Memory maintenance failed.' }];
+            sendProgress('stopped', {
+                stopped_reason: 'error',
+                success: false,
+                errors: runState.errors,
+                message: `自动总结停止：${e.message || 'error'}。`
+            });
+            if (!res.headersSent) {
+                res.status(500).json({ error: e.message });
+            }
+        };
+
+        if (backgroundRun) {
+            res.json({
+                success: true,
+                accepted: true,
+                run: getMemoryMaintenanceRunSnapshot(runState)
+            });
+            enqueueBackgroundTask({
+                key: `memory-maintenance:${req.user.id}`,
+                dedupeKey: `memory-maintenance:${req.user.id}:${characterId}`,
+                maxPending: 2,
+                task: executeMemoryMaintenanceRun
+            }).then((queueResult) => {
+                if (queueResult?.skipped) {
+                    const reason = queueResult.reason || 'queue_full';
+                    sendProgress('stopped', {
+                        stopped_reason: reason,
+                        success: false,
+                        errors: [{ error: reason }],
+                        message: reason === 'duplicate'
+                            ? '这个角色已有自动总结在跑。'
+                            : '这个账号的自动总结队列已满。'
+                    });
+                }
+            }).catch(failMemoryMaintenanceRun);
+            return;
+        }
+
+        await executeMemoryMaintenanceRun();
     } catch (e) {
         console.error('Memory maintenance auto-run failed:', e);
         if (!res.headersSent) {
@@ -6251,20 +8913,28 @@ app.delete('/api/memories/bulk', authMiddleware, async (req, res) => {
         const characterIds = new Set();
         const idsByCharacter = new Map();
         const previousRowsByCharacter = new Map();
+        const indexTargetsByMemoryId = buildMemoryIndexTargets(db, rows);
         for (const mem of rows) {
-            const characterId = String(mem.character_id || '');
-            if (!characterId) continue;
-            characterIds.add(characterId);
-            if (!idsByCharacter.has(characterId)) idsByCharacter.set(characterId, []);
-            if (!previousRowsByCharacter.has(characterId)) previousRowsByCharacter.set(characterId, []);
-            idsByCharacter.get(characterId).push(mem.id);
-            previousRowsByCharacter.get(characterId).push(mem);
+            const memoryId = Number(mem.id || 0);
+            const targets = indexTargetsByMemoryId.get(memoryId) || new Map();
+            for (const target of targets.values()) {
+                const characterId = String(target.characterId || '');
+                if (!characterId) continue;
+                characterIds.add(characterId);
+                if (!idsByCharacter.has(characterId)) idsByCharacter.set(characterId, []);
+                if (!previousRowsByCharacter.has(characterId)) previousRowsByCharacter.set(characterId, []);
+                idsByCharacter.get(characterId).push(memoryId);
+                previousRowsByCharacter.get(characterId).push(target.previousRow || mem);
+            }
         }
         const indexResults = [];
         if (memory?.deleteMemoryIndexEntries) {
             for (const [characterId, memoryIds] of idsByCharacter.entries()) {
                 const result = await memory.deleteMemoryIndexEntries(characterId, memoryIds);
                 indexResults.push({ character_id: characterId, ...result });
+                if (Array.isArray(result?.errors) && result.errors.length > 0) {
+                    console.warn(`[Memory] Index delete warning for ${characterId}: ${result.errors.join('; ')}`);
+                }
             }
         }
         let deleted = 0;
@@ -6288,7 +8958,7 @@ app.delete('/api/memories/bulk', authMiddleware, async (req, res) => {
             deleted,
             ids: rows.map(row => row.id),
             character_ids: Array.from(characterIds),
-            index_deleted: true,
+            index_deleted: indexResults.every(result => !Array.isArray(result.errors) || result.errors.length === 0),
             index_results: indexResults
         });
     } catch (e) {
@@ -6310,19 +8980,43 @@ app.delete('/api/memories/:id', authMiddleware, async (req, res) => {
         if (!memoryId) return res.status(400).json({ error: 'Invalid memory id.' });
         const mem = db.getMemory(memoryId);
         if (!mem) return res.status(404).json({ error: 'Memory not found' });
-        let indexResult = null;
+        const indexTargets = buildMemoryIndexTargets(db, [mem]);
+        const targetCharacters = Array.from((indexTargets.get(memoryId) || new Map()).values());
+        const indexResults = [];
         if (memory?.deleteMemoryIndexEntries) {
-            indexResult = await memory.deleteMemoryIndexEntries(mem.character_id, [memoryId]);
+            for (const target of targetCharacters) {
+                const result = await memory.deleteMemoryIndexEntries(target.characterId, [memoryId]);
+                indexResults.push({ character_id: target.characterId, ...result });
+                if (Array.isArray(result?.errors) && result.errors.length > 0) {
+                    console.warn(`[Memory] Index delete warning for ${target.characterId}: ${result.errors.join('; ')}`);
+                }
+            }
         }
         db.deleteMemory(memoryId);
-        let refreshResult = null;
+        const refreshResults = [];
         if (memory?.refreshMemoryIndexEntries) {
-            refreshResult = await memory.refreshMemoryIndexEntries(mem.character_id, [memoryId], { previousRows: [mem] });
+            for (const target of targetCharacters) {
+                const previousRow = target.previousRow || mem;
+                const refreshResult = await memory.refreshMemoryIndexEntries(target.characterId, [memoryId], { previousRows: [previousRow] });
+                refreshResults.push({ character_id: target.characterId, ...refreshResult });
+            }
         }
-        wsClients.forEach(c => {
-            if (c.readyState === 1) c.send(JSON.stringify({ type: 'memory_update', characterId: mem.character_id }));
+        const characterIds = targetCharacters.map(target => target.characterId).filter(Boolean);
+        for (const characterId of characterIds) {
+            wsClients.forEach(c => {
+                if (c.readyState === 1) c.send(JSON.stringify({ type: 'memory_update', characterId }));
+            });
+        }
+        res.json({
+            success: true,
+            deleted: 1,
+            id: memoryId,
+            character_id: mem.character_id,
+            character_ids: characterIds,
+            index_deleted: indexResults.every(result => !Array.isArray(result.errors) || result.errors.length === 0),
+            index_results: indexResults,
+            index_refresh: refreshResults
         });
-        res.json({ success: true, deleted: 1, id: memoryId, character_id: mem.character_id, index_deleted: true, index_result: indexResult, index_refresh: refreshResult });
     } catch (e) {
         res.status(e.status || 500).json({
             success: false,

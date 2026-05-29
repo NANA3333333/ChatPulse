@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, Database, Edit2, FileText, Play, RefreshCw, RotateCcw, Save, Search, SlidersHorizontal, Trash2, X } from 'lucide-react';
+import { CheckCircle2, ChevronDown, Database, Edit2, FileText, Play, RefreshCw, RotateCcw, Save, Search, SlidersHorizontal, Trash2, Upload, UserPlus, X } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 
 const emptySettings = {
@@ -42,6 +42,25 @@ const SCENE_TAG_OPTIONS = [
     ['external_app', '外部 App'],
     ['other', '其他']
 ];
+
+const EXTERNAL_IMPORT_SOURCE_OPTIONS = [
+    ['gpt', 'GPT / ChatGPT'],
+    ['gemini', 'Gemini'],
+    ['sillytavern', 'SillyTavern'],
+    ['external_app', '其他外部 App']
+];
+
+const EXTERNAL_IMPORT_SESSION_KEY = 'cp_external_memory_import_preview';
+
+function detectExternalImportSource(filename = '', sample = '') {
+    const name = String(filename || '').toLowerCase();
+    const text = String(sample || '').slice(0, 300000);
+    if (/silly\s*tavern|sillytavern|tavern|imported\.jsonl/.test(name)) return 'sillytavern';
+    if (/"chat_metadata"|"swipes"|"mes"|"send_date"|LWB_|<本轮用户输入>|<recall>/i.test(text)) return 'sillytavern';
+    if (/gemini|bard/.test(name) || /"chunkedPrompt"|"model":"gemini/i.test(text)) return 'gemini';
+    if (/chatgpt|openai|conversations\.json/.test(name) || /"mapping"|"conversation_id"|"author"/i.test(text)) return 'gpt';
+    return '';
+}
 
 function formatNumber(value) {
     return Number(value || 0).toLocaleString();
@@ -265,11 +284,44 @@ function formatStoppedReason(reason) {
         completed: '已完成',
         max_batches: '达到批次数',
         error: '小模型错误',
+        auth_error: '小模型鉴权失败',
         no_progress: '无进展停止',
+        no_candidates: '没有提取出可写入记忆',
         dry_run: '预演停止',
         backend_missing: '后端任务不存在'
     };
     return map[reason] || reason || '未记录';
+}
+
+function summarizeAutoRunError(result = {}) {
+    return getAutoRunErrorDetail(result).summary;
+}
+
+function clipRunErrorText(value = '', max = 520) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    if (text.length <= max) return text;
+    return `${text.slice(0, max - 1)}…`;
+}
+
+function getAutoRunErrorDetail(result = {}) {
+    const lastError = (result.errors || []).slice(-1)[0];
+    const attemptError = (lastError?.attempts || []).slice(-1)[0];
+    const rawError = attemptError?.error || lastError?.error || result.message || '';
+    const rawPreview = attemptError?.raw_response_preview || lastError?.raw_response_preview || result.raw_response || '';
+    const batchNumber = lastError?.batch_number || attemptError?.batch?.batch_index || result.batch?.batch_index || '';
+    if (!rawError && !rawPreview) {
+        return { summary: '', raw_preview: '', batch_number: batchNumber };
+    }
+    const prefix = batchNumber ? `第 ${batchNumber} 批：` : '';
+    const isJsonError = /JSON|Unexpected token|not valid JSON|did not return a JSON object|JSON 对象|格式不合法/i.test(rawError);
+    const summary = isJsonError
+        ? `${prefix}小模型返回的不是合法 JSON，后端无法解析。具体错误：${rawError}`
+        : `${prefix}${rawError}`;
+    return {
+        summary,
+        raw_preview: rawPreview,
+        batch_number: batchNumber
+    };
 }
 
 function formatProgressPhase(phase) {
@@ -420,9 +472,11 @@ function TimelineList({ items = [], emptyText, onCharacterClick, onEdit, onDelet
     const [zoom, setZoom] = useState(0.7);
     const [filter, setFilter] = useState('all');
     const [activeClusterKey, setActiveClusterKey] = useState('');
+    const scrollRef = useRef(null);
+    const [timelineViewportWidth, setTimelineViewportWidth] = useState(0);
     const view = useMemo(() => buildTimelineGraph(items, filter), [items, filter]);
     const timelineLayout = useMemo(() => {
-        const clusterGap = Math.round(112 + zoom * 30);
+        const minClusterGap = Math.round(112 + zoom * 30);
         const padding = 86;
         const branchGap = 58;
         const branchBase = 42;
@@ -432,11 +486,16 @@ function TimelineList({ items = [], emptyText, onCharacterClick, onEdit, onDelet
             return Math.max(max, topCount, bottomCount);
         }, 1);
         const height = Math.max(360, branchBase * 2 + Math.max(1, maxBranchTiers) * branchGap * 2 + 86);
+        const compactWidth = padding * 2 + Math.max(0, view.clusters.length - 1) * minClusterGap;
+        const width = Math.max(620, timelineViewportWidth || 0, compactWidth);
+        const clusterGap = view.clusters.length > 1
+            ? Math.max(minClusterGap, (width - padding * 2) / (view.clusters.length - 1))
+            : 0;
         const clusterXs = new Map();
         view.clusters.forEach((cluster, index) => {
-            clusterXs.set(cluster.key, padding + index * clusterGap);
+            const x = view.clusters.length === 1 ? width / 2 : padding + index * clusterGap;
+            clusterXs.set(cluster.key, Math.round(x));
         });
-        const width = Math.max(620, padding * 2 + Math.max(0, view.clusters.length - 1) * clusterGap);
         const months = view.months.map(month => {
             const monthClusters = view.clusters.filter(cluster => cluster.month_key === month.key);
             const first = monthClusters[0];
@@ -446,10 +505,24 @@ function TimelineList({ items = [], emptyText, onCharacterClick, onEdit, onDelet
             return { ...month, x: Math.round((Number(firstX || 0) + Number(lastX || 0)) / 2) };
         });
         return { branchBase, branchGap, clusterXs, height, months, width };
-    }, [view.clusters, view.months, zoom]);
+    }, [timelineViewportWidth, view.clusters, view.months, zoom]);
     const activeCluster = view.clusters.find(cluster => cluster.key === activeClusterKey)
         || view.clusters[view.clusters.length - 1]
         || null;
+
+    useEffect(() => {
+        const node = scrollRef.current;
+        if (!node) return undefined;
+        const updateWidth = () => setTimelineViewportWidth(Math.max(0, Math.floor(node.clientWidth || 0)));
+        updateWidth();
+        if (typeof ResizeObserver === 'undefined') {
+            window.addEventListener('resize', updateWidth);
+            return () => window.removeEventListener('resize', updateWidth);
+        }
+        const observer = new ResizeObserver(updateWidth);
+        observer.observe(node);
+        return () => observer.disconnect();
+    }, []);
 
     useEffect(() => {
         if (!view.clusters.length) {
@@ -527,7 +600,7 @@ function TimelineList({ items = [], emptyText, onCharacterClick, onEdit, onDelet
                 ))}
             </div>
 
-            <div className="memory-timeline-scroll">
+            <div className="memory-timeline-scroll" ref={scrollRef}>
                 <div
                     className="memory-timeline-axis"
                     style={{
@@ -688,6 +761,7 @@ function formatSourceKind(kind = '') {
     if (kind === 'private_chat') return '私聊';
     if (kind === 'group_chat') return '群聊';
     if (kind === 'commercial_street') return '商业街';
+    if (kind === 'external_app') return '外部 App';
     return '未知来源';
 }
 
@@ -764,6 +838,8 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
     const statsRef = useRef(null);
     const progressRefreshRef = useRef(null);
     const activeRunMissRef = useRef(0);
+    const externalImportFileRef = useRef(null);
+    const externalImportRequestRef = useRef(false);
     const [overview, setOverview] = useState(null);
     const [library, setLibrary] = useState(null);
     const [settings, setSettings] = useState(emptySettings);
@@ -796,6 +872,15 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
     const [editingMemory, setEditingMemory] = useState(null);
     const [sourceViewer, setSourceViewer] = useState(null);
     const [editSaving, setEditSaving] = useState(false);
+    const [externalSourceApp, setExternalSourceApp] = useState('gpt');
+    const [externalImportMode, setExternalImportMode] = useState('one_to_one');
+    const [externalTargetName, setExternalTargetName] = useState('Claude');
+    const [externalImportText, setExternalImportText] = useState('');
+    const [externalImportFile, setExternalImportFile] = useState(null);
+    const [externalImportPreview, setExternalImportPreview] = useState(null);
+    const [selectedExternalRoles, setSelectedExternalRoles] = useState([]);
+    const [externalImportLoading, setExternalImportLoading] = useState(false);
+    const [externalImportCommitting, setExternalImportCommitting] = useState(false);
     const [openGroups, setOpenGroups] = useState({ category_user_profile: true, source_commercial_street: true, source_group_chat: true, forgetting_fast: true, time_bound_timeline: true });
 
     const headers = useMemo(() => ({
@@ -803,12 +888,42 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
         'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`
     }), []);
 
+    useEffect(() => {
+        let cancelled = false;
+        const restorePreview = async () => {
+            try {
+                const res = await fetch(`${apiUrl}/memory-import/external/latest`, { headers });
+                const data = await res.json().catch(() => ({}));
+                if (cancelled) return;
+                if (!res.ok || !data.success || !data.import?.id || !Array.isArray(data.candidates)) {
+                    sessionStorage.removeItem(EXTERNAL_IMPORT_SESSION_KEY);
+                    setExternalImportPreview(null);
+                    setSelectedExternalRoles([]);
+                    return;
+                }
+                setExternalImportPreview(data);
+                setSelectedExternalRoles((data.role_tags || []).map(tag => tag.name).filter(Boolean));
+                if (data.import.source_app) setExternalSourceApp(data.import.source_app);
+                if (data.import.import_mode) setExternalImportMode(data.import.import_mode);
+                sessionStorage.setItem(EXTERNAL_IMPORT_SESSION_KEY, JSON.stringify(data));
+                setNotice(prev => prev || `已恢复最近一次未提交的外部导入预览：${formatNumber(data.candidates.length)} 条候选。`);
+            } catch (e) {
+                console.warn('Failed to restore latest external import preview:', e.message);
+            }
+        };
+        restorePreview();
+        return () => {
+            cancelled = true;
+        };
+    }, [apiUrl, headers]);
+
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
-            const query = new URLSearchParams({ all: '1' });
+            const query = new URLSearchParams({ limit_per_group: '36', forgetting_limit: '90' });
             if (activeCharacterId) query.set('character_id', activeCharacterId);
             query.set('timeline_filter', 'strong_time_bound');
+            query.set('timeline_all', '1');
             query.set('source', libraryViewMode === 'old' ? 'legacy' : 'new');
             const [overviewRes, libraryRes] = await Promise.all([
                 fetch(`${apiUrl}/memory-maintenance/overview`, { headers }),
@@ -825,7 +940,12 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                 || overviewData.overview?.by_character?.[0]?.character_id
                 || contacts?.[0]?.id
                 || '';
-            setSelectedCharacterId(prev => prev || topCharacter);
+            const availableCharacterIds = new Set([
+                ...(overviewData.overview?.migration_characters || []).map(item => String(item.character_id || '')),
+                ...(overviewData.overview?.by_character || []).map(item => String(item.character_id || '')),
+                ...(contacts || []).map(item => String(item.id || ''))
+            ].filter(Boolean));
+            setSelectedCharacterId(prev => (prev && availableCharacterIds.has(String(prev)) ? prev : topCharacter));
         } catch (e) {
             console.error('Failed to load memory library:', e);
         } finally {
@@ -913,7 +1033,6 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
     const loadActiveMaintenanceRun = useCallback(async () => {
         try {
             const query = new URLSearchParams({ active: '1' });
-            if (selectedCharacterId) query.set('character_id', selectedCharacterId);
             const res = await fetch(`${apiUrl}/memory-maintenance/runs?${query.toString()}`, { headers });
             const data = await res.json().catch(() => ({}));
             if (!res.ok || !data.success) return false;
@@ -978,10 +1097,11 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
             activeRunMissRef.current = 0;
             const eventCharacterId = String(detail.characterId || detail.character?.id || '');
             const currentCharacterId = String(selectedCharacterId || '');
+            const externalImportEvent = detail.task_mode === 'external_import';
             setAutoProgress(prev => {
                 const sameRun = prev?.run_id && prev.run_id === detail.run_id;
                 const relevantCharacter = !currentCharacterId || eventCharacterId === currentCharacterId;
-                if (!sameRun && !relevantCharacter) return prev;
+                if (!sameRun && !relevantCharacter && !externalImportEvent) return prev;
                 const isTerminal = detail.phase === 'done' || detail.phase === 'stopped';
                 return {
                     ...(prev || {}),
@@ -993,7 +1113,7 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
             setAutoProgressLog(prev => {
                 const sameCurrentRun = autoProgress?.run_id && autoProgress.run_id === detail.run_id;
                 const relevantCharacter = !currentCharacterId || eventCharacterId === currentCharacterId;
-                if (!sameCurrentRun && !relevantCharacter) return prev;
+                if (!sameCurrentRun && !relevantCharacter && !externalImportEvent) return prev;
                 return [...prev, detail].slice(-80);
             });
             if (['batch_success', 'batch_empty', 'done', 'stopped'].includes(detail.phase)) {
@@ -1001,11 +1121,15 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
             }
             if (detail.phase === 'done' || detail.phase === 'stopped') {
                 setAutoLoading(false);
-                setRunResult({
+                const nextResult = {
                     mode: 'auto',
                     task_mode: detail.task_mode,
                     success: detail.success,
                     character: detail.character,
+                    import_id: detail.import_id,
+                    source_app: detail.source_app,
+                    import_mode: detail.import_mode,
+                    filename: detail.filename,
                     stopped_reason: detail.stopped_reason,
                     can_continue: detail.can_continue,
                     continue_from: detail.continue_from,
@@ -1016,7 +1140,12 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                     run_until_empty: detail.run_until_empty,
                     max_batches: detail.max_batches,
                     max_rerolls: detail.max_rerolls
-                });
+                };
+                setRunResult(nextResult);
+                if (detail.phase === 'stopped' || detail.success === false) {
+                    const errorText = summarizeAutoRunError(nextResult);
+                    setNotice(`自动任务已停止：${formatStoppedReason(detail.stopped_reason)}${errorText ? `；${errorText}` : ''}`);
+                }
             }
         };
         window.addEventListener('memory_maintenance_progress', handleMaintenanceProgress);
@@ -1223,9 +1352,22 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
         const options = runOptions?.nativeEvent ? {} : (runOptions || {});
         const targetCharacterId = options.characterId || selectedCharacterId;
         const isContinuation = options.continuation === true;
-        if (!targetCharacterId) return;
+        if (!targetCharacterId) {
+            setNotice('当前账号没有可自动总结的角色记忆。外部导入请先选择文件，然后直接点“一键导入总结”。');
+            return;
+        }
         if (!settings.api_endpoint || !settings.api_key || !settings.model_name) {
             alert('请先填写并保存小模型 URL、Key 和模型名。');
+            return;
+        }
+        const migrationTargets = overview?.migration_characters || overview?.legacy_by_character || [];
+        const targetStats = migrationTargets.find(item => String(item.character_id) === String(targetCharacterId));
+        if (!targetStats || Number(targetStats.total || 0) <= 0) {
+            setNotice('当前账号没有旧库 pending 可自动总结。外部导入请直接选择文件后一键导入总结。');
+            return;
+        }
+        if (!isContinuation && Number(targetStats.pending || 0) <= 0) {
+            setNotice(`${targetStats.name || '当前角色'} 没有 pending 旧记忆或外部导入原料需要自动总结。`);
             return;
         }
         const limit = Math.max(10, Math.min(100, Number(settings.batch_size || 30)));
@@ -1328,9 +1470,17 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
         const options = runOptions?.nativeEvent ? {} : (runOptions || {});
         const targetCharacterId = options.characterId || selectedCharacterId;
         const isContinuation = options.continuation === true;
-        if (!targetCharacterId) return;
+        if (!targetCharacterId) {
+            setNotice('当前账号没有新版记忆可自动补充。外部导入请先选择文件，然后直接点“一键导入总结”。');
+            return;
+        }
         if (!settings.api_endpoint || !settings.api_key || !settings.model_name) {
             alert('请先填写并保存小模型 URL、Key 和模型名。');
+            return;
+        }
+        const targetStats = (overview?.by_character || []).find(item => String(item.character_id) === String(targetCharacterId));
+        if (!targetStats || Number(targetStats.formal_total || targetStats.total || 0) <= 0) {
+            setNotice('当前角色还没有新版记忆可补充。外部导入会直接写入新版记忆库，不需要先提交预览队列。');
             return;
         }
         const limit = Math.max(10, Math.min(100, Number(settings.batch_size || 40)));
@@ -1436,6 +1586,275 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
         runAutoSupplement(options);
     };
 
+    const applyDetectedExternalImportSource = (detected) => {
+        if (!detected) return;
+        setExternalSourceApp(detected);
+        setExternalImportMode(detected === 'sillytavern' ? 'multi_role' : 'one_to_one');
+    };
+
+    const handleExternalSourceChange = (value) => {
+        setExternalSourceApp(value);
+        setExternalImportPreview(null);
+        setSelectedExternalRoles([]);
+        if (value === 'sillytavern') {
+            setExternalImportMode('multi_role');
+        } else {
+            setExternalImportMode('one_to_one');
+        }
+    };
+
+    const previewExternalImport = async () => {
+        if (externalImportRequestRef.current) return;
+        if (!externalImportFile && !externalImportText.trim()) {
+            console.warn('[External Import] preview blocked: no file or text');
+            alert('先上传导出文件，或者粘贴一段聊天记录。');
+            return;
+        }
+        if (!settings.api_endpoint || !settings.api_key || !settings.model_name) {
+            console.warn('[External Import] preview blocked: memory maintenance model settings missing');
+            alert('先配置下面的记忆库管理小模型。');
+            return;
+        }
+        console.info('[External Import] preview request start', {
+            source_app: externalSourceApp,
+            import_mode: externalImportMode,
+            has_file: !!externalImportFile,
+            text_chars: externalImportText.trim().length
+        });
+        const form = new FormData();
+        let requestSourceApp = externalSourceApp;
+        let requestImportMode = externalImportMode;
+        if (externalImportFile) {
+            const sample = await externalImportFile.slice(0, 300000).text().catch(() => '');
+            const detected = detectExternalImportSource(externalImportFile.name, sample);
+            if (detected) {
+                requestSourceApp = detected;
+                requestImportMode = detected === 'sillytavern' ? 'multi_role' : requestImportMode;
+                applyDetectedExternalImportSource(detected);
+            }
+        }
+        form.append('source_app', requestSourceApp);
+        form.append('import_mode', requestImportMode);
+        if (requestImportMode !== 'multi_role') {
+            form.append('target_character_name', externalTargetName);
+        }
+        if (externalImportFile) form.append('file', externalImportFile);
+        if (externalImportText.trim()) form.append('text', externalImportText.trim());
+        setExternalImportLoading(true);
+        externalImportRequestRef.current = true;
+        setExternalImportPreview(null);
+        setSelectedExternalRoles([]);
+        try {
+            sessionStorage.removeItem(EXTERNAL_IMPORT_SESSION_KEY);
+            const res = await fetch(`${apiUrl}/memory-import/external/preview`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` },
+                body: form
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.success) {
+                const detail = [
+                    data.error || '外部记忆预览失败',
+                    data.raw_response_preview ? `模型原始返回：${data.raw_response_preview}` : '',
+                    Array.isArray(data.needs_review) && data.needs_review.length ? `需复核：${JSON.stringify(data.needs_review).slice(0, 800)}` : ''
+                ].filter(Boolean).join('\n\n');
+                throw new Error(detail);
+            }
+            console.info('[External Import] preview request success', {
+                import_id: data.import?.id,
+                roles: data.role_tags?.length || 0,
+                candidates: data.candidates?.length || 0
+            });
+            const roleNames = (data.role_tags || []).map(tag => tag.name).filter(Boolean);
+            const cleanStats = data.prompt_stats?.clean_stats;
+            const cleanNote = cleanStats?.changed_messages || cleanStats?.dropped_messages
+                ? `，清洗 ${formatNumber(cleanStats.changed_messages || 0)} 条，丢弃噪声 ${formatNumber(cleanStats.dropped_messages || 0)} 条`
+                : '';
+            setExternalImportPreview(data);
+            sessionStorage.setItem(EXTERNAL_IMPORT_SESSION_KEY, JSON.stringify(data));
+            setSelectedExternalRoles(roleNames);
+            setNotice(`外部导入预览完成：识别 ${formatNumber(roleNames.length)} 个角色标签，生成 ${formatNumber(data.candidates?.length || 0)} 条新版记忆候选${cleanNote}。`);
+        } catch (e) {
+            console.error('[External Import] preview request failed', e);
+            alert(`外部记忆预览失败：${e.message}`);
+        } finally {
+            externalImportRequestRef.current = false;
+            setExternalImportLoading(false);
+        }
+    };
+
+    const toggleExternalRole = (name) => {
+        setSelectedExternalRoles(prev => {
+            if (prev.includes(name)) return prev.filter(item => item !== name);
+            return [...prev, name];
+        });
+    };
+
+    const commitExternalImport = async () => {
+        const importId = externalImportPreview?.import?.id;
+        if (!importId) return;
+        const roleNames = selectedExternalRoles.length
+            ? selectedExternalRoles
+            : (externalImportPreview?.role_tags || []).map(tag => tag.name).filter(Boolean);
+        if (!roleNames.length) {
+            alert('至少选择一个角色标签。');
+            return;
+        }
+        setExternalImportCommitting(true);
+        try {
+            const res = await fetch(`${apiUrl}/memory-import/external/${importId}/commit`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    selected_role_names: roleNames,
+                    create_characters: true
+                })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.success) throw new Error(data.error || '外部记忆导入失败');
+            const created = (data.characters || []).filter(character => character.created).length;
+            setNotice(`导入完成：写入 ${formatNumber(data.imported || 0)} 条正式新记忆，创建 ${formatNumber(created)} 个角色。不会再进入旧库自动总结队列。`);
+            setExternalImportPreview(null);
+            sessionStorage.removeItem(EXTERNAL_IMPORT_SESSION_KEY);
+            setExternalImportText('');
+            setExternalImportFile(null);
+            if (externalImportFileRef.current) externalImportFileRef.current.value = '';
+            await loadData();
+        } catch (e) {
+            alert(`外部记忆导入失败：${e.message}`);
+        } finally {
+            setExternalImportCommitting(false);
+        }
+    };
+
+    const runExternalImportAuto = async (runOptions = {}) => {
+        const options = runOptions?.nativeEvent ? {} : (runOptions || {});
+        const continuation = options.continuation === true;
+        const continueImportId = Number(options.importId || options.import_id || 0);
+        const continueOffset = Math.max(0, Number(options.continueOffset || options.offset || 0) || 0);
+        const retryLatestExternalImport = continuation && !continueImportId;
+        if (externalImportRequestRef.current) return;
+        if (!continueImportId && !retryLatestExternalImport && !externalImportFile && !externalImportText.trim()) {
+            alert('先上传导出文件，或者粘贴一段聊天记录。');
+            return;
+        }
+        if (!settings.api_endpoint || !settings.api_key || !settings.model_name) {
+            alert('先配置下面的记忆库管理小模型。');
+            return;
+        }
+        const form = new FormData();
+        let requestSourceApp = externalSourceApp;
+        let requestImportMode = externalImportMode;
+        if (!continueImportId && externalImportFile) {
+            const sample = await externalImportFile.slice(0, 300000).text().catch(() => '');
+            const detected = detectExternalImportSource(externalImportFile.name, sample);
+            if (detected) {
+                requestSourceApp = detected;
+                requestImportMode = detected === 'sillytavern' ? 'multi_role' : requestImportMode;
+                applyDetectedExternalImportSource(detected);
+            }
+        }
+        const limit = Math.max(10, Math.min(100, Number(settings.batch_size || 10) || 10));
+        const runUntilEmpty = String(autoMaxBatches || '').trim() === '';
+        const maxBatches = runUntilEmpty ? '' : String(Math.max(1, Number(autoMaxBatches || 1) || 1));
+        form.append('source_app', requestSourceApp);
+        form.append('import_mode', requestImportMode);
+        if (requestImportMode !== 'multi_role') {
+            form.append('target_character_name', externalTargetName);
+        }
+        if (!continueImportId && externalImportFile) form.append('file', externalImportFile);
+        if (!continueImportId && externalImportText.trim()) form.append('text', externalImportText.trim());
+        form.append('limit', String(limit));
+        form.append('max_batches', maxBatches);
+        form.append('run_until_empty', runUntilEmpty ? 'true' : 'false');
+        form.append('max_rerolls', '0');
+        form.append('background', 'true');
+        if (continueImportId) form.append('continue_import_id', String(continueImportId));
+        if (retryLatestExternalImport) form.append('retry_latest_external_import', 'true');
+        if (continueOffset > 0) form.append('continue_from_offset', String(continueOffset));
+
+        setAutoLoading(true);
+        setExternalImportLoading(true);
+        externalImportRequestRef.current = true;
+        activeRunMissRef.current = 0;
+        setAutoProgress({
+            running: true,
+            task_mode: 'external_import',
+            phase: 'start',
+            characterId: '__external_import__',
+            character: { id: '__external_import__', name: '外部导入' },
+            import_id: continueImportId || null,
+            processed: continueOffset,
+            updated: 0,
+            applied_errors: 0,
+            limit,
+            max_batches: runUntilEmpty ? null : Number(maxBatches),
+            run_until_empty: runUntilEmpty,
+            max_rerolls: 0,
+            message: continuation
+                ? `准备从断点继续，已跳过 ${formatNumber(continueOffset)} 条。`
+                : `准备按每批 ${limit} 条正文直接总结入库。`
+        });
+        setAutoProgressLog([]);
+        try {
+            const saveRes = await fetch(`${apiUrl}/memory-maintenance/settings`, {
+                method: 'PUT',
+                headers,
+                body: JSON.stringify(settings)
+            });
+            const saveData = await saveRes.json().catch(() => ({}));
+            if (!saveRes.ok || !saveData.success) throw new Error(saveData.error || 'Save settings failed');
+            setSettings({ ...emptySettings, ...(saveData.settings || {}) });
+
+            sessionStorage.removeItem(EXTERNAL_IMPORT_SESSION_KEY);
+            setExternalImportPreview(null);
+            setSelectedExternalRoles([]);
+            const res = await fetch(`${apiUrl}/memory-import/external/auto-run`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` },
+                body: form
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.success) {
+                setRunResult(data);
+                await loadData();
+                const lastError = (data.errors || []).slice(-1)[0]?.error;
+                throw new Error(lastError || data.error || '外部导入自动总结失败');
+            }
+            if (data.accepted) {
+                if (data.run) adoptRunSnapshot(data.run);
+                setRunResult(null);
+                setNotice(continuation
+                    ? '外部导入已从断点继续：只重试失败批次之后的正文，不会重跑已写入的批次。'
+                    : '外部导入已在后台启动：会直接分批总结并写入新记忆库，不再走二次扫描队列。');
+                scheduleProgressRefresh(300);
+                return;
+            }
+            setRunResult({ ...data, task_mode: 'external_import' });
+            setAutoProgress(prev => ({
+                ...(prev || {}),
+                running: false,
+                task_mode: 'external_import',
+                phase: data.success ? 'done' : 'stopped',
+                processed: data.processed || 0,
+                updated: data.updated || 0,
+                stopped_reason: data.stopped_reason,
+                stats: data.stats
+            }));
+            setNotice(`外部导入完成：处理 ${formatNumber(data.processed || 0)} 条正文，写入 ${formatNumber(data.updated || 0)} 条正式记忆。`);
+            setExternalImportText('');
+            setExternalImportFile(null);
+            if (externalImportFileRef.current) externalImportFileRef.current.value = '';
+            await loadData();
+        } catch (e) {
+            setAutoProgress(prev => prev ? { ...prev, running: false, phase: prev.phase === 'stopped' ? prev.phase : 'stopped' } : prev);
+            alert(`外部导入自动总结失败：${e.message}`);
+        } finally {
+            externalImportRequestRef.current = false;
+            setExternalImportLoading(false);
+        }
+    };
+
     const openMemoryEditor = ({ type, item, ids }) => {
         const safeIds = (Array.isArray(ids) ? ids : [item?.id]).filter(Boolean);
         setEditingMemory({
@@ -1527,7 +1946,10 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok || !data.success) throw new Error(data.error || '删除失败');
-            setNotice(`已彻底删除 ${formatNumber(data.deleted || 0)} / ${formatNumber(safeIds.length)} 条承载卡片，并移除对应 RAG 索引。列表正在刷新。`);
+            const indexWarning = data.index_deleted === false
+                ? '；但当前向量索引服务不可用，索引残留会在下次索引修复/重建时清理'
+                : '，并移除对应 RAG 索引';
+            setNotice(`已彻底删除 ${formatNumber(data.deleted || 0)} / ${formatNumber(safeIds.length)} 条承载卡片${indexWarning}。列表正在刷新。`);
             await loadData();
         } catch (e) {
             alert(`删除记忆失败：${e.message}`);
@@ -1581,6 +2003,9 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
     const totals = overview?.totals || {};
     const characterStats = overview?.by_character || [];
     const migrationCharacters = overview?.migration_characters || overview?.legacy_by_character || characterStats;
+    const hasMigrationTargets = migrationCharacters.some(item => Number(item.total || 0) > 0);
+    const hasSupplementTargets = characterStats.some(item => Number(item.formal_total || item.total || 0) > 0);
+    const autoTaskUnavailable = promptTaskMode === 'complete' ? !hasMigrationTargets : !hasSupplementTargets;
     const activeCharacter = characterStats.find(item => String(item.character_id) === String(activeCharacterId));
     const categories = library?.categories || [];
     const timeline = library?.timeline || { count: 0, items: [] };
@@ -1591,11 +2016,39 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
     const fastForgetting = forgettingGroups.find(group => group.key === 'fast')?.count || 0;
     const onCurveForgetting = forgettingGroups.find(group => group.key === 'on_curve')?.count || 0;
     const canContinueAutoRun = runResult?.mode === 'auto'
+        && runResult.task_mode !== 'external_import'
         && (runResult.can_continue === true
             || (!runResult.success && ['error', 'no_progress'].includes(runResult.stopped_reason) && Number(runResult.stats?.pending || 0) > 0));
+    const runErrorDetail = runResult ? getAutoRunErrorDetail(runResult) : null;
     const autoRunActive = autoLoading || autoProgress?.running === true;
     const latestProgressEvents = autoProgressLog.slice(-8).reverse();
     const latestProgressSamples = Array.isArray(autoProgress?.new_memory_samples) ? autoProgress.new_memory_samples : [];
+    const externalPreviewRoles = externalImportPreview?.role_tags || [];
+    const externalPreviewCandidates = externalImportPreview?.candidates || [];
+    const externalImportDraftReady = !!externalImportFile || !!externalImportText.trim();
+    const canRetryExternalImport = runResult?.mode === 'auto'
+        && runResult.task_mode === 'external_import'
+        && runResult.success === false
+        && ['error', 'no_progress'].includes(String(runResult.stopped_reason || ''))
+        && (Number(runResult.continue_from?.pending || 0) > 0 || externalImportDraftReady || Number(runResult.processed || 0) > 0);
+    const canRunExternalImportDirect = promptTaskMode === 'complete' && externalImportDraftReady;
+    const canQueueExternalImport = promptTaskMode === 'complete'
+        && !!externalImportPreview?.import?.id
+        && (selectedExternalRoles.length > 0 || externalPreviewRoles.some(tag => tag?.name));
+    const canPrepareExternalImport = canRunExternalImportDirect || (autoTaskUnavailable && canQueueExternalImport);
+    const externalPrepareLabel = canRunExternalImportDirect
+        ? (externalImportLoading ? '导入中' : '一键导入总结')
+        : (externalImportCommitting ? '写入中' : '写入预览结果');
+    const runExternalPrepareStep = () => {
+        if (canRunExternalImportDirect) {
+            runExternalImportAuto();
+            return;
+        }
+        if (canQueueExternalImport) {
+            commitExternalImport();
+        }
+    };
+    const selectedExternalRoleSet = new Set(selectedExternalRoles);
     const scopedLegacyTotal = Number(activeCharacter?.legacy_total ?? totals.legacy_total ?? totals.total ?? 0);
     const scopedMigratedCards = Number(activeCharacter?.migrated_card_total ?? activeCharacter?.migrated_total ?? totals.migrated_card_total ?? totals.total ?? 0);
     const scopedFormalTotal = Number(activeCharacter?.formal_total ?? totals.formal_total ?? 0);
@@ -1628,7 +2081,7 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                 <div>
                     <div className="memory-library-kicker"><Database size={16} /> 记忆库</div>
                     <h2>{activeCharacter ? `${activeCharacter.name} 的记忆库统计` : '分类记忆与遗忘曲线'}</h2>
-                    <p>{activeCharacter ? '正在显示这个角色的全部分类记忆和遗忘曲线条目。' : '每个分类直接挂载该分类的全部记忆条目；遗忘区按距离阈值从近到远排列。'}</p>
+                    <p>{activeCharacter ? '正在显示这个角色的分类记忆和遗忘曲线条目。' : '每个分类先加载代表性条目；遗忘区按距离阈值从近到远排列。'}</p>
                 </div>
                 <button className="memory-lib-button ghost" onClick={loadData} disabled={loading}>
                     <RefreshCw size={16} /> {loading ? '刷新中' : '刷新'}
@@ -1787,7 +2240,7 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                                 onViewSource={openSourceViewer}
                                 deletingIds={deletingIds}
                             />
-                            {timeline.items?.length > 0 && <div className="memory-lib-more">已把 {formatNumber(timeline.items.length)} 条正式时间线记忆聚合为可缩放日期节点；背后承载卡片 {formatNumber(timeline.source_count || timeline.items.length)} 张，疑似时间相关正式记忆 {formatNumber(timeline.temporal_signal_count || 0)} 条。</div>}
+                            {timeline.items?.length > 0 && <div className="memory-lib-more">已把 {formatNumber(timeline.items.length)} 条正式时间线记忆聚合为可缩放日期节点{timeline.has_more ? ` / 共 ${formatNumber(timeline.count)} 条` : ''}；背后承载卡片 {formatNumber(timeline.source_count || timeline.items.length)} 张，疑似时间相关正式记忆 {formatNumber(timeline.temporal_signal_count || 0)} 条。</div>}
                         </>
                     )}
                 </section>
@@ -1820,7 +2273,7 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                                         rescuingIds={rescuingIds}
                                         deletingIds={deletingIds}
                                     />
-                                    {group.items?.length > 0 && <div className="memory-lib-more">已按最快遗忘排序，加载全部 {formatNumber(group.items.length)} 条，可在气泡内滚动查看。</div>}
+                                    {group.items?.length > 0 && <div className="memory-lib-more">已按最快遗忘排序，当前加载 {formatNumber(group.items.length)} 条{group.has_more ? ` / 共 ${formatNumber(group.count)} 条` : ''}，可在气泡内滚动查看。</div>}
                                 </>
                             )}
                         </section>
@@ -1857,7 +2310,7 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                                                 rescuingIds={rescuingIds}
                                                 deletingIds={deletingIds}
                                             />
-                                            {category.items?.length > 0 && <div className="memory-lib-more">已加载这个分类的全部 {formatNumber(category.items.length)} 条，可在气泡内滚动查看。</div>}
+                                            {category.items?.length > 0 && <div className="memory-lib-more">已加载这个分类 {formatNumber(category.items.length)} 条{category.has_more ? ` / 共 ${formatNumber(category.count)} 条` : ''}，可在气泡内滚动查看。</div>}
                                         </>
                                     )}
                                 </section>
@@ -1892,7 +2345,7 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                                                 onViewSource={openSourceViewer}
                                                 deletingIds={deletingIds}
                                             />
-                                            {group.items?.length > 0 && <div className="memory-lib-more">已加载这个来源场景的全部 {formatNumber(group.items.length)} 条新版总结，可在气泡内滚动查看。</div>}
+                                            {group.items?.length > 0 && <div className="memory-lib-more">已加载这个来源场景 {formatNumber(group.items.length)} 条{group.has_more ? ` / 共 ${formatNumber(group.count)} 条` : ''}新版总结，可在气泡内滚动查看。</div>}
                                         </>
                                     )}
                                 </section>
@@ -1924,7 +2377,7 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                                                 onViewSource={openSourceViewer}
                                                 deletingIds={deletingIds}
                                             />
-                                            {category.items?.length > 0 && <div className="memory-lib-more">已加载这个分类的全部 {formatNumber(category.items.length)} 条新版总结，可在气泡内滚动查看。</div>}
+                                            {category.items?.length > 0 && <div className="memory-lib-more">已加载这个分类 {formatNumber(category.items.length)} 条{category.has_more ? ` / 共 ${formatNumber(category.count)} 条` : ''}新版总结，可在气泡内滚动查看。</div>}
                                         </>
                                     )}
                                 </section>
@@ -1965,6 +2418,109 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                         {models.map(model => <option key={model} value={model}>{model}</option>)}
                     </select>
                 )}
+                <div className="memory-external-import">
+                    <div className="memory-lib-prompt-head">
+                        <strong><Upload size={15} /> 导入外部聊天记录</strong>
+                        <span>{externalImportPreview ? `候选 ${formatNumber(externalPreviewCandidates.length)} 条` : 'GPT / Gemini / SillyTavern'}</span>
+                    </div>
+                    <div className="memory-lib-model-grid external">
+                        <label>
+                            <span>来源</span>
+                            <select value={externalSourceApp} onChange={e => handleExternalSourceChange(e.target.value)}>
+                                {EXTERNAL_IMPORT_SOURCE_OPTIONS.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+                            </select>
+                        </label>
+                        <label>
+                            <span>导入类型</span>
+                            <select value={externalImportMode} onChange={e => setExternalImportMode(e.target.value)}>
+                                <option value="one_to_one">一对一</option>
+                                <option value="multi_role">多人/多角色</option>
+                            </select>
+                        </label>
+                        {externalImportMode !== 'multi_role' ? (
+                            <label>
+                                <span>绑定角色名</span>
+                                <input
+                                    value={externalTargetName}
+                                    onChange={e => setExternalTargetName(e.target.value)}
+                                    placeholder="例如 Claude / Gemini"
+                                />
+                            </label>
+                        ) : (
+                            <div className="memory-external-import-hint">
+                                SillyTavern 多人导入会从正文里识别明确姓名；不需要再填角色名。
+                            </div>
+                        )}
+                    </div>
+                    <textarea
+                        className="memory-external-textarea"
+                        value={externalImportText}
+                        onChange={e => setExternalImportText(e.target.value)}
+                        placeholder="可以直接粘贴导出的聊天记录；上传文件时这里也可以留空。"
+                    />
+                    <div className="memory-lib-batch-tools external">
+                        <input
+                            ref={externalImportFileRef}
+                            type="file"
+                            accept=".json,.jsonl,.ndjson,.txt,.md,.markdown,application/json,text/plain"
+                            onChange={async e => {
+                                const file = e.target.files?.[0] || null;
+                                setExternalImportFile(file);
+                                setExternalImportPreview(null);
+                                setSelectedExternalRoles([]);
+                                if (file) {
+                                    const sample = await file.slice(0, 300000).text().catch(() => '');
+                                    const detected = detectExternalImportSource(file.name, sample);
+                                    applyDetectedExternalImportSource(detected);
+                                }
+                            }}
+                            hidden
+                        />
+                        <button type="button" className="memory-lib-button ghost" onClick={() => externalImportFileRef.current?.click()}>
+                            <FileText size={15} /> {externalImportFile ? externalImportFile.name : '选择文件'}
+                        </button>
+                        <button type="button" className="memory-lib-button" onClick={previewExternalImport} disabled={externalImportLoading || externalImportCommitting}>
+                            <Search size={15} /> {externalImportLoading ? '总结中' : '总结预览'}
+                        </button>
+                        {externalImportPreview && (
+                            <button type="button" className="memory-lib-button" onClick={commitExternalImport} disabled={externalImportCommitting || selectedExternalRoles.length === 0}>
+                                <UserPlus size={15} /> {externalImportCommitting ? '导入中' : '创建角色并写入'}
+                            </button>
+                        )}
+                    </div>
+                    {externalImportPreview && (
+                        <div className="memory-external-preview">
+                            <div className="memory-external-role-head">
+                                <strong>角色标签</strong>
+                                <span>勾选后会自动创建同名角色；已有同名角色会复用。提交后直接写入新版记忆库，不再进入旧库自动总结队列。</span>
+                            </div>
+                            <div className="memory-external-role-tags">
+                                {externalPreviewRoles.map(tag => (
+                                    <button
+                                        type="button"
+                                        key={tag.name}
+                                        className={selectedExternalRoleSet.has(tag.name) ? 'active' : ''}
+                                        onClick={() => toggleExternalRole(tag.name)}
+                                    >
+                                        {selectedExternalRoleSet.has(tag.name) && <CheckCircle2 size={13} />}
+                                        {tag.name}
+                                        <small>{Math.round(Number(tag.confidence || 0) * 100)}%</small>
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="memory-external-candidates">
+                                {externalPreviewCandidates.slice(0, 12).map(item => (
+                                    <div key={item.id}>
+                                        <b>{item.character_names?.join(' / ') || '未绑定'}</b>
+                                        <span>{item.summary}</span>
+                                        <small>{item.memory_focus} · {item.memory_tier} · 重要性 {item.importance}</small>
+                                    </div>
+                                ))}
+                            </div>
+                            {externalPreviewCandidates.length > 12 && <div className="memory-lib-more">还有 {formatNumber(externalPreviewCandidates.length - 12)} 条候选会一起导入。</div>}
+                        </div>
+                    )}
+                </div>
                 <div className="memory-lib-batch-row">
                     <div>
                         <strong>每轮读取 {settings.batch_size} 条{promptTaskMode === 'complete' ? '旧记忆卡片' : '正式新版记忆'}</strong>
@@ -2013,6 +2569,9 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                 </div>
                 <div className="memory-lib-batch-tools primary">
                     <select value={selectedCharacterId} onChange={e => setSelectedCharacterId(e.target.value)}>
+                        {migrationCharacters.length === 0 && (
+                            <option value="">没有可处理的旧库记忆</option>
+                        )}
                         {migrationCharacters.map(item => (
                             <option value={item.character_id} key={item.character_id}>
                                 {item.name} (旧库 {formatNumber(item.total)} / 新版 {formatNumber(item.formal_total ?? item.new_total ?? item.migrated_total ?? 0)})
@@ -2056,11 +2615,19 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                             第 {manualBatchIndex} 批会跳过前 {formatNumber((Math.max(1, Number(manualBatchIndex || 1)) - 1) * Number(settings.batch_size || 30))} 条；完整处理 pending 旧卡片，补充处理已有新版记忆。
                         </div>
                         <div className="memory-lib-batch-tools">
-                            <button className="memory-lib-button ghost" onClick={previewSelectedPrompt} disabled={batchLoading || temporalPromptLoading || !selectedCharacterId}>
-                                <Database size={15} /> {(batchLoading || temporalPromptLoading) ? '生成中' : '预览 Prompt'}
+                            <button className="memory-lib-button ghost" onClick={previewSelectedPrompt} disabled={batchLoading || temporalPromptLoading || !selectedCharacterId || autoTaskUnavailable}>
+                                <Database size={15} /> {(batchLoading || temporalPromptLoading) ? '生成中' : (autoTaskUnavailable ? '无可预览' : '预览 Prompt')}
                             </button>
-                            <button className="memory-lib-button" onClick={runSelectedPromptTask} disabled={runLoading || autoRunActive || !selectedCharacterId}>
-                                <Play size={15} /> {runLoading ? '工作中' : '开始工作'}
+                            <button
+                                className="memory-lib-button"
+                                onClick={() => (canPrepareExternalImport ? runExternalPrepareStep() : runSelectedPromptTask())}
+                                disabled={runLoading || autoRunActive || externalImportLoading || externalImportCommitting || (!canPrepareExternalImport && (!selectedCharacterId || autoTaskUnavailable))}
+                            >
+                                <Play size={15} /> {runLoading
+                                    ? '工作中'
+                                    : (autoTaskUnavailable
+                                        ? (canPrepareExternalImport ? externalPrepareLabel : '无可处理')
+                                        : '开始工作')}
                             </button>
                         </div>
                     </div>
@@ -2081,12 +2648,25 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                         </label>
                         <div className="memory-lib-mode-copy">
                             {promptTaskMode === 'complete'
-                                ? '自动完整会从 pending 第一批开始连续处理，每批结束后下一批会重新读取剩余 pending；留空则不限制批数。单批失败会自动重 roll 3 次，仍失败才终止并返回错误。'
-                                : '自动补充会连续扫描已有新版记忆，补来源场景和时间标签；留空则扫完整个新版库。单批失败会自动重 roll 3 次，仍失败才终止并返回错误。'}
+                                ? (canRunExternalImportDirect
+                                    ? `外部导入会直接按每批 ${formatNumber(settings.batch_size || 10)} 条正文循环调用小模型，给每条新记忆打角色标签并写入新版库；不会再入队二次扫描。`
+                                    : '自动完整会从 pending 第一批开始连续处理，每批结束后下一批会重新读取剩余 pending；留空则不限制批数。单批失败最多重试 3 次，正常成功只调用 1 次。')
+                                : '自动补充会连续扫描已有新版记忆，补来源场景和时间标签；留空则扫完整个新版库。单批失败最多重试 3 次，正常成功只调用 1 次。'}
+                            {autoTaskUnavailable && !canRunExternalImportDirect && (
+                                <span> 当前账号没有可处理的{promptTaskMode === 'complete' ? '旧库 pending / 外部导入原料' : '新版记忆'}；{canQueueExternalImport ? '可以先把当前外部导入预览提交到总结队列。' : '可以选择外部导出文件后直接一键导入总结。'}</span>
+                            )}
                         </div>
                         <div className="memory-lib-batch-tools">
-                            <button className="memory-lib-button" onClick={() => runAutoSelectedTask()} disabled={autoRunActive || runLoading || !selectedCharacterId}>
-                                <Play size={15} /> {autoRunActive ? '自动工作中' : '开始自动工作'}
+                            <button
+                                className="memory-lib-button"
+                                onClick={() => (canPrepareExternalImport ? runExternalPrepareStep() : runAutoSelectedTask())}
+                                disabled={autoRunActive || runLoading || externalImportLoading || externalImportCommitting || (!canPrepareExternalImport && (!selectedCharacterId || autoTaskUnavailable))}
+                            >
+                                <Play size={15} /> {autoRunActive
+                                    ? '自动工作中'
+                                    : (autoTaskUnavailable
+                                        ? (canPrepareExternalImport ? externalPrepareLabel : '无可自动工作')
+                                        : '开始自动工作')}
                             </button>
                         </div>
                     </div>
@@ -2095,7 +2675,9 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                     <div className={`memory-lib-live-progress ${autoProgress.running ? 'running' : ''}`}>
                         <div className="memory-lib-live-head">
                             <div>
-                                <strong>{autoProgress.task_mode === 'supplement' ? (autoProgress.running ? '自动补充运行中' : '自动补充状态') : (autoProgress.running ? '自动总结运行中' : '自动总结状态')}</strong>
+                                <strong>{autoProgress.task_mode === 'external_import'
+                                    ? (autoProgress.running ? '外部导入运行中' : '外部导入状态')
+                                    : (autoProgress.task_mode === 'supplement' ? (autoProgress.running ? '自动补充运行中' : '自动补充状态') : (autoProgress.running ? '自动总结运行中' : '自动总结状态'))}</strong>
                                 <p>{autoProgress.message || formatProgressPhase(autoProgress.phase)}</p>
                             </div>
                             <span>{formatProgressPhase(autoProgress.phase)}</span>
@@ -2107,11 +2689,11 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                         )}
                         <div className="memory-lib-live-grid">
                             <span>批次：{autoProgress.batch_number ? `第 ${autoProgress.batch_number} 批` : '等待中'}</span>
-                            <span>尝试：{autoProgress.attempt ? `${autoProgress.attempt}/${Number(autoProgress.max_rerolls || 3) + 1}` : '未开始'}</span>
+                            <span>尝试：{autoProgress.attempt ? `${autoProgress.attempt}/${Number(autoProgress.max_rerolls ?? 3) + 1}` : '未开始'}</span>
                             <span>已处理：{formatNumber(autoProgress.processed)}</span>
                             <span>已写回：{formatNumber(autoProgress.updated)}</span>
                             <span>待分类：{formatNumber(autoProgress.remaining_pending_after_batch ?? autoProgress.pending_before ?? autoProgress.stats?.pending)}</span>
-                            <span>错误：{formatNumber(autoProgress.applied_errors)}</span>
+                            <span>写库错误：{formatNumber(autoProgress.applied_errors)}</span>
                         </div>
                         {latestProgressSamples.length > 0 && (
                             <div className="memory-lib-live-samples">
@@ -2163,6 +2745,15 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                             {runResult.mode === 'auto' && <span>停止：{formatStoppedReason(runResult.stopped_reason)}</span>}
                             <span>模型：{runResult.model?.name || settings.model_name}{runResult.model?.finishReason ? ` / ${runResult.model.finishReason}` : ''}</span>
                         </div>
+                        {runErrorDetail?.summary && (
+                            <div className="memory-lib-run-error-detail">
+                                <strong>准确错误原因</strong>
+                                <p>{runErrorDetail.summary}</p>
+                                {runErrorDetail.raw_preview && (
+                                    <code>{clipRunErrorText(runErrorDetail.raw_preview, 700)}</code>
+                                )}
+                            </div>
+                        )}
                         {canContinueAutoRun && (
                             <div className="memory-lib-continue">
                                 <div>
@@ -2180,6 +2771,26 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                                     disabled={autoRunActive || runLoading}
                                 >
                                     <Play size={15} /> {autoRunActive ? '继续中' : '从断点继续'}
+                                </button>
+                            </div>
+                        )}
+                        {canRetryExternalImport && (
+                            <div className="memory-lib-continue">
+                                <div>
+                                    <strong>外部导入停在断点</strong>
+                                    <p>已处理 {formatNumber(runResult.continue_from?.offset ?? runResult.processed ?? 0)} 条；继续会从失败批次重新调用小模型，不重跑已经写入的新记忆。</p>
+                                </div>
+                                <button
+                                    type="button"
+                                    className="memory-lib-button"
+                                    onClick={() => runExternalImportAuto({
+                                        continuation: true,
+                                        importId: runResult.continue_from?.import_id || runResult.import_id,
+                                        continueOffset: runResult.continue_from?.offset ?? runResult.processed ?? 0
+                                    })}
+                                    disabled={autoRunActive || externalImportLoading}
+                                >
+                                    <Play size={15} /> {autoRunActive ? '重试中' : '从断点重试'}
                                 </button>
                             </div>
                         )}

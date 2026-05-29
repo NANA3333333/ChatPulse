@@ -612,7 +612,7 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
             <div className="memory-content" style={{ padding: '0' }}>
                 <div style={{ backgroundColor: '#fff', padding: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center', borderBottom: '1px solid #eee' }}>
                     <img
-                        src={resolveAvatarUrl(contact.avatar, apiUrl) || `https://api.dicebear.com/7.x/shapes/svg?seed=${contact.id}`}
+                        src={resolveAvatarUrl(contact.avatar, apiUrl, contact.name || contact.id || 'User')}
                         alt={contact.name}
                         style={{ width: '60px', height: '60px', borderRadius: '50%', marginBottom: '10px', objectFit: 'cover' }}
                     />
@@ -943,7 +943,7 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
                         relationships.map(rel => (
                             <div key={rel.targetId} style={{ marginBottom: '12px', padding: '10px', background: '#f8f9fa', borderRadius: '8px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                                    <img src={resolveAvatarUrl(rel.targetAvatar, apiUrl) || `https://api.dicebear.com/7.x/shapes/svg?seed=${rel.targetName}`} alt="" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }} />
+                                    <img src={resolveAvatarUrl(rel.targetAvatar, apiUrl, rel.targetName || rel.targetId || 'User')} alt="" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }} />
                                     <div style={{ flex: 1 }}>
                                         <span style={{ fontWeight: '500', fontSize: '13px' }}>{rel.targetName}</span>
                                         <span style={{ fontSize: '11px', color: '#999', marginLeft: '6px' }}>❤️ {rel.affinity ?? '?'}</span>

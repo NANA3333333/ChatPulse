@@ -1500,6 +1500,8 @@ body {
 
 .memory-timeline-axis {
   position: relative;
+  box-sizing: border-box;
+  flex: 0 0 auto;
   min-width: 100%;
   height: var(--timeline-axis-height, 360px);
   padding: 0 32px;
@@ -2266,6 +2268,7 @@ body {
 }
 
 .memory-lib-model-grid input,
+.memory-lib-model-grid select,
 .memory-lib-model-select,
 .memory-lib-batch-tools select {
   width: 100%;
@@ -2286,6 +2289,135 @@ body {
 .memory-lib-model-select {
   margin-top: 10px;
   max-width: 460px;
+}
+
+.memory-external-import {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid #dfe7d8;
+  border-radius: 8px;
+  background: #fbfdf8;
+}
+
+.memory-lib-model-grid.external {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.memory-external-import-hint {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px dashed #cfdcc8;
+  border-radius: 7px;
+  background: #f6fbf1;
+  color: #607086;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.memory-external-textarea {
+  width: 100%;
+  min-height: 108px;
+  margin-top: 12px;
+  border: 1px solid #d8e1ee;
+  border-radius: 7px;
+  padding: 10px 12px;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #2f3542;
+  background: #fff;
+}
+
+.memory-lib-batch-tools.external {
+  border-top: 0;
+  padding-top: 0;
+  flex-wrap: wrap;
+}
+
+.memory-external-preview {
+  margin-top: 12px;
+  border-top: 1px solid #e5ecd9;
+  padding-top: 12px;
+}
+
+.memory-external-role-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #657389;
+  font-size: 12px;
+}
+
+.memory-external-role-head strong {
+  color: #2f3542;
+  font-size: 13px;
+}
+
+.memory-external-role-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.memory-external-role-tags button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #d8e1ee;
+  border-radius: 999px;
+  background: #fff;
+  color: #445063;
+  padding: 7px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.memory-external-role-tags button.active {
+  border-color: #8dbd7a;
+  background: #eef8e8;
+  color: #2f6f39;
+}
+
+.memory-external-role-tags small {
+  color: #8a96a8;
+}
+
+.memory-external-candidates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.memory-external-candidates div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid #edf1f5;
+  border-radius: 7px;
+  background: #fff;
+  padding: 10px;
+}
+
+.memory-external-candidates b {
+  color: #2f6f39;
+  font-size: 12px;
+}
+
+.memory-external-candidates span {
+  color: #2f3542;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.memory-external-candidates small {
+  color: #8a96a8;
+  font-size: 11px;
 }
 
 .memory-lib-batch-row,
@@ -2502,6 +2634,39 @@ body {
   padding: 10px 12px;
   color: #5d6f66;
   font-size: 12px;
+}
+
+.memory-lib-run-error-detail {
+  margin: 0 12px 12px;
+  padding: 12px;
+  border: 1px solid #f3c8d0;
+  border-radius: 8px;
+  background: #fff6f7;
+  color: #9f3850;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.memory-lib-run-error-detail strong {
+  display: block;
+  margin-bottom: 5px;
+  color: #8d2c43;
+}
+
+.memory-lib-run-error-detail p {
+  margin: 0;
+}
+
+.memory-lib-run-error-detail code {
+  display: block;
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #7a3342;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: Consolas, "SFMono-Regular", Menlo, monospace;
 }
 
 .memory-lib-continue {

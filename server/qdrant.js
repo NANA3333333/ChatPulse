@@ -1,6 +1,7 @@
 const DEFAULT_QDRANT_URL = process.env.QDRANT_URL || 'http://127.0.0.1:6333';
 const DEFAULT_COLLECTION_PREFIX = process.env.QDRANT_COLLECTION_PREFIX || 'chatpulse_memories';
 const DEFAULT_VECTOR_SIZE = Number(process.env.LOCAL_EMBEDDING_DIM || 1024);
+const crypto = require('crypto');
 
 function sanitizeCollectionPart(value) {
     return String(value || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -11,7 +12,14 @@ function normalizePointId(value) {
     if (Number.isInteger(numeric) && numeric >= 0) {
         return numeric;
     }
-    return String(value || '');
+    const raw = String(value || '').trim();
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(raw)) {
+        return raw;
+    }
+    const hex = crypto.createHash('sha256').update(raw).digest('hex');
+    const version = `5${hex.slice(13, 16)}`;
+    const variantByte = ((parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, '0');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${version}-${variantByte}${hex.slice(18, 20)}-${hex.slice(20, 32)}`;
 }
 
 function getCollectionName(userId) {
@@ -20,6 +28,10 @@ function getCollectionName(userId) {
 
 function hasFetchSupport() {
     return typeof fetch === 'function';
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function getQdrantConfig() {
@@ -45,23 +57,39 @@ async function qdrantRequest(path, options = {}) {
     if (config.apiKey) {
         headers['api-key'] = config.apiKey;
     }
-    const response = await fetch(`${config.url}${path}`, {
-        method: options.method || 'GET',
-        headers,
-        body: options.body ? JSON.stringify(options.body) : undefined
-    });
-    const text = await response.text();
-    let json = null;
-    try {
-        json = text ? JSON.parse(text) : null;
-    } catch (e) {
-        json = null;
+    const maxAttempts = Math.max(1, Number(options.maxAttempts || 3) || 3);
+    let lastError = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            const response = await fetch(`${config.url}${path}`, {
+                method: options.method || 'GET',
+                headers,
+                body: options.body ? JSON.stringify(options.body) : undefined
+            });
+            const text = await response.text();
+            let json = null;
+            try {
+                json = text ? JSON.parse(text) : null;
+            } catch (e) {
+                json = null;
+            }
+            if (!response.ok) {
+                const message = json?.status?.error || json?.message || text || `HTTP ${response.status}`;
+                const error = new Error(message);
+                error.status = response.status;
+                if (response.status < 500 || attempt >= maxAttempts) throw error;
+                lastError = error;
+            } else {
+                return json;
+            }
+        } catch (e) {
+            lastError = e;
+            if (e?.status && e.status < 500) throw e;
+            if (attempt >= maxAttempts) throw e;
+        }
+        await sleep(150 * attempt);
     }
-    if (!response.ok) {
-        const message = json?.status?.error || json?.message || text || `HTTP ${response.status}`;
-        throw new Error(message);
-    }
-    return json;
+    throw lastError || new Error('Qdrant request failed');
 }
 
 const ensuredCollections = new Set();

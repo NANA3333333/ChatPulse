@@ -11,7 +11,8 @@ function registerCoreCityRoutes(app, deps) {
         getWsClients,
         getEngine,
         isCollapsedCityLog,
-        regenerateActionNarrations
+        regenerateActionNarrations,
+        handleQuestLifecycleAfterAction
     } = deps;
 
     app.get('/api/city/logs', authMiddleware, (req, res) => {
@@ -64,12 +65,29 @@ function registerCoreCityRoutes(app, deps) {
             }
 
             rawDb.prepare('UPDATE city_logs SET content = ? WHERE id = ?').run(nextContent, logId);
+            let questReview = null;
+            if (typeof handleQuestLifecycleAfterAction === 'function') {
+                try {
+                    const questOutcome = await handleQuestLifecycleAfterAction(req.db, char, district, {
+                        ...narrations,
+                        log: nextContent
+                    }, {
+                        actionLogId: logId,
+                        actionContent: nextContent
+                    });
+                    questReview = questOutcome?.questReview || req.db.city.getQuestProgressReviewByLogId?.(logId) || null;
+                } catch (scoreErr) {
+                    console.warn(`[City] 重 roll 后任务评分失败 ${char?.name || ''}: ${scoreErr.message}`);
+                }
+            }
             const updated = rawDb.prepare(`
                 SELECT l.*, c.name as char_name, c.avatar as char_avatar
                 FROM city_logs l
                 LEFT JOIN characters c ON l.character_id = c.id
                 WHERE l.id = ?
             `).get(logId);
+            if (!questReview) questReview = req.db.city.getQuestProgressReviewByLogId?.(logId) || null;
+            if (questReview) updated.quest_review = questReview;
 
             const wsClients = getWsClients?.(req.user.id) || [];
             wsClients.forEach((client) => {

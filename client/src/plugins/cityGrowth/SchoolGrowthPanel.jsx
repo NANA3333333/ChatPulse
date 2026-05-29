@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Edit3, Plus, ToggleLeft, ToggleRight, X } from 'lucide-react';
-import { resolveAvatarUrl } from '../../utils/avatar';
+import { defaultAvatarUrl, resolveAvatarUrl } from '../../utils/avatar';
 
-const FALLBACK_AVATAR = 'https://api.dicebear.com/7.x/shapes/svg?seed=User';
+const FALLBACK_AVATAR = defaultAvatarUrl('User');
 const avatarSrc = (url, apiUrl) => resolveAvatarUrl(url, apiUrl) || FALLBACK_AVATAR;
 
 const sectionStyle = {

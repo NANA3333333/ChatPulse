@@ -2548,7 +2548,7 @@ function getCommercialV2ItemRenderZIndex(layerIndex, item, asset) {
   if (asset && isCommercialV2GroundLayerItem(item, asset)) {
     return commercialV2GroundLayerZIndex + layerIndex;
   }
-  return getCommercialV2DepthZIndex(getCommercialV2SortY(item, asset), layerIndex);
+  return getCommercialV2ItemZIndex(layerIndex);
 }
 
 function getCommercialV2PlayerRenderZIndex(player, tie = 0) {
@@ -2840,7 +2840,7 @@ function CommercialStreetEditor() {
       layerIndex,
       zIndex: getCommercialV2ItemRenderZIndex(layerIndex, item, asset),
       isGround,
-      playerRule: isGround ? '恒在人物下方 / 忽略碰撞' : '按脚点深度 / 遮挡判断'
+      playerRule: isGround ? '恒在人物下方 / 忽略碰撞' : '按图层顺序 / 遮挡判断'
     };
   }), [assetById, items]);
   const selectedLayerRow = selectedId

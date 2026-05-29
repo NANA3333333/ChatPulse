@@ -2,7 +2,7 @@ const express = require('express');
 const { getSchedulerDb } = require('./db');
 
 function init(app, context) {
-    const { authMiddleware, getUserDb, getEngine, getMemory } = context;
+    const { authMiddleware, authDb, getUserDb, getEngine, getMemory } = context;
     const router = express.Router();
 
     // GET /api/scheduler/:charId
@@ -69,19 +69,10 @@ function init(app, context) {
             const now = new Date();
             const currentHHMM = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
 
-            // Iterate over all connected users (for now, simplistic approach)
-            // Realistically, we should iterate over all users in the system, but since
-            // memory and engine are user-specific and tied to WebSocket sessions, we
-            // process it based on active user DBs.
-            const fs = require('fs');
-            const path = require('path');
-            const dataDir = path.join(__dirname, '..', '..', 'data');
-            if (!fs.existsSync(dataDir)) return;
-
-            const files = fs.readdirSync(dataDir);
-            const userIds = files
-                .filter(f => f.startsWith('chatpulse_user_') && f.endsWith('.db'))
-                .map(f => f.replace('chatpulse_user_', '').replace('.db', ''));
+            const users = typeof authDb?.getAllUsers === 'function'
+                ? authDb.getAllUsers().filter(user => String(user.status || 'active') === 'active')
+                : [];
+            const userIds = users.map(user => user.id).filter(Boolean);
 
             for (const userId of userIds) {
                 const schedDb = getSchedulerDb(userId);

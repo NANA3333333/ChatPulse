@@ -162,6 +162,33 @@ function App() {
     }, delay);
   }, [fetchContacts]);
 
+  const removeDeletedContact = useCallback((deletedId) => {
+    if (!deletedId) return;
+    const targetId = String(deletedId);
+    setContacts(prev => prev.filter(contact => String(contact.id) !== targetId));
+    setGroups(prev => prev.map(group => ({
+      ...group,
+      members: Array.isArray(group.members)
+        ? group.members.filter(member => {
+          const memberId = typeof member === 'object' ? member.member_id : member;
+          return String(memberId) !== targetId;
+        })
+        : group.members
+    })));
+    setEngineState(prev => {
+      if (!prev || !(targetId in prev)) return prev;
+      const next = { ...prev };
+      delete next[targetId];
+      return next;
+    });
+    if (String(activeContactRef.current || '') === targetId) {
+      activeContactRef.current = null;
+      setActiveContactId(null);
+      setActiveContactSnapshot(null);
+      setActiveDrawer(null);
+    }
+  }, []);
+
   // 1. Fetch Contacts (Characters) and Profile on mount
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -303,6 +330,12 @@ function App() {
           } else if (msg.type === 'refresh_contacts') {
             window.dispatchEvent(new Event('refresh_contacts'));
             scheduleContactsRefresh(100);
+          } else if (msg.type === 'character_deleted') {
+            removeDeletedContact(msg.characterId || msg.data?.characterId);
+            window.dispatchEvent(new CustomEvent('character_deleted', {
+              detail: { characterId: msg.characterId || msg.data?.characterId }
+            }));
+            scheduleContactsRefresh(100);
           } else if (msg.type === 'announcement') {
             setGlobalAnnouncement(msg.content);
           } else if (msg.type === 'force_reload') {
@@ -358,7 +391,7 @@ function App() {
       }
       if (ws) ws.close();
     };
-  }, [token, fetchContacts, scheduleContactsRefresh]);
+  }, [token, fetchContacts, scheduleContactsRefresh, removeDeletedContact]);
 
   // Update contact last message preview on new incoming message
   useEffect(() => {
@@ -474,7 +507,7 @@ function App() {
       {/* 1. Very Left Sidebar (Navigation) */}
       <nav className="sidebar-nav">
         <div className="my-avatar" onClick={() => setActiveTab('settings')} style={{ cursor: 'pointer' }}>
-          <img src={resolveAvatarUrl(effectiveUser?.avatar, API_URL) || "https://api.dicebear.com/7.x/shapes/svg?seed=User"} alt="Me" />
+          <img src={resolveAvatarUrl(effectiveUser?.avatar, API_URL, effectiveUser?.name || 'User')} alt="Me" />
         </div>
         <div className="nav-icons">
           <button className={`nav-icon ${activeTab === 'chats' ? 'active' : ''}`} onClick={() => setActiveTab('chats')} title={lang === 'en' ? 'Chats — View conversations' : '聊天 — 查看会话列表'}>
@@ -565,9 +598,10 @@ function App() {
                   <div className="contact-avatar" style={{ width: 'auto', minWidth: '42px', height: '42px', display: 'flex', alignItems: 'center' }}>
                     {g.members?.slice(0, 3).map((memberObj, idx) => {
                       const memberId = typeof memberObj === 'object' ? memberObj.member_id : memberObj;
+                      const member = contacts.find(c => String(c.id) === String(memberId));
                       const memberAvatar = memberId === 'user'
-                        ? (resolveAvatarUrl(userProfile?.avatar, API_URL) || `https://api.dicebear.com/7.x/shapes/svg?seed=User`)
-                        : (resolveAvatarUrl(contacts.find(c => String(c.id) === String(memberId))?.avatar, API_URL) || `https://api.dicebear.com/7.x/shapes/svg?seed=${memberId}`);
+                        ? resolveAvatarUrl(userProfile?.avatar, API_URL, userProfile?.name || 'User')
+                        : resolveAvatarUrl(member?.avatar, API_URL, member?.name || memberId || 'User');
                       return <img key={idx} src={memberAvatar} alt="" style={{ width: g.members.length === 1 ? '42px' : '32px', height: g.members.length === 1 ? '42px' : '32px', borderRadius: '50%', marginLeft: idx > 0 ? '-12px' : '0', border: g.members.length === 1 ? 'none' : '2px solid #fff', zIndex: 10 - idx, objectFit: 'cover', backgroundColor: '#fff' }} />;
                     })}
                     {g.members?.length > 3 && (
@@ -601,7 +635,7 @@ function App() {
               {contacts.map(c => (
                 <div key={c.id} className="contact-item" onClick={() => { setActiveContactId(c.id); setActiveContactSnapshot(c); setActiveTab('chats'); }}>
                   <div className="contact-avatar">
-                    <img src={resolveAvatarUrl(c.avatar, API_URL)} alt={c.name} style={{ objectFit: 'cover' }} />
+                    <img src={resolveAvatarUrl(c.avatar, API_URL, c.name || c.id || 'User')} alt={c.name} style={{ objectFit: 'cover' }} />
                   </div>
                   <div className="contact-info" style={{ display: 'flex', alignItems: 'center' }}>
                     <span className="contact-name" style={{ fontSize: '16px' }}>{c.name}</span>
@@ -624,9 +658,10 @@ function App() {
                     <div className="contact-avatar" style={{ width: 'auto', minWidth: '42px', height: '42px', display: 'flex', alignItems: 'center' }}>
                       {g.members?.slice(0, 3).map((memberObj, idx) => {
                         const memberId = typeof memberObj === 'object' ? memberObj.member_id : memberObj;
+                        const member = contacts.find(c => String(c.id) === String(memberId));
                         const memberAvatar = memberId === 'user'
-                          ? (resolveAvatarUrl(userProfile?.avatar, API_URL) || `https://api.dicebear.com/7.x/shapes/svg?seed=User`)
-                          : (resolveAvatarUrl(contacts.find(c => String(c.id) === String(memberId))?.avatar, API_URL) || `https://api.dicebear.com/7.x/shapes/svg?seed=${memberId}`);
+                          ? resolveAvatarUrl(userProfile?.avatar, API_URL, userProfile?.name || 'User')
+                          : resolveAvatarUrl(member?.avatar, API_URL, member?.name || memberId || 'User');
                         return <img key={idx} src={memberAvatar} alt="" style={{ width: g.members.length === 1 ? '42px' : '32px', height: g.members.length === 1 ? '42px' : '32px', borderRadius: '50%', marginLeft: idx > 0 ? '-12px' : '0', border: g.members.length === 1 ? 'none' : '2px solid #fff', zIndex: 10 - idx, objectFit: 'cover', backgroundColor: '#fff' }} />;
                       })}
                       {g.members?.length > 3 && (
@@ -689,8 +724,11 @@ function App() {
               <SettingsPanel
                 apiUrl={API_URL}
                 contacts={contacts}
-                onCharactersUpdate={() => {
-                  fetchContacts(); // Refetch if deleted
+                onCharactersUpdate={(event) => {
+                  if (event?.type === 'deleted') {
+                    removeDeletedContact(event.id);
+                  }
+                  fetchContacts(); // Refetch after create/update/delete
                 }}
                 onProfileUpdate={setUserProfile}
                 onBack={() => setActiveTab('chats')}

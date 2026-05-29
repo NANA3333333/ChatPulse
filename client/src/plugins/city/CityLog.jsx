@@ -21,10 +21,10 @@ import {
     RotateCcw,
 } from 'lucide-react';
 import CityManager from './CityManager';
-import { resolveAvatarUrl } from '../../utils/avatar';
+import { defaultAvatarUrl, resolveAvatarUrl } from '../../utils/avatar';
 import { deriveEmotion, derivePhysicalState } from '../../utils/emotion';
 
-const FALLBACK_AVATAR = 'https://api.dicebear.com/7.x/shapes/svg?seed=User';
+const FALLBACK_AVATAR = defaultAvatarUrl('User');
 const avatarSrc = (url, apiUrl) => resolveAvatarUrl(url, apiUrl) || FALLBACK_AVATAR;
 
 const tabStyle = (active) => ({

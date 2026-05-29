@@ -1,10 +1,10 @@
 ﻿import React, { useState, useEffect, useCallback } from 'react';
 import { Plus, Trash2, ToggleLeft, ToggleRight, Save, DollarSign, Heart, Edit3, X, Power, Package, ShoppingBag, AlertTriangle } from 'lucide-react';
-import { resolveAvatarUrl } from '../../utils/avatar';
+import { defaultAvatarUrl, resolveAvatarUrl } from '../../utils/avatar';
 import { deriveEmotion, derivePhysicalState } from '../../utils/emotion';
 import SchoolGrowthPanel from '../cityGrowth/SchoolGrowthPanel';
 
-const FALLBACK_AVATAR = 'https://api.dicebear.com/7.x/shapes/svg?seed=User';
+const FALLBACK_AVATAR = defaultAvatarUrl('User');
 const avatarSrc = (url, apiUrl) => resolveAvatarUrl(url, apiUrl) || FALLBACK_AVATAR;
 
 const sectionStyle = {

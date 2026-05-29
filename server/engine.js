@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const engineCache = new Map();
 const PRIVATE_AUTONOMY_DISABLED = process.env.CP_PRIVATE_AUTONOMY === '0';
 const GROUP_AUTONOMY_DISABLED = process.env.CP_GROUP_AUTONOMY === '0';
+const SMALL_MODEL_PLANNER_MAX_TOKENS = 8000;
 let loggedPrivateAutonomyDisabled = false;
 let loggedGroupAutonomyDisabled = false;
 
@@ -342,6 +343,70 @@ function parseRagTopics(text) {
     }
 }
 
+function clampUnit(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return 0;
+    return Math.max(0, Math.min(1, parsed));
+}
+
+function inferRecentTemporalIntentFromText(text = '') {
+    const raw = String(text || '').trim();
+    if (!raw) return { mode: 'none', confidence: 0, reason: '' };
+    const normalized = raw.toLowerCase();
+    const signals = [
+        {
+            score: 0.82,
+            pattern: /(刚刚|刚才|刚才说|刚提到|刚聊|最近|近来|这两天|这几天|前几天|今天|昨天|刚发生|刚收到|刚被)/i,
+            reason: 'explicit_recent_time_expression'
+        },
+        {
+            score: 0.74,
+            pattern: /(新的那个|新那个|新的|这次|这回|另一个|另外一个|不是上次|不是之前|不是以前|不是三月|不是3月)/i,
+            reason: 'new_or_not_previous_reference'
+        },
+        {
+            score: 0.58,
+            pattern: /(刚提|前面说|上面说|刚才聊|刚刚聊|刚说过|主动找我|主动联系|主动接触|主动挖掘|看了.*账号|小红书.*找)/i,
+            reason: 'contextual_recent_reference'
+        }
+    ];
+    let best = { mode: 'none', confidence: 0, reason: '' };
+    for (const signal of signals) {
+        if (signal.pattern.test(normalized) && signal.score > best.confidence) {
+            best = { mode: 'recent', confidence: signal.score, reason: signal.reason };
+        }
+    }
+    return best;
+}
+
+function normalizeRagTemporalIntent(rawIntent = null, fallbackText = '') {
+    const fallback = inferRecentTemporalIntentFromText(fallbackText);
+    let normalized = { mode: 'none', confidence: 0, reason: '' };
+    if (rawIntent && typeof rawIntent === 'object') {
+        const rawMode = String(rawIntent.mode || rawIntent.intent || rawIntent.recency || rawIntent.temporal_mode || '').trim().toLowerCase();
+        const mode = ['recent', 'latest', 'new', 'current'].includes(rawMode)
+            ? 'recent'
+            : (['none', 'neutral', 'unspecified'].includes(rawMode) ? 'none' : '');
+        if (mode === 'recent') {
+            const confidence = clampUnit(rawIntent.confidence ?? rawIntent.score ?? rawIntent.recent_intent_score ?? 0.65);
+            normalized = {
+                mode: 'recent',
+                confidence: confidence > 0 ? confidence : 0.65,
+                reason: String(rawIntent.reason || rawIntent.rationale || '').trim().slice(0, 240)
+            };
+        }
+    } else if (typeof rawIntent === 'string') {
+        const rawMode = rawIntent.trim().toLowerCase();
+        if (['recent', 'latest', 'new', 'current'].includes(rawMode)) {
+            normalized = { mode: 'recent', confidence: 0.65, reason: 'planner_string_recent_intent' };
+        }
+    }
+    if (fallback.mode === 'recent' && fallback.confidence > normalized.confidence) {
+        return fallback;
+    }
+    return normalized;
+}
+
 function parseRagDecision(text) {
     const raw = extractBalancedJsonPayload(text, '{', '}');
     if (!raw) {
@@ -356,6 +421,7 @@ function parseRagDecision(text) {
             const route = String(parsed?.route || '').trim().toLowerCase();
             const temporalHint = String(parsed?.temporal_hint || parsed?.temporalHint || '').trim();
             const retrievalLabel = String(parsed?.retrieval_label || parsed?.retrievalLabel || '').trim();
+            const temporalIntent = normalizeRagTemporalIntent(parsed?.temporal_intent || parsed?.temporalIntent || parsed?.recent_intent || parsed?.recentIntent);
             const ragNeeded = parsed?.rag_needed === true || parsed?.should_search === true || parsed?.shouldSearch === true;
             const plans = Array.isArray(parsed?.plans)
                 ? parsed.plans.map((plan, index) => {
@@ -400,6 +466,7 @@ function parseRagDecision(text) {
                         rag_needed: false,
                         route: 'temporal_browse',
                         temporal_hint: temporalHint,
+                        temporal_intent: temporalIntent,
                         retrieval_label: '',
                         plans: []
                     }
@@ -423,6 +490,7 @@ function parseRagDecision(text) {
                         rag_needed: true,
                         route: 'semantic_rag',
                         temporal_hint: '',
+                        temporal_intent: temporalIntent,
                         retrieval_label: fallbackLabel,
                         plans
                     }
@@ -439,6 +507,7 @@ function parseRagDecision(text) {
                     rag_needed: false,
                     route: 'none',
                     temporal_hint: '',
+                    temporal_intent: temporalIntent,
                     retrieval_label: '',
                     plans: []
                 }
@@ -518,7 +587,7 @@ function isValidRagTopicsPayload(text, meta = null) {
 function isValidRagDecisionPayload(text, meta = null) {
     if (String(meta?.finishReason || '').trim() === 'length') return false;
     const parsed = parseRagDecision(text);
-    return !parsed.malformed;
+    return !parsed.malformed && (parsed.route === 'temporal_browse' || parsed.shouldSearch === true);
 }
 
 function isValidTemporalBrowseSummaryPayload(text, meta = null) {
@@ -750,6 +819,13 @@ function parseStructuredRagQuery(text, fallbackKeyword = '', fallbackTopics = []
             ...(Number.isFinite(absoluteStart) && absoluteStart > 0 ? { absolute_start: absoluteStart } : {}),
             ...(Number.isFinite(absoluteEnd) && absoluteEnd > 0 ? { absolute_end: absoluteEnd } : {})
         };
+        const temporalIntent = normalizeRagTemporalIntent(
+            parsed?.temporal_intent || parsed?.temporalIntent || null,
+            [
+                fallbackKeyword,
+                ...(Array.isArray(fallbackTopics) ? fallbackTopics : [])
+            ].filter(Boolean).join('\n')
+        );
         const limit = Math.max(1, Math.min(8, Number(parsed?.limit || 3) || 3));
         const normalized = {
             queries: parsedQueries,
@@ -758,6 +834,7 @@ function parseStructuredRagQuery(text, fallbackKeyword = '', fallbackTopics = []
                 ...(memoryTier.length > 0 ? { memory_tier: memoryTier } : {})
             },
             ...(Object.keys(temporalHint).length > 0 ? { temporal_hint: temporalHint } : {}),
+            ...(temporalIntent.mode === 'recent' && temporalIntent.confidence > 0 ? { temporal_intent: temporalIntent } : {}),
             limit
         };
         if (normalized.queries.length === 0) {
@@ -807,12 +884,28 @@ function deriveRagRewriteConstraints({ plannerTopics = [], retrievalLabel = '', 
     if (retrievalLabel && requiredQueries.size < 8) {
         requiredQueries.add(String(retrievalLabel).trim());
     }
+    const temporalIntent = normalizeRagTemporalIntent(
+        decisionPlan?.temporal_intent || decisionPlan?.temporalIntent || null,
+        [
+            latestUserMessage,
+            retrievalLabel,
+            ...topicList
+        ].filter(Boolean).join('\n')
+    );
+    if (
+        temporalIntent.mode === 'recent'
+        && requiredFocuses.has('user_current_arc')
+        && !requiredFocuses.has('relationship')
+    ) {
+        requiredFocuses.add('user_profile');
+    }
 
     return {
         requiredFocuses: Array.from(requiredFocuses),
         requiredQueries: Array.from(requiredQueries).filter(Boolean).slice(0, 8),
         requiredTiers: Array.from(requiredTiers),
-        preferredSlots: Array.from(preferredSlots)
+        preferredSlots: Array.from(preferredSlots),
+        temporalIntent
     };
 }
 
@@ -832,6 +925,14 @@ function enforceStructuredRagQueryConstraints(request, constraints = {}) {
         ...(Array.isArray(normalizedRequest?.filters?.memory_tier) ? normalizedRequest.filters.memory_tier : []).map(v => String(v || '').trim()).filter(Boolean),
         ...(Array.isArray(constraints.requiredTiers) ? constraints.requiredTiers : []).map(v => String(v || '').trim()).filter(Boolean)
     ])).slice(0, 3);
+    const requestTemporalIntent = normalizeRagTemporalIntent(
+        normalizedRequest.temporal_intent || normalizedRequest.temporalIntent || null,
+        Array.isArray(constraints.requiredQueries) ? constraints.requiredQueries.join('\n') : ''
+    );
+    const constraintTemporalIntent = constraints?.temporalIntent || { mode: 'none', confidence: 0, reason: '' };
+    const temporalIntent = requestTemporalIntent.confidence >= Number(constraintTemporalIntent.confidence || 0)
+        ? requestTemporalIntent
+        : constraintTemporalIntent;
 
     return {
         queries: mergedQueries,
@@ -839,6 +940,7 @@ function enforceStructuredRagQueryConstraints(request, constraints = {}) {
             ...(mergedFocuses.length > 0 ? { memory_focus: mergedFocuses } : {}),
             ...(mergedTiers.length > 0 ? { memory_tier: mergedTiers } : {})
         },
+        ...(temporalIntent?.mode === 'recent' && temporalIntent.confidence > 0 ? { temporal_intent: temporalIntent } : {}),
         limit: Math.max(1, Math.min(20, Number(normalizedRequest.limit || 5) || 5))
     };
 }
@@ -863,6 +965,7 @@ function deriveRagRetrievalSlots({ retrievalRequest, plannerTopics = [], retriev
             queries: slot.queries.slice(0, 6),
             filters: slot.filters || {},
             temporal_hint: slot.temporal_hint || retrievalRequest?.temporal_hint || {},
+            temporal_intent: slot.temporal_intent || retrievalRequest?.temporal_intent || {},
             limit: Math.max(6, Math.min(12, Number(slot.limit || 6) || 6))
         });
     };
@@ -874,13 +977,17 @@ function deriveRagRetrievalSlots({ retrievalRequest, plannerTopics = [], retriev
                 : [];
             addSlot({
                 name: String(plan?.slot || 'general').trim().toLowerCase() || 'general',
-                queries: buildSlotQueries(planQueries, baseQueries.length > 0 ? baseQueries : [retrievalLabel || latestUserMessage || '用户近况']),
+                queries: buildSlotQueries(
+                    baseQueries.length > 0 ? baseQueries : planQueries,
+                    baseQueries.length > 0 ? planQueries : [retrievalLabel || latestUserMessage || '用户近况']
+                ),
                 filters: {
                     ...(Array.isArray(plan?.memory_focus) && plan.memory_focus.length > 0 ? { memory_focus: plan.memory_focus } : {}),
                     ...(Array.isArray(plan?.memory_tier) && plan.memory_tier.length > 0 ? { memory_tier: plan.memory_tier } : {}),
                     ...(retrievalRequest?.filters || {})
                 },
                 temporal_hint: retrievalRequest?.temporal_hint || {},
+                temporal_intent: retrievalRequest?.temporal_intent || {},
                 limit: Math.max(6, Math.min(12, Number(plan?.limit || retrievalRequest?.limit || 6) || 6))
             });
         });
@@ -894,6 +1001,7 @@ function deriveRagRetrievalSlots({ retrievalRequest, plannerTopics = [], retriev
         queries: buildSlotQueries(baseQueries, [retrievalLabel || latestUserMessage || '用户近况']),
         filters: retrievalRequest?.filters || {},
         temporal_hint: retrievalRequest?.temporal_hint || {},
+        temporal_intent: retrievalRequest?.temporal_intent || {},
         limit: Math.max(8, Math.min(12, Number(retrievalRequest?.limit || 8) || 8))
     });
 
@@ -908,6 +1016,7 @@ async function executeMultiSlotMemorySearch(memory, characterId, retrievalReques
             queries: Array.isArray(retrievalRequest?.queries) ? retrievalRequest.queries : [],
             filters: retrievalRequest?.filters || {},
             temporal_hint: retrievalRequest?.temporal_hint || {},
+            temporal_intent: retrievalRequest?.temporal_intent || {},
             limit: Math.max(8, Math.min(12, Number(retrievalRequest?.limit || 8) || 8))
         }];
 
@@ -921,6 +1030,7 @@ async function executeMultiSlotMemorySearch(memory, characterId, retrievalReques
                 queries: Array.isArray(slot.queries) ? slot.queries : [],
                 filters: slot.filters || {},
                 temporal_hint: slot.temporal_hint || {},
+                temporal_intent: slot.temporal_intent || {},
                 limit: slot.limit || 4
             });
         }
@@ -928,6 +1038,7 @@ async function executeMultiSlotMemorySearch(memory, characterId, retrievalReques
             queries: Array.isArray(slot.queries) ? slot.queries : [],
             filters: slot.filters || {},
             temporal_hint: slot.temporal_hint || {},
+            temporal_intent: slot.temporal_intent || {},
             limit: slot.limit || 4
         };
         const memories = await memory.searchMemories(
@@ -1002,7 +1113,18 @@ async function executeMultiSlotMemorySearch(memory, characterId, retrievalReques
         await onProgress({
             phase: 'complete',
             slotCount: slots.length,
-            finalCount: finalMemories.length
+            finalCount: finalMemories.length,
+            results: finalMemories.map(mem => ({
+                id: mem.id,
+                score: mem._search_score || '',
+                matched_query: mem._matched_query || '',
+                matched_slots: Array.isArray(mem._matched_slots) ? mem._matched_slots : [],
+                memory_focus: mem.memory_focus || '',
+                memory_tier: mem.memory_tier || '',
+                retention_action: mem.retention_action || '',
+                source_started_at: mem.source_started_at || 0,
+                source_ended_at: mem.source_ended_at || 0
+            }))
         });
     }
     return finalMemories;
@@ -1680,7 +1802,7 @@ function getEngine(userId) {
                 key: plannerConfig.key,
                 model: plannerConfig.model,
                 messages,
-                maxTokens: 1200,
+                maxTokens: SMALL_MODEL_PLANNER_MAX_TOKENS,
                 temperature: 0,
                 returnUsage: true,
                 debugAttempt: buildLlmAttemptRecorder(character, {
@@ -1960,6 +2082,19 @@ function getEngine(userId) {
         broadcastEngineState(wsClients);
     }
 
+    function clearCompletedRagProgressSoon(characterId, wsClients, runId, delayMs = 1400) {
+        if (!characterId || !runId) return;
+        setTimeout(() => {
+            const timerData = timers.get(characterId);
+            const currentProgress = timerData?.ragProgress;
+            if (!timerData || currentProgress?.runId !== runId || currentProgress?.status !== 'completed') {
+                return;
+            }
+            timers.set(characterId, { ...timerData, ragProgress: null });
+            broadcastEngineState(wsClients);
+        }, delayMs);
+    }
+
     function setWebSearchActive(characterId, wsClients, active) {
         if (!timers.has(characterId)) return;
         const timerData = timers.get(characterId) || {};
@@ -2047,7 +2182,7 @@ function getEngine(userId) {
                 key: ragPlannerConfig.key,
                 model: ragPlannerConfig.model,
                 messages: gateMessages,
-                maxTokens: 3000,
+                maxTokens: SMALL_MODEL_PLANNER_MAX_TOKENS,
                 temperature: 0,
                 enableCache: true,
                 cacheDb: db,
@@ -2373,7 +2508,8 @@ ${dynamicPromptBase}`;
                 latestUserMessage: plannerLatestUserMessage || recentInputString,
                 conversationDigest,
                 plannerInstruction: topicPrompt,
-                topicSwitchState
+                topicSwitchState,
+                quoteData: true
             });
             recordLlmDebug(character, 'input', topicPlannerMessages, {
                 context_type: 'chat_intent_topics',
@@ -2386,7 +2522,7 @@ ${dynamicPromptBase}`;
                 key: ragPlannerConfig.key,
                 model: ragPlannerConfig.model,
                 messages: topicPlannerMessages,
-                maxTokens: 6000,
+                maxTokens: SMALL_MODEL_PLANNER_MAX_TOKENS,
                 temperature: 0,
                 enableCache: true,
                 cacheDb: db,
@@ -2449,13 +2585,15 @@ ${dynamicPromptBase}`;
             'You already inferred these likely long-term topics from the user message:',
             plannerTopics.length > 0 ? `- ${plannerTopics.join('\n- ')}` : '- (none)',
             '',
-            'Now decide which memory retrieval plans would materially improve the reply quality before answering.',
+            'Now decide which memory retrieval plans should run before answering.',
             '',
             '[Core Principle]',
-            '- Treat this as a planning task for retrieval quality, not a binary yes/no shortcut.',
+            '- Treat this as a planning task for retrieval quality, not a binary yes/no gate.',
+            '- Semantic memory retrieval is always enabled for private replies.',
+            '- Your job is to decide how to search, not whether to skip search.',
             '- Decide which RAG dimensions would materially improve the reply: factual accuracy, continuity, personalization, emotional coherence, specificity, or confidence.',
             '- Do NOT use the weak standard "I can answer something from recent chat, so skip retrieval".',
-            '- If any memory lookup would make the answer noticeably better, return one or more retrieval plans.',
+            '- Always return one or more retrieval plans unless this should be routed to direct temporal browse.',
             '- If the user is clearly asking what happened on a specific day or time window, prefer routing to direct date browse instead of semantic vector search.',
             '',
             '[Available Memory Schema]',
@@ -2468,16 +2606,20 @@ ${dynamicPromptBase}`;
             '- If the user is asking what you know about them, how you see them, whether you remember them, or asking for a summary of them, return retrieval plans.',
             '- If the user is touching earlier relationship nodes, repeated affection, long-running life threads, work/study history, or stable background, return retrieval plans.',
             '- If the user includes a clear time anchor, date, duration, amount, count, ranking, or sequence constraint, prefer date browse or time-aware retrieval.',
-            '- Only set rag_needed=false when retrieval would add almost no meaningful quality gain.',
+            '- If the user or recent dialogue points to a recent/new/current event without a precise date, keep route="semantic_rag" and set temporal_intent.mode="recent".',
+            '- Judge recent intent semantically, not by a fixed word whitelist. Phrases like “新的那个”, “不是上次那个”, “刚提到的”, “前面说的”, or an implicit correction to a newer event can count.',
+            '- Query hints are rough seeds, not analysis headings. When the user is asking about a specific event, avoid standalone broad anchors such as a platform/account/channel by itself; couple them with the event constraints.',
+            '- For very short messages, use broad relationship/current-context recall instead of skipping.',
             '',
             '[Output Format]',
             '- Output ONLY valid JSON.',
             '- Use this schema:',
             '{',
             '  "rag_needed": true,',
-            '  "route": "semantic_rag" | "temporal_browse" | "none",',
+            '  "route": "semantic_rag" | "temporal_browse",',
             '  "retrieval_label": "short Chinese label",',
             '  "temporal_hint": "三天前",',
+            '  "temporal_intent": { "mode": "recent | none", "confidence": 0.0, "reason": "short reason" },',
             '  "plans": [',
             '    {',
             '      "slot": "profile | life_arc | preference | relationship | general",',
@@ -2490,9 +2632,9 @@ ${dynamicPromptBase}`;
             '  ]',
             '}',
             '- For temporal browse, set route="temporal_browse", rag_needed=false, temporal_hint to only the pure time phrase, and plans=[].',
-            '- For no retrieval, set route="none", rag_needed=false, plans=[].',
             '- For semantic retrieval, prefer 1 to 3 plans, with plans aligned to the database schema above. Use limit 6 to 10 for recall questions unless the topic is extremely narrow.',
-            '- Keep retrieval_label and query_hints specific. Preserve time or number constraints when they matter.'
+            '- Keep retrieval_label and query_hints specific. Preserve time or number constraints when they matter.',
+            '- For semantic retrieval with recent/new/current intent, set temporal_intent.mode="recent" with confidence 0.35 to 1.0. Use "none" when there is no such signal.'
         ].join('\n');
         let parsedDecision = normalizedResumeState?.parsedDecision || null;
         if (!parsedDecision || !['rewrite', 'retrieve', 'browse_summary'].includes(resumeFrom)) {
@@ -2501,7 +2643,8 @@ ${dynamicPromptBase}`;
                 latestUserMessage: plannerLatestUserMessage || recentInputString,
                 conversationDigest,
                 plannerInstruction: intentPrompt,
-                topicSwitchState
+                topicSwitchState,
+                quoteData: true
             });
             recordLlmDebug(character, 'input', decisionPlannerMessages, {
                 context_type: 'chat_intent_decision',
@@ -2515,7 +2658,7 @@ ${dynamicPromptBase}`;
                 key: ragPlannerConfig.key,
                 model: ragPlannerConfig.model,
                 messages: decisionPlannerMessages,
-                maxTokens: 3000,
+                maxTokens: SMALL_MODEL_PLANNER_MAX_TOKENS,
                 temperature: 0,
                 enableCache: true,
                 cacheDb: db,
@@ -2681,7 +2824,7 @@ ${dynamicPromptBase}`;
                             key: ragPlannerConfig.key,
                             model: ragPlannerConfig.model,
                             messages: browseSummaryMessages,
-                            maxTokens: 3000,
+                            maxTokens: SMALL_MODEL_PLANNER_MAX_TOKENS,
                             temperature: 0,
                             enableCache: true,
                             cacheDb: db,
@@ -2809,13 +2952,14 @@ ${dynamicPromptBase}`;
             return msgMetadata;
         }
         if (!parsedDecision.shouldSearch) {
-            console.log(`[Engine] Intent: ENOUGH_CONTEXT. Skipping RAG search.`);
-            updateRagProgress(character.id, wsClients, {
-                currentKey: 'answer',
-                skipped: true,
-                status: 'running'
-            });
-            return msgMetadata;
+            const error = new Error('RAG planner returned no semantic retrieval plan, but private replies require RAG. Please retry or inspect the chat_intent_decision log.');
+            error.ragResume = {
+                failedAt: 'decision',
+                latestUserMessage: recentInputString,
+                plannerTopics,
+                parsedDecision
+            };
+            throw error;
         }
 
         const retrievalLabel = parsedDecision.retrievalLabel;
@@ -2832,6 +2976,9 @@ ${dynamicPromptBase}`;
             'VECTOR QUERY REWRITE',
             `The retrieval topic is: ${retrievalLabel}`,
             plannerTopics.length > 0 ? `Related inferred topics:\n- ${plannerTopics.join('\n- ')}` : '',
+            rewriteConstraints?.temporalIntent?.mode === 'recent'
+                ? `Temporal intent: recent/current event, confidence=${Number(rewriteConstraints.temporalIntent.confidence || 0).toFixed(2)}. Keep this as temporal_intent in the JSON and make the literal queries point to the newer/recent event.`
+                : '',
             '',
             'Rewrite the retrieval need into a compact JSON request for vector-memory search.',
             '',
@@ -2841,6 +2988,7 @@ ${dynamicPromptBase}`;
             '- "filters.memory_focus" may include only: user_profile, user_current_arc, relationship, general.',
             '- "filters.memory_tier" may include only: core, active, ambient.',
             '- Do NOT output temporal_hint or any time-range filter. Time-anchored lookup is handled by the dedicated temporal retrieval stage before this rewrite step.',
+            '- You may output "temporal_intent" only for recency ranking, never as a hard time-range filter.',
             '- "limit" should be 6 to 20 for recall questions, unless the topic is extremely narrow.',
             '- Prefer narrow, user-centered retrieval rather than broad generic search.',
             '- Be highly sensitive to time expressions, dates, durations, numbers, amounts, counts, and order words.',
@@ -2848,6 +2996,9 @@ ${dynamicPromptBase}`;
             '- If the user asks a number-anchored question, at least one query should keep the number or amount explicitly.',
             '- If the live wording contains quoted words, slang, euphemisms, nicknames, gift/object mentions, short trigger words, or concrete repeated phrasing, keep some of those literal surface forms in the queries.',
             '- Prefer a mixed query set: literal surface-form queries first, then paraphrase queries if needed.',
+            '- If temporal intent is recent/current, include surface forms that distinguish the newer event from older similar memories, but do not invent a specific date.',
+            '- Do not let a broad channel/platform word become the main query by itself. If the user mentions an account, app, channel, school, company type, or platform as part of a specific event, every query using that broad anchor must also include at least one distinctive event constraint such as amount, contact direction, company/opportunity, person, object, or action.',
+            '- Avoid standalone broad queries like “小红书运营” when the user is asking about a specific startup opportunity that came through Xiaohongshu; keep the platform coupled to the opportunity constraints.',
             '- When the retrieval topic is about flirting, gifts, teasing, or short repeated dialogue, your first queries should look like actual remembered wording, not analysis headings.',
             '',
             '[Hard Constraints]',
@@ -2868,6 +3019,7 @@ ${dynamicPromptBase}`;
             '    "memory_focus": ["user_profile"],',
             '    "memory_tier": ["core", "active"]',
             '  },',
+            '  "temporal_intent": { "mode": "recent", "confidence": 0.75, "reason": "new/current event reference" },',
             '  "limit": 8',
             '}'
         ].filter(Boolean).join('\n');
@@ -2876,7 +3028,8 @@ ${dynamicPromptBase}`;
             latestUserMessage: plannerLatestUserMessage || recentInputString,
             conversationDigest,
             plannerInstruction: rewritePrompt,
-            topicSwitchState
+            topicSwitchState,
+            quoteData: true
         });
         recordLlmDebug(character, 'input', rewriteMessages, {
             context_type: 'chat_intent_rewrite',
@@ -2895,7 +3048,7 @@ ${dynamicPromptBase}`;
                 key: ragPlannerConfig.key,
                 model: ragPlannerConfig.model,
                 messages: rewriteMessages,
-                maxTokens: 6000,
+                maxTokens: SMALL_MODEL_PLANNER_MAX_TOKENS,
                 temperature: 0,
                 enableCache,
                 cacheDb: db,
@@ -3015,7 +3168,21 @@ ${dynamicPromptBase}`;
             planner_source: ragPlannerConfig.source,
             retrieval_label: retrievalLabel,
             planner_topics: plannerTopics,
-            retrieved_count: Array.isArray(dynamicMemories) ? dynamicMemories.length : 0
+            retrieved_count: Array.isArray(dynamicMemories) ? dynamicMemories.length : 0,
+            retrieved_memories: Array.isArray(dynamicMemories)
+                ? dynamicMemories.map(mem => ({
+                    id: mem.id,
+                    score: mem._search_score || '',
+                    matched_query: mem._matched_query || '',
+                    matched_slots: Array.isArray(mem._matched_slots) ? mem._matched_slots : [],
+                    summary: mem.summary || '',
+                    memory_focus: mem.memory_focus || '',
+                    memory_tier: mem.memory_tier || '',
+                    retention_action: mem.retention_action || '',
+                    source_started_at: mem.source_started_at || 0,
+                    source_ended_at: mem.source_ended_at || 0
+                }))
+                : []
         });
         if (dynamicMemories && dynamicMemories.length > 0) {
             const querySummary = Array.isArray(retrievalRequest.queries) ? retrievalRequest.queries.join(' | ') : retrievalLabel;
@@ -3068,6 +3235,7 @@ ${dynamicPromptBase}`;
                 `Treat the memory summaries and details below as factual recall anchors from the past, with their own timestamps. They are not automatically the current moment, and they are not permanent character settings unless the memory explicitly says so. ` +
                 `A recalled memory may be recent or old; decide that from the time labels, not by guessing. ` +
                 `If any recalled memory conflicts with the user's newest message, trust the user's newest message first. Do not treat your own recent claims of not remembering, not knowing, or needing the user to repeat something as evidence against these retrieved memories. ` +
+                `If retrieved memories match the user's distinctive constraints such as amount, company/opportunity, contact direction, source channel, or timing, do not say you have never heard about it; acknowledge the closest recalled facts and distinguish uncertain details carefully. ` +
                 `When answering, prefer these concrete facts over vague emotional generalization.]\n`
                 + formattedMemories
                 + '\n(Use these recalled facts to answer the user accurately and specifically.)';
@@ -3973,6 +4141,8 @@ ${dynamicPromptBase}`;
                             status: 'completed',
                             skipped: false
                         });
+                        const completedRunId = timers.get(character.id)?.ragProgress?.runId || null;
+                        clearCompletedRagProgressSoon(character.id, wsClients, completedRunId);
                     }
                     if (isUserReply) {
                         setRagFailureState(character.id, null);

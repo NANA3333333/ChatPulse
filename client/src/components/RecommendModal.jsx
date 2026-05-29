@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Search, CheckCircle2 } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
+import { resolveAvatarUrl } from '../utils/avatar';
 
 function RecommendModal({ apiUrl, currentContact, allContacts, onClose, onRecommend }) {
     const { t, lang } = useLanguage();
@@ -83,7 +84,7 @@ function RecommendModal({ apiUrl, currentContact, allContacts, onClose, onRecomm
                                                 borderRadius: '6px'
                                             }}
                                         >
-                                            <img src={c.avatar} alt={c.name} style={{ width: '40px', height: '40px', borderRadius: '50%', marginRight: '12px' }} />
+                                            <img src={resolveAvatarUrl(c.avatar, apiUrl, c.name || c.id || 'User')} alt={c.name} style={{ width: '40px', height: '40px', borderRadius: '50%', marginRight: '12px', objectFit: 'cover' }} />
                                             <div style={{ flex: 1, fontWeight: '500', fontSize: '15px' }}>{c.name}</div>
                                             {selectedCharId === c.id && (
                                                 <CheckCircle2 size={20} color="var(--accent-color)" />

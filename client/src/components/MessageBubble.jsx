@@ -1,7 +1,7 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { AlertCircle, ArrowRightLeft, Volume2 } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
-import { resolveAvatarUrl } from '../utils/avatar';
+import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 
 const ttsPlaybackPending = [];
 let ttsPlaybackDraining = false;
@@ -354,10 +354,10 @@ function MessageBubble({ message, avatar, characterName, apiUrl, onRetry, contac
             <div className={`message-wrapper ${isUser ? 'user' : 'character'}`}>
                 <div className="message-avatar">
                     <img
-                        src={resolveAvatarUrl(avatar, apiUrl)}
+                        src={resolveAvatarUrl(avatar, apiUrl, isUser ? 'User' : (characterName || message.character_id || 'User'))}
                         style={{ objectFit: 'cover' }}
                         alt="Avatar"
-                        onError={(e) => { e.target.onerror = null; e.target.src = 'https://api.dicebear.com/7.x/shapes/svg?seed=' + encodeURIComponent(isUser ? 'User' : (message.character_id || 'User')); }}
+                        onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatarUrl(isUser ? 'User' : (characterName || message.character_id || 'User')); }}
                     />
                 </div>
                 <div className="message-content">
@@ -381,10 +381,10 @@ function MessageBubble({ message, avatar, characterName, apiUrl, onRetry, contac
                                     <div className="message-bubble" style={{ padding: 0, overflow: 'hidden', backgroundColor: '#fff', color: '#333', textAlign: 'left', width: '220px', boxSizing: 'border-box', border: '1px solid #eaeaea' }}>
                                         <div style={{ padding: '12px 15px', display: 'flex', alignItems: 'center', gap: '12px', borderBottom: '1px solid #f0f0f0' }}>
                                             <img
-                                                src={resolveAvatarUrl(cardAvatar.replace(']', ''), apiUrl)}
+                                                src={resolveAvatarUrl(cardAvatar.replace(']', ''), apiUrl, cardName || cardId || 'User')}
                                                 alt={cardName}
                                                 style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover' }}
-                                                onError={(e) => { e.target.onerror = null; e.target.src = 'https://api.dicebear.com/7.x/shapes/svg?seed=' + encodeURIComponent(cardId || 'User'); }}
+                                                onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatarUrl(cardName || cardId || 'User'); }}
                                             />
                                             <div style={{ fontSize: '16px', fontWeight: '400' }}>{cardName}</div>
                                         </div>

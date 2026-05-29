@@ -1,5 +1,5 @@
 import React from 'react';
-import { resolveAvatarUrl } from '../utils/avatar';
+import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 
 function ContactList({ apiUrl, contacts, activeId, onSelect, engineState = {} }) {
     return (
@@ -17,12 +17,12 @@ function ContactList({ apiUrl, contacts, activeId, onSelect, engineState = {} })
                     >
                         <div className="contact-avatar" style={{ position: 'relative' }}>
                             <img
-                                src={resolveAvatarUrl(contact.avatar, apiUrl)}
+                                src={resolveAvatarUrl(contact.avatar, apiUrl, contact.name || contact.id || 'User')}
                                 alt={contact.name}
                                 style={{ objectFit: 'cover' }}
                                 onError={(e) => {
                                     e.target.onerror = null;
-                                    e.target.src = `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(contact.id || 'User')}`;
+                                    e.target.src = defaultAvatarUrl(contact.name || contact.id || 'User');
                                 }}
                             />
                             <div className={`autopulse-status-dot ${isWorking ? 'thinking' : 'connected'}`} />

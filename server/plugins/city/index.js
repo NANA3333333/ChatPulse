@@ -2145,7 +2145,8 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         getWsClients,
         getEngine,
         isCollapsedCityLog,
-        regenerateActionNarrations
+        regenerateActionNarrations,
+        handleQuestLifecycleAfterAction
     });
 
     // Autonomous event loop & RNG minute scheduling

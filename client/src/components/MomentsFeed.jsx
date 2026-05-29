@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Heart, MessageCircle, Send, Trash2, ChevronLeft } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
-import { resolveAvatarUrl } from '../utils/avatar';
+import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 
 function MomentsFeed({ apiUrl, userProfile, onBack }) {
     const { t } = useLanguage();
@@ -133,9 +133,9 @@ function MomentsFeed({ apiUrl, userProfile, onBack }) {
     };
 
     const resolveAuthor = (id) => {
-        if (id === 'user') return { name: userProfile?.name || 'User', avatar: resolveAvatarUrl(userProfile?.avatar, apiUrl) || 'https://api.dicebear.com/7.x/shapes/svg?seed=User' };
+        if (id === 'user') return { name: userProfile?.name || 'User', avatar: resolveAvatarUrl(userProfile?.avatar, apiUrl, userProfile?.name || 'User') };
         const char = characters[id];
-        return char ? { ...char, avatar: resolveAvatarUrl(char.avatar, apiUrl) } : { name: 'Unknown', avatar: 'https://api.dicebear.com/7.x/shapes/svg?seed=Unknown' };
+        return char ? { ...char, avatar: resolveAvatarUrl(char.avatar, apiUrl, char.name || id || 'User') } : { name: 'Unknown', avatar: defaultAvatarUrl('Unknown') };
     };
 
     if (loading) return <div className="placeholder-text">Loading Moments...</div>;
@@ -151,7 +151,7 @@ function MomentsFeed({ apiUrl, userProfile, onBack }) {
                 )}
                 <div className="moments-cover-user">
                     <span className="moments-cover-name">{userProfile?.name || 'User'}</span>
-                    <img src={resolveAvatarUrl(userProfile?.avatar, apiUrl) || 'https://api.dicebear.com/7.x/shapes/svg?seed=User'} alt="Me" className="moments-cover-avatar" style={{ objectFit: 'cover' }} />
+                    <img src={resolveAvatarUrl(userProfile?.avatar, apiUrl, userProfile?.name || 'User')} alt="Me" className="moments-cover-avatar" style={{ objectFit: 'cover' }} />
                 </div>
             </div>
 
@@ -159,7 +159,7 @@ function MomentsFeed({ apiUrl, userProfile, onBack }) {
                 {/* Post New Moment Area */}
                 <div style={{ backgroundColor: '#fff', padding: '15px', marginBottom: '20px', borderBottom: '1px solid #f0f0f0', borderRadius: '8px' }}>
                     <div style={{ display: 'flex', gap: '10px' }}>
-                        <img src={resolveAvatarUrl(userProfile?.avatar, apiUrl) || 'https://api.dicebear.com/7.x/shapes/svg?seed=User'} style={{ width: '44px', height: '44px', borderRadius: '50%', objectFit: 'cover' }} alt="" />
+                        <img src={resolveAvatarUrl(userProfile?.avatar, apiUrl, userProfile?.name || 'User')} style={{ width: '44px', height: '44px', borderRadius: '50%', objectFit: 'cover' }} alt="" />
                         <div style={{ flex: 1 }}>
                             <textarea
                                 placeholder={t('Share something new')}

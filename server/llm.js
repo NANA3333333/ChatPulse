@@ -308,7 +308,9 @@ async function callLLM({
     debugAttempt = null,
     validateCachedContent = null,
     shouldCacheResult = null,
-    responseFormat = null
+    responseFormat = null,
+    requestTimeoutMs = 0,
+    maxAttempts = 2
 }) {
     if (!endpoint || !key || !model) {
         throw new Error('LLM call missing required configuration (endpoint, key, or model).');
@@ -357,8 +359,9 @@ async function callLLM({
     }
     const url = `${baseUrl}/chat/completions`;
 
-    const maxAttempts = 2;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const safeMaxAttempts = Math.max(1, Math.min(5, Number(maxAttempts || 2) || 2));
+    const safeRequestTimeoutMs = Math.max(0, Number(requestTimeoutMs || process.env.CP_LLM_REQUEST_TIMEOUT_MS || 0) || 0);
+    for (let attempt = 1; attempt <= safeMaxAttempts; attempt++) {
         try {
             const baseTemp = temperature == null ? null : Number(temperature);
             const attemptTemp = baseTemp == null
@@ -458,15 +461,30 @@ async function callLLM({
                     cacheType
                 });
 
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${key}`,
-                        ...variant.headers,
-                    },
-                    body: JSON.stringify(requestBody),
-                });
+                const controller = safeRequestTimeoutMs > 0 ? new AbortController() : null;
+                const timeoutHandle = controller
+                    ? setTimeout(() => controller.abort(new Error(`LLM request timed out after ${Math.round(safeRequestTimeoutMs / 1000)}s`)), safeRequestTimeoutMs)
+                    : null;
+                let response;
+                try {
+                    response = await fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${key}`,
+                            ...variant.headers,
+                        },
+                        body: JSON.stringify(requestBody),
+                        signal: controller?.signal
+                    });
+                } catch (fetchError) {
+                    if (controller?.signal?.aborted) {
+                        throw new Error(`LLM request timed out after ${Math.round(safeRequestTimeoutMs / 1000)}s`);
+                    }
+                    throw fetchError;
+                } finally {
+                    if (timeoutHandle) clearTimeout(timeoutHandle);
+                }
 
                 if (!response.ok) {
                     const errorText = await response.text();
@@ -583,12 +601,12 @@ async function callLLM({
             }
 
             if (!content && attempt < maxAttempts) {
-                console.warn(`[LLM Retry] Empty response from ${model} (finish_reason=${finishReason}), retrying (attempt ${attempt + 1}/${maxAttempts})...`);
+                console.warn(`[LLM Retry] Empty response from ${model} (finish_reason=${finishReason}), retrying (attempt ${attempt + 1}/${safeMaxAttempts})...`);
                 continue;
             }
 
             if (!content) {
-                console.warn(`[LLM Warning] Empty response from ${model} after ${maxAttempts} attempts (finish_reason=${finishReason})`);
+                console.warn(`[LLM Warning] Empty response from ${model} after ${safeMaxAttempts} attempts (finish_reason=${finishReason})`);
             }
 
             const allowCacheWrite = content && (

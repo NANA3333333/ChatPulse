@@ -17,6 +17,33 @@ function readPositiveIntegerEnv(name, fallback) {
     return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
 }
 
+function buildDefaultAvatarUrl(seed = 'User') {
+    const safeSeed = encodeURIComponent(String(seed || 'User').trim() || 'User');
+    return `https://api.dicebear.com/7.x/shapes/svg?seed=${safeSeed}&backgroundColor=e8f0ff,fff5d6,e9f7ef,f5eafa,f1f5f9`;
+}
+
+const DEFAULT_USER_THEME = 'light';
+const DEFAULT_USER_THEME_CONFIG = Object.freeze({
+    '--bg-main': '#F0F4F8',
+    '--bg-sidebar': '#D6E4F0',
+    '--bg-contacts': '#E8F1F8',
+    '--bg-chat-area': '#F5F9FC',
+    '--bg-input': '#FFFFFF',
+    '--text-primary': '#5b9cdc',
+    '--text-secondary': '#7F9BAD',
+    '--bubble-user-bg': '#B8D8F0',
+    '--bubble-user-text': '#1A3A4A',
+    '--bubble-ai-bg': '#FAE8F0',
+    '--bubble-ai-text': '#3D2A35',
+    '--accent-color': '#85C1E9',
+    '--accent-hover': '#5DADE2',
+    '--border-color': '#C8DFF0',
+    '--sidebar-icon': '#f97b7b',
+    '--sidebar-icon-active': '#4cbff0'
+});
+const DEFAULT_USER_THEME_CONFIG_JSON = JSON.stringify(DEFAULT_USER_THEME_CONFIG);
+const DEFAULT_USER_CUSTOM_CSS = '';
+
 function getUserDb(userId) {
     if (!userId) throw new Error("getUserDb requires a valid userId");
     if (deletingUserDbIds.has(String(userId))) {
@@ -466,6 +493,35 @@ function getUserDb(userId) {
             FOREIGN KEY (character_id) REFERENCES characters(id)
         );
 
+        CREATE TABLE IF NOT EXISTS external_memory_imports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_app TEXT DEFAULT '',
+            import_mode TEXT DEFAULT '',
+            filename TEXT DEFAULT '',
+            raw_text TEXT DEFAULT '',
+            normalized_messages_json TEXT DEFAULT '[]',
+            summary_json TEXT DEFAULT '{}',
+            role_tags_json TEXT DEFAULT '[]',
+            selected_character_ids_json TEXT DEFAULT '[]',
+            memory_ids_json TEXT DEFAULT '[]',
+            created_at INTEGER NOT NULL,
+            committed_at INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS external_memory_role_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            import_id INTEGER DEFAULT 0,
+            memory_id INTEGER NOT NULL,
+            character_id TEXT NOT NULL,
+            character_name TEXT DEFAULT '',
+            created_at INTEGER NOT NULL,
+            UNIQUE(memory_id, character_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_external_memory_role_bindings_character
+            ON external_memory_role_bindings(character_id, memory_id);
+        CREATE INDEX IF NOT EXISTS idx_external_memory_role_bindings_memory
+            ON external_memory_role_bindings(memory_id);
+
         CREATE TABLE IF NOT EXISTS moments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             character_id TEXT NOT NULL,
@@ -496,6 +552,7 @@ function getUserDb(userId) {
             group_proactive_enabled INTEGER DEFAULT 0,
             group_interval_max INTEGER DEFAULT 60,
             theme_config TEXT DEFAULT '{}',
+            custom_css TEXT DEFAULT '',
             banner TEXT,
             private_msg_limit_for_group INTEGER DEFAULT 3,
             serper_api_key TEXT DEFAULT '',
@@ -999,6 +1056,7 @@ function getUserDb(userId) {
         }
 
         ensureAllDiaryPasswords();
+        ensureAllCharacterAvatars();
 
         // Migrate old max_tokens=800 (old default) to 2000
         try {
@@ -1046,6 +1104,37 @@ function getUserDb(userId) {
         try { db.prepare("ALTER TABLE memories ADD COLUMN temporal_confidence REAL DEFAULT 0").run(); } catch (e) { }
         try { db.prepare("ALTER TABLE memories ADD COLUMN temporal_reason TEXT DEFAULT ''").run(); } catch (e) { }
         try { db.prepare("ALTER TABLE memories ADD COLUMN temporal_checked_at INTEGER DEFAULT 0").run(); } catch (e) { }
+        try {
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS external_memory_imports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_app TEXT DEFAULT '',
+                    import_mode TEXT DEFAULT '',
+                    filename TEXT DEFAULT '',
+                    raw_text TEXT DEFAULT '',
+                    normalized_messages_json TEXT DEFAULT '[]',
+                    summary_json TEXT DEFAULT '{}',
+                    role_tags_json TEXT DEFAULT '[]',
+                    selected_character_ids_json TEXT DEFAULT '[]',
+                    memory_ids_json TEXT DEFAULT '[]',
+                    created_at INTEGER NOT NULL,
+                    committed_at INTEGER DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS external_memory_role_bindings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    import_id INTEGER DEFAULT 0,
+                    memory_id INTEGER NOT NULL,
+                    character_id TEXT NOT NULL,
+                    character_name TEXT DEFAULT '',
+                    created_at INTEGER NOT NULL,
+                    UNIQUE(memory_id, character_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_external_memory_role_bindings_character
+                    ON external_memory_role_bindings(character_id, memory_id);
+                CREATE INDEX IF NOT EXISTS idx_external_memory_role_bindings_memory
+                    ON external_memory_role_bindings(memory_id);
+            `);
+        } catch (e) { }
         try {
             db.prepare(`
                 UPDATE memories
@@ -1208,7 +1297,7 @@ function getUserDb(userId) {
     // ─── Character Queries ──────────────────────────────────────────────────
 
     function getCharacters() {
-        return db.prepare('SELECT * FROM characters').all();
+        return db.prepare("SELECT * FROM characters WHERE id NOT LIKE 'external-shared-%'").all();
     }
 
     function getCharacter(id) {
@@ -1247,6 +1336,14 @@ function getUserDb(userId) {
         // Insert if not exists, else update
         const existing = getCharacter(id);
         if (!existing) {
+            const avatarIndex = fields.indexOf('avatar');
+            if (avatarIndex === -1) {
+                fields.push('avatar');
+                values.push(buildDefaultAvatarUrl(data.name || id));
+            } else if (!String(values[avatarIndex] || '').trim()) {
+                values[avatarIndex] = buildDefaultAvatarUrl(data.name || id);
+            }
+
             // Auto-assign a diary password for new characters
             if (!data.diary_password) {
                 const pw = generateDiaryPassword();
@@ -1294,6 +1391,21 @@ function getUserDb(userId) {
             db.prepare('UPDATE characters SET diary_password = ? WHERE id = ?').run(generateDiaryPassword(), c.id);
         }
         if (chars.length > 0) console.log(`[DB] Auto-assigned diary passwords to ${chars.length} character(s).`);
+    }
+
+    function ensureAllCharacterAvatars() {
+        const chars = db.prepare(`
+            SELECT id, name
+            FROM characters
+            WHERE avatar IS NULL
+               OR TRIM(avatar) = ''
+               OR avatar LIKE '%/notionists/svg%'
+        `).all();
+        const stmt = db.prepare('UPDATE characters SET avatar = ? WHERE id = ?');
+        for (const c of chars) {
+            stmt.run(buildDefaultAvatarUrl(c.name || c.id), c.id);
+        }
+        if (chars.length > 0) console.log(`[DB] Backfilled geometric avatars for ${chars.length} character(s).`);
     }
 
     function getCharacterHiddenState(id) {
@@ -1767,6 +1879,12 @@ function getUserDb(userId) {
     }
 
     function clearMemories(characterId) {
+        const ids = db.prepare('SELECT id FROM memories WHERE character_id = ?').all(characterId).map(row => row.id);
+        if (ids.length > 0) {
+            const placeholders = ids.map(() => '?').join(', ');
+            db.prepare(`DELETE FROM external_memory_role_bindings WHERE memory_id IN (${placeholders})`).run(...ids);
+        }
+        db.prepare('DELETE FROM external_memory_role_bindings WHERE character_id = ?').run(characterId);
         db.prepare('DELETE FROM memories WHERE character_id = ?').run(characterId);
     }
 
@@ -1823,12 +1941,29 @@ function getUserDb(userId) {
 
     function getMemories(characterId) {
         const rows = db.prepare(`
-            SELECT * FROM memories
-            WHERE character_id = ?
+            SELECT * FROM (
+                SELECT
+                    memories.*,
+                    0 AS shared_binding,
+                    '' AS bound_character_id,
+                    '' AS bound_character_name
+                FROM memories
+                WHERE memories.character_id = ?
+                UNION ALL
+                SELECT
+                    memories.*,
+                    1 AS shared_binding,
+                    external_memory_role_bindings.character_id AS bound_character_id,
+                    external_memory_role_bindings.character_name AS bound_character_name
+                FROM external_memory_role_bindings
+                JOIN memories ON memories.id = external_memory_role_bindings.memory_id
+                WHERE external_memory_role_bindings.character_id = ?
+                  AND memories.character_id <> ?
+            )
             ORDER BY
                 COALESCE(updated_at, created_at) DESC,
                 created_at DESC
-        `).all(characterId);
+        `).all(characterId, characterId, characterId);
         return rows.map(normalizeMemoryRow);
     }
 
@@ -1867,6 +2002,34 @@ function getUserDb(userId) {
             ORDER BY COALESCE(updated_at, created_at) DESC
             LIMIT 1
         `).get(characterId, dedupeKey));
+    }
+
+    function bindExternalMemoryToCharacters(importId, memoryId, characters = []) {
+        const id = Number(memoryId || 0);
+        if (!id || !Array.isArray(characters) || characters.length === 0) return { inserted: 0 };
+        const now = Date.now();
+        const stmt = db.prepare(`
+            INSERT OR IGNORE INTO external_memory_role_bindings
+                (import_id, memory_id, character_id, character_name, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        `);
+        let inserted = 0;
+        const tx = db.transaction((items) => {
+            for (const item of items) {
+                const characterId = String(item?.id || item?.character_id || '').trim();
+                if (!characterId) continue;
+                const info = stmt.run(
+                    Number(importId || 0),
+                    id,
+                    characterId,
+                    String(item?.name || item?.character_name || '').trim(),
+                    now
+                );
+                inserted += Number(info.changes || 0);
+            }
+        });
+        tx(characters);
+        return { inserted };
     }
 
     function addMemory(characterId, memoryData, groupId = null) {
@@ -1972,6 +2135,7 @@ function getUserDb(userId) {
     }
 
     function deleteMemory(id) {
+        db.prepare('DELETE FROM external_memory_role_bindings WHERE memory_id = ?').run(id);
         db.prepare('DELETE FROM memories WHERE id = ?').run(id);
     }
 
@@ -2181,11 +2345,26 @@ function getUserDb(userId) {
     function getUserProfile() {
         let profile = db.prepare('SELECT * FROM user_profile WHERE id = ?').get('default');
         if (!profile) {
-            db.prepare(`INSERT INTO user_profile (id, name, avatar) VALUES (?, ?, ?)`)
-                .run('default', 'User', 'https://api.dicebear.com/7.x/notionists/svg?seed=User');
+            db.prepare(`
+                INSERT INTO user_profile
+                    (id, name, avatar, theme, theme_config, custom_css)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `).run(
+                'default',
+                'User',
+                buildDefaultAvatarUrl('User'),
+                DEFAULT_USER_THEME,
+                DEFAULT_USER_THEME_CONFIG_JSON,
+                DEFAULT_USER_CUSTOM_CSS
+            );
             profile = db.prepare('SELECT * FROM user_profile WHERE id = ?').get('default');
         }
         if (profile) {
+            const profileAvatar = String(profile.avatar || '').trim();
+            if (!profileAvatar || profileAvatar.includes('/notionists/svg')) {
+                profile.avatar = buildDefaultAvatarUrl(profile.name || 'User');
+                db.prepare('UPDATE user_profile SET avatar = ? WHERE id = ?').run(profile.avatar, 'default');
+            }
             if (!String(profile.response_style_constitution || '').trim()) {
                 profile.response_style_constitution = [
                     '这是最高优先级的长期表达风格约束。',
@@ -2508,6 +2687,12 @@ function getUserDb(userId) {
 
     function deleteCharacter(id) {
         db.prepare('DELETE FROM messages WHERE character_id = ?').run(id);
+        const memoryIds = db.prepare('SELECT id FROM memories WHERE character_id = ?').all(id).map(row => row.id);
+        if (memoryIds.length > 0) {
+            const placeholders = memoryIds.map(() => '?').join(', ');
+            db.prepare(`DELETE FROM external_memory_role_bindings WHERE memory_id IN (${placeholders})`).run(...memoryIds);
+        }
+        db.prepare('DELETE FROM external_memory_role_bindings WHERE character_id = ?').run(id);
         db.prepare('DELETE FROM memories WHERE character_id = ?').run(id);
         db.prepare('DELETE FROM history_window_cache WHERE character_id = ?').run(id);
         db.prepare('DELETE FROM prompt_block_cache WHERE character_id = ?').run(id);
@@ -3399,6 +3584,7 @@ function getUserDb(userId) {
         getMemoriesByTimeRange,
         getMemory,
         getMemoryByDedupeKey,
+        bindExternalMemoryToCharacters,
         addMemory,
         markMemoriesRetrieved,
         updateMemory,

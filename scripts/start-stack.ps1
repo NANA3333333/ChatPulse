@@ -12,9 +12,8 @@ $clientErr = Join-Path $root 'client-live.err.log'
 $qdrantOut = Join-Path $root 'qdrant-live.out.log'
 $qdrantErr = Join-Path $root 'qdrant-live.err.log'
 $bundledNode = Join-Path $runtimeDir 'node20\node.exe'
-$bundledNpm = Join-Path $runtimeDir 'node20\npm.cmd'
 $nodeExe = if (Test-Path $bundledNode) { $bundledNode } else { 'node' }
-$npmCmd = if (Test-Path $bundledNpm) { $bundledNpm } else { 'npm.cmd' }
+$clientVite = Join-Path $root 'client\node_modules\vite\bin\vite.js'
 $dockerComposeFile = Join-Path $root 'docker-compose.yml'
 $localQdrantExe = Join-Path $root 'tools\qdrant\current\qdrant.exe'
 $localQdrantConfig = Join-Path $root 'config\qdrant.yaml'
@@ -161,15 +160,21 @@ $serverProc = if ($qdrantReady) {
 }
 $serverProc.Id | Set-Content $serverPidFile
 
-if (-not (Wait-ForHttp 'http://localhost:8000' 20)) {
+if (-not (Wait-ForHttp 'http://localhost:8000' 45)) {
     Write-Host '[stack] backend failed to start'
     if (Test-Path $serverErr) { Get-Content $serverErr -Tail 60 }
     exit 1
 }
 
-Write-Host '[stack] starting frontend on http://localhost:5173'
-$clientProc = Start-Process -FilePath $npmCmd `
-    -ArgumentList @('run', 'dev', '--', '--host', '127.0.0.1', '--port', '5173', '--strictPort') `
+if (-not (Test-Path $clientVite)) {
+    Write-Host '[stack] frontend dependency missing: client/node_modules/vite/bin/vite.js'
+    Write-Host '[stack] run install-and-start.cmd once, or run npm install in client/'
+    exit 1
+}
+
+Write-Host '[stack] starting frontend on http://127.0.0.1:5173'
+$clientProc = Start-Process -FilePath $nodeExe `
+    -ArgumentList @($clientVite, '--host', '127.0.0.1', '--port', '5173', '--strictPort') `
     -WorkingDirectory (Join-Path $root 'client') `
     -RedirectStandardOutput $clientOut `
     -RedirectStandardError $clientErr `
@@ -177,7 +182,7 @@ $clientProc = Start-Process -FilePath $npmCmd `
     -PassThru
 $clientProc.Id | Set-Content $clientPidFile
 
-if (-not (Wait-ForHttp 'http://localhost:5173' 25)) {
+if (-not (Wait-ForHttp 'http://127.0.0.1:5173' 25)) {
     Write-Host '[stack] frontend failed to start'
     if (Test-Path $clientErr) { Get-Content $clientErr -Tail 60 }
     exit 1
@@ -190,6 +195,6 @@ if ($qdrantReady) {
     Write-Host '[stack] qdrant   : disabled for this run, backend using vectra fallback'
 }
 Write-Host '[stack] backend  : http://localhost:8000'
-Write-Host '[stack] frontend : http://localhost:5173'
+Write-Host '[stack] frontend : http://127.0.0.1:5173'
 Write-Host "[stack] server pid: $($serverProc.Id)"
 Write-Host "[stack] client pid: $($clientProc.Id)"

@@ -199,7 +199,7 @@ function getLocalFallbackProfile() {
 }
 
 
-function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) {
+function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpdate, onProfileUpdate, onBack }) {
     const { t, lang } = useLanguage();
     const { login, updateUser } = useAuth();
     const [profile, setProfile] = useState(() => getLocalFallbackProfile());
@@ -228,7 +228,7 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
     const [editCustomCss, setEditCustomCss] = useState('');
 
     // AI Theme Gen states
-    const [contacts, setContacts] = useState([]);
+    const [contacts, setContacts] = useState(() => Array.isArray(parentContacts) ? parentContacts : []);
     const [aiThemeQuery, setAiThemeQuery] = useState('');
     const [aiProviderId, setAiProviderId] = useState('manual');
     const [aiManualEndpoint, setAiManualEndpoint] = useState('');
@@ -258,6 +258,12 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
     }, [tencentVoiceOptions]);
 
     const formatCount = (value) => Number(value || 0).toLocaleString();
+
+    useEffect(() => {
+        if (Array.isArray(parentContacts)) {
+            setContacts(parentContacts);
+        }
+    }, [parentContacts]);
     const formatTime = (value) => {
         const ts = Number(value || 0);
         if (!ts) return lang === 'en' ? 'No record yet' : '暂无记录';
@@ -837,11 +843,17 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` }
             });
             const data = await res.json();
-            if (data.success) {
-                if (onCharactersUpdate) onCharactersUpdate();
+            if (res.ok && data.success) {
+                setContacts(prev => prev.filter(contact => String(contact.id) !== String(id)));
+                setEditingContact(prev => (String(prev?.id || '') === String(id) ? null : prev));
+                window.dispatchEvent(new CustomEvent('character_deleted', { detail: { characterId: id } }));
+                if (onCharactersUpdate) onCharactersUpdate({ type: 'deleted', id });
+            } else {
+                alert((lang === 'en' ? 'Delete failed: ' : '删除失败：') + (data.error || res.statusText || 'Unknown error'));
             }
         } catch (e) {
             console.error('Failed to delete character:', e);
+            alert((lang === 'en' ? 'Delete failed: ' : '删除失败：') + (e.message || 'Network error'));
         }
     };
 
@@ -1087,7 +1099,7 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                                 <div>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                                            <img src={resolveAvatarUrl(profile.avatar, apiUrl) || 'https://api.dicebear.com/7.x/shapes/svg?seed=User'} alt="Me" style={{ width: '60px', height: '60px', borderRadius: '50%', objectFit: 'cover' }} />
+                                            <img src={resolveAvatarUrl(profile.avatar, apiUrl, profile.name || 'User')} alt="Me" style={{ width: '60px', height: '60px', borderRadius: '50%', objectFit: 'cover' }} />
                                             <div>
                                                 <h3 style={{ margin: '0 0 5px 0', fontSize: '20px' }}>{profile.name}</h3>
                                                 <p style={{ color: '#666', margin: 0, whiteSpace: 'pre-wrap', fontSize: '14px' }}>{profile.bio || 'Signature...'}</p>
@@ -1357,7 +1369,7 @@ function SettingsPanel({ apiUrl, onCharactersUpdate, onProfileUpdate, onBack }) 
                         {contacts.map(c => (
                             <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px', border: '1px solid #f0f0f0', borderRadius: '6px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                    <img src={resolveAvatarUrl(c.avatar, apiUrl)} alt={c.name} style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover' }} />
+                                    <img src={resolveAvatarUrl(c.avatar, apiUrl, c.name || c.id || 'User')} alt={c.name} style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover' }} />
                                     <div>
                                         <div style={{ fontWeight: '500' }}>{c.name}</div>
                                         <div style={{ fontSize: '12px', color: '#999' }}>

@@ -14,6 +14,8 @@ const initSocialHousingDb = require('./plugins/socialHousing/db');
 const crypto = require('crypto');
 const { callLLM } = require('./llm');
 
+const CONTEXT_ROUTER_MAX_TOKENS = 8000;
+
 function previewText(value, maxLen = 1200) {
     const text = String(value || '');
     if (text.length <= maxLen) return text;
@@ -271,7 +273,7 @@ async function didUserAskAboutCity(db, character, recentInput = '') {
                 { role: 'system', content: judgePrompt },
                 { role: 'user', content: text }
             ],
-            maxTokens: 3000,
+            maxTokens: CONTEXT_ROUTER_MAX_TOKENS,
             temperature: 0,
             enableCache: true,
             cacheDb: db,
@@ -587,7 +589,7 @@ async function routeContextModules(db, character, recentInput = '', topicSwitchS
                     ].filter(Boolean).join('\n\n')
                 }
             ],
-            maxTokens: 3000,
+            maxTokens: CONTEXT_ROUTER_MAX_TOKENS,
             temperature: 0,
             enableCache: true,
             cacheDb: db,

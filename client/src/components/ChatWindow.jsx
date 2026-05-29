@@ -5,7 +5,7 @@ import TransferModal from './TransferModal';
 import RecommendModal from './RecommendModal';
 import { Send, Smile, Paperclip, Bell, Users, ShieldBan, Trash, BookOpen, Brain, MoreHorizontal, UserPlus, Gift, Heart, UserMinus, ShieldAlert, BadgeInfo, ChevronLeft } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
-import { resolveAvatarUrl } from '../utils/avatar';
+import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 import { deriveEmotion, derivePhysicalState } from '../utils/emotion';
 
 function normalizeMessages(list = []) {
@@ -488,7 +488,7 @@ function ChatWindow({
                         <ChevronLeft size={24} />
                     </button>
                     <img
-                        src={resolveAvatarUrl(contact.avatar, apiUrl) || `https://api.dicebear.com/7.x/shapes/svg?seed=${contact.id || 'User'}`}
+                        src={resolveAvatarUrl(contact.avatar, apiUrl, contact.name || contact.id || 'User')}
                         alt={contact.name}
                         style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover' }}
                     />
@@ -595,7 +595,7 @@ function ChatWindow({
                                 <MessageBubble
                                     message={msg}
                                     characterName={contact.name}
-                                    avatar={msg.role === 'user' ? (userAvatar || 'https://api.dicebear.com/7.x/shapes/svg?seed=User') : (contact.avatar || `https://api.dicebear.com/7.x/shapes/svg?seed=${contact.id}`)}
+                                    avatar={msg.role === 'user' ? (userAvatar || defaultAvatarUrl('User')) : (contact.avatar || defaultAvatarUrl(contact.name || contact.id || 'User'))}
                                     apiUrl={apiUrl}
                                     onRetry={handleRetry}
                                     contacts={allContacts}
@@ -609,10 +609,10 @@ function ChatWindow({
                     <div className="message-wrapper character" style={{ marginTop: '10px', opacity: 0.7, transition: 'opacity 0.2s' }}>
                         <div className="message-avatar">
                             <img
-                                src={resolveAvatarUrl(contact.avatar, apiUrl)}
+                                src={resolveAvatarUrl(contact.avatar, apiUrl, contact.name || contact.id || 'User')}
                                 style={{ objectFit: 'cover' }}
                                 alt="Avatar"
-                                onError={(e) => { e.target.onerror = null; e.target.src = 'https://api.dicebear.com/7.x/shapes/svg?seed=' + encodeURIComponent(contact.id || 'User'); }}
+                                onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatarUrl(contact.name || contact.id || 'User'); }}
                             />
                         </div>
                         <div className="message-content">

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Send, Users, Smile, Paperclip, X, Settings, Trash2, UserMinus, ArrowRightLeft, Gift, ChevronLeft, Trash, UserPlus, Edit3 } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
-import { resolveAvatarUrl } from '../utils/avatar';
+import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 
 function normalizeGroupMessages(list = []) {
     const byId = new Map();
@@ -320,7 +320,7 @@ function GroupManageDrawer({ group, apiUrl, resolveSender, onClose, lang, messag
                                     style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 4px', cursor: 'pointer', borderRadius: '6px', transition: 'background 0.15s' }}
                                     onMouseEnter={e => e.currentTarget.style.background = '#f0f9eb'}
                                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                                    <img src={resolveAvatarUrl(c.avatar, apiUrl)} alt="" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }} />
+                                    <img src={resolveAvatarUrl(c.avatar, apiUrl, c.name || c.id || 'User')} alt="" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }} />
                                     <span style={{ fontSize: '13px', fontWeight: '500' }}>{c.name}</span>
                                 </div>
                             ))}
@@ -444,9 +444,9 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, incomingGrou
     };
 
     const resolveSender = (senderId) => {
-        if (senderId === 'user') return { name: userProfile?.name || 'User', avatar: resolveAvatarUrl(userProfile?.avatar, apiUrl) || 'https://api.dicebear.com/7.x/shapes/svg?seed=User' };
+        if (senderId === 'user') return { name: userProfile?.name || 'User', avatar: resolveAvatarUrl(userProfile?.avatar, apiUrl, userProfile?.name || 'User') };
         const char = allContacts?.find(c => String(c.id) === String(senderId));
-        return char ? { ...char, avatar: resolveAvatarUrl(char.avatar, apiUrl) } : { name: senderId, avatar: `https://api.dicebear.com/7.x/shapes/svg?seed=${senderId}` };
+        return char ? { ...char, avatar: resolveAvatarUrl(char.avatar, apiUrl, char.name || senderId || 'User') } : { name: senderId, avatar: defaultAvatarUrl(senderId || 'User') };
     };
 
     const addEmoji = (emoji) => { setInput(prev => prev + emoji); setShowEmojiPicker(false); };
@@ -454,7 +454,7 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, incomingGrou
     // --- MENTION HANDLERS ---
     const availableMentions = React.useMemo(() => {
         if (!group) return [];
-        const base = [{ id: 'all', name: lang === 'en' ? 'All' : '全体成员', avatar: 'https://api.dicebear.com/7.x/shapes/svg?seed=All' }];
+        const base = [{ id: 'all', name: lang === 'en' ? 'All' : '全体成员', avatar: defaultAvatarUrl('All') }];
         if (group.members) {
             group.members.forEach(memberObj => {
                 const mid = typeof memberObj === 'object' ? memberObj.member_id : memberObj;
@@ -650,7 +650,7 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, incomingGrou
                                                 </div>
                                             </div>
                                         )}
-                                    <div className="message-avatar"><img src={resolveAvatarUrl(sender.avatar, apiUrl)} style={{ objectFit: 'cover' }} alt="" /></div>
+                                    <div className="message-avatar"><img src={resolveAvatarUrl(sender.avatar, apiUrl, sender.name || 'User')} style={{ objectFit: 'cover' }} alt="" /></div>
                                     <div className="message-content">
                                         {!isUser && <div style={{ fontSize: '12px', color: 'var(--accent-color)', marginBottom: '2px', fontWeight: '500' }}>{sender.name}</div>}
                                         <RedPacketCard packetId={parsed.packetId} apiUrl={apiUrl} groupId={group.id} isUser={isUser} resolveSender={resolveSender} claimEvent={redpacketClaimEvent} />
@@ -689,7 +689,7 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, incomingGrou
                                             </div>
                                         </div>
                                     )}
-                                    <div className="message-avatar"><img src={resolveAvatarUrl(sender.avatar, apiUrl)} style={{ objectFit: 'cover' }} alt="" /></div>
+                                    <div className="message-avatar"><img src={resolveAvatarUrl(sender.avatar, apiUrl, sender.name || 'User')} style={{ objectFit: 'cover' }} alt="" /></div>
                                     <div className="message-content">
                                         {!isUser && <div style={{ fontSize: '12px', color: 'var(--accent-color)', marginBottom: '2px', fontWeight: '500' }}>{sender.name}</div>}
                                         <div className="message-bubble transfer-bubble">
@@ -728,7 +728,7 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, incomingGrou
                                         </div>
                                     </div>
                                 )}
-                                <div className="message-avatar"><img src={resolveAvatarUrl(sender.avatar, apiUrl)} style={{ objectFit: 'cover' }} alt="" /></div>
+                                <div className="message-avatar"><img src={resolveAvatarUrl(sender.avatar, apiUrl, sender.name || 'User')} style={{ objectFit: 'cover' }} alt="" /></div>
                                 <div className="message-content">
                                     {!isUser && <div style={{ fontSize: '12px', color: 'var(--accent-color)', marginBottom: '2px', fontWeight: '500' }}>{sender.name}</div>}
                                     <div className="message-bubble">{msg.content}</div>

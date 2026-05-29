@@ -1,6 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+set "PATH=%~dp0.runtime\node20;C:\Program Files\Git\cmd;C:\Program Files\Docker\Docker\resources\bin;%PATH%"
 
 echo [chatpulse] Installing dependencies and preparing local files...
 call npm run setup
