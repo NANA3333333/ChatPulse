@@ -30,7 +30,7 @@ const commercialV2PlayerCharacters = [
     label: '男孩',
     spriteBase: '/assets/pixel-world/characters/casual-boy-v1/frames-64x80',
     assetVersion: 'character-recut-generated-sheet-20260521',
-    initial: { x: 3432, y: 640, direction: 'front' }
+    initial: { x: 3760, y: 640, direction: 'front' }
   },
   {
     id: 'pink-cardigan-girl-v1',
@@ -41,6 +41,825 @@ const commercialV2PlayerCharacters = [
   }
 ];
 const commercialV2DefaultControlledPlayerId = 'pink-cardigan-girl-v1';
+const commercialV2RoleActorId = 'casual-boy-v1';
+const commercialV2UserActorId = 'pink-cardigan-girl-v1';
+const commercialV2BehaviorConfigStorageKey = 'pixelWorld.commercialStreetV2.behaviorTreeConfig';
+const commercialV2BehaviorTreeStorageKey = 'pixelWorld.commercialStreetV2.behaviorTreeState';
+const commercialV2BehaviorInteractionDistance = 170;
+const commercialV2BehaviorAutonomousInitialDelayMs = 2500;
+const commercialV2BehaviorAutonomousCooldownMs = 8500;
+const commercialV2BehaviorNearbyCooldownMs = 4200;
+const commercialV2BehaviorBaseBubbleMs = 850;
+const commercialV2BehaviorBaseWaitMs = 550;
+const commercialV2BehaviorBaseFallbackMs = 550;
+const commercialV2BehaviorActions = [
+  { id: 'greet', label: '打招呼', hint: '让角色停下来看向玩家' },
+  { id: 'small_talk', label: '闲聊', hint: '从街区近况切入' },
+  { id: 'ask_current_action', label: '在干嘛', hint: '询问角色当前意图' },
+  { id: 'ask_destination', label: '去哪儿', hint: '追问下一步目的地' },
+  { id: 'suggest_destination', label: '跟我来', hint: '玩家指定一个街区地点' },
+  { id: 'request_company', label: '陪我一下', hint: '触发陪伴/同行枝丫' },
+  { id: 'treat_food', label: '请你吃', hint: '触发去餐饮点和好感变化' },
+  { id: 'request_help', label: '帮我一下', hint: '生成帮忙/跑腿枝丫' },
+  { id: 'joke', label: '开玩笑', hint: '触发轻松反应' },
+  { id: 'comfort', label: '安慰我', hint: '触发近距离安抚' }
+];
+const commercialV2BehaviorActionIds = new Set(commercialV2BehaviorActions.map((action) => action.id));
+const commercialV2BehaviorPrimaryActionIds = ['greet', 'small_talk', 'ask_current_action', 'ask_destination'];
+const commercialV2BehaviorContextActionIds = ['suggest_destination', 'request_company', 'treat_food', 'request_help', 'joke', 'comfort'];
+const commercialV2BehaviorImportantPlaceIds = new Set([
+  'hacker',
+  'casino',
+  'school_factory',
+  'home_exit',
+  'agency',
+  'convenience',
+  'restaurant',
+  'hospital'
+]);
+const commercialV2BehaviorMovementActions = [
+  { id: 'go_to_place', label: '前往地点', needs: ['place_id'], description: '走到某个表内地点附近。' },
+  { id: 'wander_between', label: '两点间闲逛', needs: ['from_place_id', 'to_place_id'], description: '在两个表内地点之间来回平移。' },
+  { id: 'loop_in_front_of', label: '门前循环', needs: ['place_id'], description: '在某个表内地点前面小范围左右移动。' },
+  { id: 'browse_near', label: '附近浏览', needs: ['place_id'], description: '靠近某个表内地点，停停走走。' },
+  { id: 'patrol_segment', label: '街段巡逻', needs: ['from_place_id', 'to_place_id'], description: '在两个表内地点之间巡逻式移动。' },
+  { id: 'approach_player', label: '靠近玩家', needs: [], description: '靠近玩家并面对玩家。' },
+  { id: 'follow_player', label: '跟随玩家', needs: [], description: '跟随玩家，保持一小段距离。' },
+  { id: 'walk_with_player', label: '陪玩家走', needs: ['to_place_id?'], description: '和玩家一起向某个表内地点走，地点可选。' },
+  { id: 'idle_at_place', label: '地点停留', needs: ['place_id'], description: '在某个表内地点附近站立、等待、转向或说话。' }
+];
+const commercialV2BehaviorTreeSkeleton = {
+  version: 'single-character-street-runtime-v1',
+  root: {
+    id: 'street_character_root',
+    type: 'PrioritySelector',
+    children: [
+      { id: 'player_interaction', branch_kind: 'special', priority: 100, trigger: 'player_event.active', branches: ['greet', 'small_talk', 'ask_current_action', 'suggest_destination', 'treat_food', 'comfort'] },
+      { id: 'hard_needs', branch_kind: 'base', priority: 82, trigger: 'runtime_state.need_high', branches: ['base_needs_cafe_snack', 'base_needs_home_rest'] },
+      { id: 'routine_goal', branch_kind: 'base', priority: 76, trigger: 'runtime_state.routine_tick', branches: ['base_routine_home_agency', 'base_routine_sign_check'] },
+      { id: 'place_affordance', branch_kind: 'base', priority: 68, trigger: 'location.has_affordance', branches: ['base_affordance_agency_window', 'base_affordance_cafe_pause'] },
+      { id: 'background_mood', branch_kind: 'base', priority: 60, trigger: 'runtime_state.mood_idle', branches: ['base_background_walk_cafe', 'base_background_slow_down'] },
+      { id: 'curiosity', branch_kind: 'base', priority: 52, trigger: 'nearby_place_or_player', branches: ['base_curiosity_player_glance', 'base_curiosity_window_watch'] },
+      { id: 'wander', branch_kind: 'base', priority: 36, trigger: 'otherwise', branches: ['base_wander_convenience_cafe', 'base_loop_cafe_front', 'base_patrol_agency_shop'] },
+      { id: 'idle_micro', branch_kind: 'base', priority: 20, trigger: 'idle', branches: ['base_idle_watch_street', 'base_idle_turn_pause'] }
+    ]
+  }
+};
+const commercialV2BehaviorSpecialNodeIds = [
+  'player_interaction'
+];
+const commercialV2BehaviorBaseNodeIds = [
+  'hard_needs',
+  'routine_goal',
+  'place_affordance',
+  'background_mood',
+  'curiosity',
+  'wander',
+  'idle_micro'
+];
+const commercialV2BehaviorRootNodeIds = [
+  ...commercialV2BehaviorSpecialNodeIds,
+  ...commercialV2BehaviorBaseNodeIds
+];
+const commercialV2BehaviorAutonomousNodeIds = [
+  'base_needs_cafe_snack',
+  'base_needs_home_rest',
+  'base_routine_home_agency',
+  'base_routine_sign_check',
+  'base_wander_convenience_cafe',
+  'base_loop_cafe_front',
+  'base_patrol_agency_shop',
+  'base_affordance_agency_window',
+  'base_affordance_cafe_pause',
+  'base_background_walk_cafe',
+  'base_background_slow_down',
+  'base_curiosity_player_glance',
+  'base_curiosity_window_watch',
+  'base_idle_watch_street',
+  'base_idle_turn_pause'
+];
+const commercialV2BehaviorNearbyAutonomousNodeIds = [
+  'base_curiosity_player_glance',
+  'base_idle_watch_street',
+  'base_loop_cafe_front',
+  'base_affordance_agency_window',
+  'base_wander_convenience_cafe'
+];
+const commercialV2BehaviorDefaultBaseActionNodeIds = [
+  'base_needs_cafe_snack',
+  'base_needs_home_rest',
+  'base_routine_home_agency',
+  'base_routine_sign_check',
+  'base_affordance_agency_window',
+  'base_affordance_cafe_pause',
+  'base_background_walk_cafe',
+  'base_background_slow_down',
+  'base_curiosity_player_glance',
+  'base_curiosity_window_watch',
+  'base_wander_convenience_cafe',
+  'base_loop_cafe_front',
+  'base_patrol_agency_shop',
+  'base_idle_watch_street',
+  'base_idle_turn_pause'
+];
+const commercialV2BehaviorLastDemoBranch = {
+  branch_id: 'greet_flustered_cafe_20260530',
+  title: '咖啡馆前被Nana打招呼，慌乱回应',
+  priority: 90,
+  ttl_ms: 45000,
+  trigger: {
+    player_action: 'greet',
+    place_id: 'restaurant'
+  },
+  summary: '昨晚那张照片之后第一次在现实里碰面，脑子还没准备好怎么面对她，被打招呼的瞬间整个人僵了一下。',
+  steps: [
+    { action: 'go_to_place', place_id: 'restaurant', movement_style: 'hesitating' },
+    { action: 'emote', text: '脚步顿了一下，视线闪躲' },
+    { action: 'face_player' },
+    { action: 'wait', duration_ms: 1200 },
+    { action: 'say', text: '……你怎么在这。' },
+    { action: 'emote', text: '耳尖微红，把手插进口袋里' },
+    { action: 'say', text: '昨晚……算了，没事。吃了吗。' },
+    { action: 'idle_at_place', place_id: 'restaurant', movement_style: 'slow' },
+    {
+      action: 'offer_choices',
+      choices: [
+        { id: 'sit_down', label: '一起进去坐坐？', trigger: 'request_company' },
+        { id: 'ask_photo', label: '昨晚那个……', trigger: 'small_talk' },
+        { id: 'leave_quietly', label: '不打扰你了', trigger: 'comfort' },
+        { id: 'treat_coffee', label: '请你喝咖啡', trigger: 'treat_food' }
+      ]
+    }
+  ]
+};
+function createCommercialV2PresetInteractionBranch(actionId, placeId = 'restaurant', placeLabel = '街区') {
+  const safeActionId = commercialV2BehaviorActionIds.has(actionId) ? actionId : 'greet';
+  const targetPlaceId = String(placeId || 'restaurant');
+  const targetPlaceLabel = String(placeLabel || '街区');
+  const commonChoices = [
+    { id: 'ask_more', label: '继续问他', trigger: 'small_talk', place_id: targetPlaceId },
+    { id: 'walk_together', label: '一起走走', trigger: 'request_company', place_id: targetPlaceId },
+    { id: 'tease_lightly', label: '逗他一下', trigger: 'joke', place_id: targetPlaceId },
+    { id: 'comfort_softly', label: '认真回应', trigger: 'comfort', place_id: targetPlaceId }
+  ];
+  const templates = {
+    greet: {
+      title: '预制：靠近打招呼',
+      summary: '玩家靠近角色并打招呼，角色先给一个短回应，再等待玩家选择后续。',
+      steps: [
+        { action: 'face_player' },
+        { action: 'emote', text: '停下脚步，抬眼看向你' },
+        { action: 'say', text: '你来了。刚刚一直在这附近吗？' },
+        { action: 'offer_choices', text: '你要怎么接话？', choices: commonChoices }
+      ]
+    },
+    small_talk: {
+      title: '预制：街边闲聊',
+      summary: '玩家发起闲聊，角色用街区当前气氛接住话题。',
+      steps: [
+        { action: 'face_player' },
+        { action: 'say', text: '今天这条街有点吵，但还挺适合闲逛。' },
+        { action: 'emote', text: '往街边看了一眼，又把注意力放回你身上' },
+        { action: 'offer_choices', text: '你想聊什么？', choices: [
+          { id: 'ask_street', label: '问街上情况', trigger: 'ask_current_action', place_id: targetPlaceId },
+          { id: 'ask_mood', label: '问他心情', trigger: 'small_talk', place_id: targetPlaceId },
+          { id: 'invite_walk', label: '边走边聊', trigger: 'request_company', place_id: targetPlaceId },
+          { id: 'joke_back', label: '开个玩笑', trigger: 'joke', place_id: targetPlaceId }
+        ] }
+      ]
+    },
+    ask_current_action: {
+      title: '预制：问他在干嘛',
+      summary: '玩家询问角色当前行动，角色先解释自己正在做什么。',
+      steps: [
+        { action: 'face_player' },
+        { action: 'say', text: '没什么特别的，在把今天要做的事排一下。' },
+        { action: 'say', text: `刚好走到${targetPlaceLabel}附近，就顺路看看。` },
+        { action: 'offer_choices', text: '你要怎么继续？', choices: [
+          { id: 'ask_detail', label: '追问细节', trigger: 'ask_current_action', place_id: targetPlaceId },
+          { id: 'help_him', label: '说我帮你', trigger: 'request_help', place_id: targetPlaceId },
+          { id: 'go_elsewhere', label: '叫他换地方', trigger: 'suggest_destination', place_id: targetPlaceId },
+          { id: 'stay_with_him', label: '陪他一会儿', trigger: 'request_company', place_id: targetPlaceId }
+        ] }
+      ]
+    },
+    ask_destination: {
+      title: '预制：问他去哪儿',
+      summary: '玩家追问角色下一步目的地，角色先给一个模糊回答。',
+      steps: [
+        { action: 'face_player' },
+        { action: 'say', text: `可能去${targetPlaceLabel}，也可能只是路过。` },
+        { action: 'emote', text: '像是在等你决定要不要一起走' },
+        { action: 'offer_choices', text: '你要怎么决定？', choices: [
+          { id: 'lead_place', label: `带他去${targetPlaceLabel}`, trigger: 'suggest_destination', place_id: targetPlaceId },
+          { id: 'walk_with_me', label: '让他陪你走', trigger: 'request_company', place_id: targetPlaceId },
+          { id: 'ask_reason', label: '问为什么去', trigger: 'small_talk', place_id: targetPlaceId },
+          { id: 'tease_direction', label: '故意逗他', trigger: 'joke', place_id: targetPlaceId }
+        ] }
+      ]
+    },
+    suggest_destination: {
+      title: '预制：玩家提出目的地',
+      summary: '玩家邀请角色去指定地点，角色先判断要不要跟上。',
+      steps: [
+        { action: 'face_player' },
+        { action: 'say', text: `去${targetPlaceLabel}？可以，但你别走太快。` },
+        { action: 'walk_with_player', to_place_id: targetPlaceId, movement_style: 'walk_together' },
+        { action: 'offer_choices', text: '到了附近以后，你要做什么？', choices: [
+          { id: 'ask_arrived', label: '问他感觉', trigger: 'small_talk', place_id: targetPlaceId },
+          { id: 'ask_help', label: '请他帮忙', trigger: 'request_help', place_id: targetPlaceId },
+          { id: 'treat_here', label: '说请他吃点', trigger: 'treat_food', place_id: targetPlaceId },
+          { id: 'keep_walking', label: '继续一起走', trigger: 'request_company', place_id: targetPlaceId }
+        ] }
+      ]
+    },
+    request_company: {
+      title: '预制：请求陪伴',
+      summary: '玩家想让角色陪自己一会儿，角色先靠近并回应。',
+      steps: [
+        { action: 'approach_player', movement_style: 'soft' },
+        { action: 'face_player' },
+        { action: 'say', text: '行。我陪你走一段。' },
+        { action: 'offer_choices', text: '你想怎么和他相处？', choices: [
+          { id: 'walk_quietly', label: '安静走一会儿', trigger: 'request_company', place_id: targetPlaceId },
+          { id: 'say_worry', label: '说有点累', trigger: 'comfort', place_id: targetPlaceId },
+          { id: 'ask_plan', label: '问他的计划', trigger: 'ask_current_action', place_id: targetPlaceId },
+          { id: 'go_cafe', label: '去坐一下', trigger: 'treat_food', place_id: 'restaurant' }
+        ] }
+      ]
+    },
+    treat_food: {
+      title: '预制：玩家请吃东西',
+      summary: '玩家提出请角色吃东西，角色先接住好意。',
+      steps: [
+        { action: 'face_player' },
+        { action: 'say', text: '你请？那我可记住了。' },
+        { action: 'walk_with_player', to_place_id: targetPlaceId || 'restaurant', movement_style: 'walk_together' },
+        { action: 'offer_choices', text: '你要怎么继续？', choices: [
+          { id: 'order_food', label: '让他点单', trigger: 'treat_food', place_id: targetPlaceId || 'restaurant' },
+          { id: 'ask_preference', label: '问他想吃什么', trigger: 'small_talk', place_id: targetPlaceId || 'restaurant' },
+          { id: 'tease_debt', label: '说他欠你一次', trigger: 'joke', place_id: targetPlaceId || 'restaurant' },
+          { id: 'sit_together', label: '坐下聊聊', trigger: 'request_company', place_id: targetPlaceId || 'restaurant' }
+        ] }
+      ]
+    },
+    request_help: {
+      title: '预制：请求帮忙',
+      summary: '玩家请角色帮忙，角色先确认事情大小。',
+      steps: [
+        { action: 'face_player' },
+        { action: 'say', text: '帮忙可以。先说清楚，别又只告诉我一半。' },
+        { action: 'emote', text: '嘴上嫌麻烦，但已经往你这边站近了点' },
+        { action: 'offer_choices', text: '你要他帮什么？', choices: [
+          { id: 'small_errand', label: '跑个小腿', trigger: 'request_help', place_id: targetPlaceId },
+          { id: 'go_together', label: '一起过去', trigger: 'suggest_destination', place_id: targetPlaceId },
+          { id: 'need_comfort', label: '其实想被安慰', trigger: 'comfort', place_id: targetPlaceId },
+          { id: 'make_joke', label: '故意说得很严重', trigger: 'joke', place_id: targetPlaceId }
+        ] }
+      ]
+    },
+    joke: {
+      title: '预制：开玩笑',
+      summary: '玩家开玩笑试探角色反应，角色先吐槽再接梗。',
+      steps: [
+        { action: 'face_player' },
+        { action: 'emote', text: '愣了一下，然后忍不住笑了' },
+        { action: 'say', text: '你这个笑话很危险，差一点就不好笑了。' },
+        { action: 'offer_choices', text: '你要怎么接梗？', choices: [
+          { id: 'joke_more', label: '继续逗他', trigger: 'joke', place_id: targetPlaceId },
+          { id: 'turn_serious', label: '突然认真', trigger: 'comfort', place_id: targetPlaceId },
+          { id: 'invite_walk', label: '边走边闹', trigger: 'request_company', place_id: targetPlaceId },
+          { id: 'ask_reaction', label: '问他笑什么', trigger: 'small_talk', place_id: targetPlaceId }
+        ] }
+      ]
+    },
+    comfort: {
+      title: '预制：请求安慰',
+      summary: '玩家想被安慰，角色先停下来认真回应。',
+      steps: [
+        { action: 'approach_player', movement_style: 'gentle' },
+        { action: 'face_player' },
+        { action: 'say', text: '先别急着硬撑。你说，我听着。' },
+        { action: 'offer_choices', text: '你要怎么回应他？', choices: [
+          { id: 'tell_truth', label: '说实话', trigger: 'comfort', place_id: targetPlaceId },
+          { id: 'ask_company', label: '让他陪你', trigger: 'request_company', place_id: targetPlaceId },
+          { id: 'change_topic', label: '换个轻松话题', trigger: 'small_talk', place_id: targetPlaceId },
+          { id: 'pretend_ok', label: '假装没事', trigger: 'joke', place_id: targetPlaceId }
+        ] }
+      ]
+    }
+  };
+  const branch = templates[safeActionId] || templates.greet;
+  return {
+    branch_id: `preset_${safeActionId}_${targetPlaceId}`,
+    title: branch.title,
+    priority: 88,
+    ttl_ms: 60000,
+    trigger: {
+      player_action: safeActionId,
+      place_id: targetPlaceId
+    },
+    summary: branch.summary,
+    steps: branch.steps,
+    branch_kind: 'special'
+  };
+}
+const commercialV2BehaviorDefaultConfig = {
+  api_endpoint: '',
+  api_key: '',
+  model_name: ''
+};
+function createCommercialV2BehaviorTreeState() {
+  const nodes = {
+    street_character_root: {
+      id: 'street_character_root',
+      type: 'PrioritySelector',
+      title: '街区角色根节点',
+      children_ids: commercialV2BehaviorRootNodeIds
+    },
+    player_interaction: {
+      id: 'player_interaction',
+      type: 'Selector',
+      title: '玩家特殊互动枝',
+      branch_kind: 'special',
+      priority: 100,
+      trigger: 'player_event.active',
+      summary: '玩家靠近、点击互动、选择回应后，AI 只局部更新这里的后续枝丫。',
+      children_ids: []
+    },
+    hard_needs: {
+      id: 'hard_needs',
+      type: 'Selector',
+      title: '硬需求枝',
+      branch_kind: 'base',
+      priority: 82,
+      trigger: 'runtime_state.need_high',
+      summary: '无互动时，角色根据饥饿、精力、压力等状态选择自己的行动。',
+      children_ids: ['base_needs_cafe_snack', 'base_needs_home_rest']
+    },
+    routine_goal: {
+      id: 'routine_goal',
+      type: 'Selector',
+      title: '本地例行枝',
+      branch_kind: 'base',
+      priority: 76,
+      trigger: 'runtime_state.routine_tick',
+      summary: '无互动时，角色按本地默认节奏活动；不由私聊或商业街活动触发。',
+      children_ids: ['base_routine_home_agency', 'base_routine_sign_check']
+    },
+    place_affordance: {
+      id: 'place_affordance',
+      type: 'Selector',
+      title: '地点能力枝',
+      branch_kind: 'base',
+      priority: 68,
+      trigger: 'location.has_affordance',
+      summary: '无互动时，角色会利用附近建筑能力，例如看房源、买东西、在咖啡馆停留。',
+      children_ids: ['base_affordance_agency_window', 'base_affordance_cafe_pause']
+    },
+    background_mood: {
+      id: 'background_mood',
+      type: 'Selector',
+      title: '背景情绪枝',
+      branch_kind: 'base',
+      priority: 60,
+      trigger: 'runtime_state.mood_idle',
+      summary: '大输入只影响语气/轻微情绪，不因私聊或商业街活动触发移动。',
+      children_ids: ['base_background_walk_cafe', 'base_background_slow_down']
+    },
+    curiosity: {
+      id: 'curiosity',
+      type: 'Selector',
+      title: '好奇心枝',
+      branch_kind: 'base',
+      priority: 52,
+      trigger: 'nearby_place_or_player',
+      summary: '无互动时，角色偶尔看向玩家或看向建筑，但不直接进入对话。',
+      children_ids: ['base_curiosity_player_glance', 'base_curiosity_window_watch']
+    },
+    wander: {
+      id: 'wander',
+      type: 'Selector',
+      title: '自由活动枝',
+      branch_kind: 'base',
+      priority: 36,
+      trigger: 'otherwise',
+      summary: '无互动时的默认街区移动循环。',
+      children_ids: ['base_wander_convenience_cafe', 'base_loop_cafe_front', 'base_patrol_agency_shop']
+    },
+    idle_micro: {
+      id: 'idle_micro',
+      type: 'Selector',
+      title: '微动作枝',
+      branch_kind: 'base',
+      priority: 20,
+      trigger: 'idle',
+      summary: '没有更强目标时，角色做轻量停留，不打断玩家。',
+      children_ids: ['base_idle_watch_street', 'base_idle_turn_pause']
+    },
+    base_needs_cafe_snack: {
+      id: 'base_needs_cafe_snack',
+      type: 'ActionSequence',
+      title: '基础：去咖啡馆补一点能量',
+      branch_kind: 'base',
+      priority: 82,
+      trigger: 'runtime_state.hunger_or_low_energy',
+      summary: '角色无互动时，如果状态偏低，会慢慢挪到咖啡馆附近停一会儿。',
+      ttl_ms: 38000,
+      steps: [
+        { action: 'go_to_place', place_id: 'restaurant', movement_style: 'slow' },
+        { action: 'say', text: '先买点热的，脑子才转得动。', duration_ms: 1600 },
+        { action: 'idle_at_place', place_id: 'restaurant', movement_style: 'resting' },
+        { action: 'emote', text: '低头闻了闻咖啡香气', duration_ms: 1400 },
+        { action: 'wait', duration_ms: 1800 }
+      ]
+    },
+    base_needs_home_rest: {
+      id: 'base_needs_home_rest',
+      type: 'ActionSequence',
+      title: '基础：回公寓门口缓一下',
+      branch_kind: 'base',
+      priority: 80,
+      trigger: 'runtime_state.energy_low',
+      summary: '角色无互动时，精力低会回公寓住宅附近短暂停留。',
+      ttl_ms: 36000,
+      steps: [
+        { action: 'go_to_place', place_id: 'home_exit', movement_style: 'tired' },
+        { action: 'say', text: '回门口站一会儿就好。', duration_ms: 1500 },
+        { action: 'idle_at_place', place_id: 'home_exit', movement_style: 'quiet' },
+        { action: 'emote', text: '肩膀松下来一点', duration_ms: 1300 },
+        { action: 'wait', duration_ms: 1500 }
+      ]
+    },
+    base_routine_home_agency: {
+      id: 'base_routine_home_agency',
+      type: 'ActionSequence',
+      title: '基础：从公寓走到中介所',
+      branch_kind: 'base',
+      priority: 76,
+      trigger: 'runtime_state.routine_tick',
+      summary: '角色无互动时，按本地默认节奏在公寓住宅和房产中介所之间移动。',
+      ttl_ms: 42000,
+      steps: [
+        { action: 'go_to_place', place_id: 'home_exit', movement_style: 'normal' },
+        { action: 'emote', text: '确认了一下随身小包', duration_ms: 1200 },
+        { action: 'wait', duration_ms: 800 },
+        { action: 'go_to_place', place_id: 'agency', movement_style: 'normal' },
+        { action: 'say', text: '看看今天窗上有没有新东西。', duration_ms: 1600 },
+        { action: 'idle_at_place', place_id: 'agency', movement_style: 'checking' }
+      ]
+    },
+    base_routine_sign_check: {
+      id: 'base_routine_sign_check',
+      type: 'ActionSequence',
+      title: '基础：看一眼街边招牌',
+      branch_kind: 'base',
+      priority: 74,
+      trigger: 'runtime_state.routine_tick',
+      summary: '角色无互动时，会靠近便利店或中介附近看招牌，不读取商业街活动公告。',
+      ttl_ms: 38000,
+      steps: [
+        { action: 'browse_near', place_id: 'convenience', movement_style: 'checking_notice' },
+        { action: 'say', text: '这个牌子是不是换过位置？', duration_ms: 1600 },
+        { action: 'wait', duration_ms: 1400 },
+        { action: 'idle_at_place', place_id: 'convenience', movement_style: 'thinking' }
+      ]
+    },
+    base_affordance_agency_window: {
+      id: 'base_affordance_agency_window',
+      type: 'ActionSequence',
+      title: '基础：在中介所前看橱窗',
+      branch_kind: 'base',
+      priority: 68,
+      trigger: 'location.affordance.agency',
+      summary: '角色无互动时，会在房产中介所前停停走走。',
+      ttl_ms: 40000,
+      steps: [
+        { action: 'browse_near', place_id: 'agency', movement_style: 'window_shopping' },
+        { action: 'say', text: '这套采光好像还行。', duration_ms: 1500 },
+        { action: 'wait', duration_ms: 1200 },
+        { action: 'emote', text: '指尖在橱窗前轻轻停了一下', duration_ms: 1400 },
+        { action: 'loop_in_front_of', place_id: 'agency', movement_style: 'small_loop' }
+      ]
+    },
+    base_affordance_cafe_pause: {
+      id: 'base_affordance_cafe_pause',
+      type: 'ActionSequence',
+      title: '基础：咖啡馆门口停顿',
+      branch_kind: 'base',
+      priority: 66,
+      trigger: 'location.affordance.restaurant',
+      summary: '角色无互动时，会在咖啡馆附近停顿，像是在犹豫要不要进去。',
+      ttl_ms: 38000,
+      steps: [
+        { action: 'browse_near', place_id: 'restaurant', movement_style: 'hesitating' },
+        { action: 'say', text: '进去坐一下……还是算了。', duration_ms: 1700 },
+        { action: 'wait', duration_ms: 1400 },
+        { action: 'idle_at_place', place_id: 'restaurant', movement_style: 'slow' }
+      ]
+    },
+    base_background_walk_cafe: {
+      id: 'base_background_walk_cafe',
+      type: 'ActionSequence',
+      title: '基础：心情放慢到咖啡馆',
+      branch_kind: 'base',
+      priority: 60,
+      trigger: 'runtime_state.mood_idle',
+      summary: '角色无互动时，根据轻量情绪在咖啡馆附近慢下来；不由私聊或商业街活动触发。',
+      ttl_ms: 38000,
+      steps: [
+        { action: 'go_to_place', place_id: 'restaurant', movement_style: 'distracted' },
+        { action: 'emote', text: '走着走着忽然慢了下来', duration_ms: 1400 },
+        { action: 'wait', duration_ms: 1300 },
+        { action: 'say', text: '今天街上有点安静。', duration_ms: 1500 },
+        { action: 'idle_at_place', place_id: 'restaurant', movement_style: 'quiet' }
+      ]
+    },
+    base_background_slow_down: {
+      id: 'base_background_slow_down',
+      type: 'ActionSequence',
+      title: '基础：路过时慢下来',
+      branch_kind: 'base',
+      priority: 58,
+      trigger: 'runtime_state.mood_idle',
+      summary: '角色无互动时，轻量情绪会表现为走位节奏变化。',
+      ttl_ms: 36000,
+      steps: [
+        { action: 'patrol_segment', from_place_id: 'agency', to_place_id: 'restaurant', movement_style: 'slow' },
+        { action: 'say', text: '慢慢走也不错。', duration_ms: 1400 },
+        { action: 'wait', duration_ms: 1200 },
+        { action: 'patrol_segment', from_place_id: 'restaurant', to_place_id: 'agency', movement_style: 'slow' }
+      ]
+    },
+    base_curiosity_player_glance: {
+      id: 'base_curiosity_player_glance',
+      type: 'ActionSequence',
+      title: '基础：注意到玩家但不打断',
+      branch_kind: 'base',
+      priority: 52,
+      trigger: 'nearby_player.no_interaction',
+      summary: '角色无互动时，靠近玩家一点点，但不弹正式对话。',
+      ttl_ms: 30000,
+      steps: [
+        { action: 'approach_player', movement_style: 'curious' },
+        { action: 'face_player' },
+        { action: 'emote', text: '看了你一眼，又假装在看路', duration_ms: 1600 },
+        { action: 'wait', duration_ms: 900 }
+      ]
+    },
+    base_curiosity_window_watch: {
+      id: 'base_curiosity_window_watch',
+      type: 'ActionSequence',
+      title: '基础：看看橱窗和路人',
+      branch_kind: 'base',
+      priority: 50,
+      trigger: 'nearby_place',
+      summary: '角色无互动时，随机在当前街段附近停顿。',
+      ttl_ms: 34000,
+      steps: [
+        { action: 'browse_near', place_id: 'convenience', movement_style: 'look_around' },
+        { action: 'say', text: '便利店灯总是这么亮。', duration_ms: 1500 },
+        { action: 'wait', duration_ms: 1100 },
+        { action: 'idle_at_place', place_id: 'convenience', movement_style: 'watching' }
+      ]
+    },
+    base_wander_convenience_cafe: {
+      id: 'base_wander_convenience_cafe',
+      type: 'ActionSequence',
+      title: '基础：便利店和咖啡馆之间闲逛',
+      branch_kind: 'base',
+      priority: 36,
+      trigger: 'otherwise',
+      summary: '角色无互动时的默认平移闲逛路线。',
+      ttl_ms: 42000,
+      steps: [
+        { action: 'wander_between', from_place_id: 'convenience', to_place_id: 'restaurant', movement_style: 'window_shopping' },
+        { action: 'say', text: '从这边走过去刚好。', duration_ms: 1400 },
+        { action: 'wait', duration_ms: 1100 },
+        { action: 'wander_between', from_place_id: 'restaurant', to_place_id: 'convenience', movement_style: 'window_shopping' },
+        { action: 'emote', text: '回头看了一眼咖啡馆门口', duration_ms: 1300 },
+        { action: 'wait', duration_ms: 900 }
+      ]
+    },
+    base_loop_cafe_front: {
+      id: 'base_loop_cafe_front',
+      type: 'ActionSequence',
+      title: '基础：咖啡馆门前小循环',
+      branch_kind: 'base',
+      priority: 34,
+      trigger: 'otherwise',
+      summary: '角色无互动时在咖啡馆前小范围活动。',
+      ttl_ms: 36000,
+      steps: [
+        { action: 'loop_in_front_of', place_id: 'restaurant', movement_style: 'small_loop' },
+        { action: 'say', text: '菜单换了吗？', duration_ms: 1300 },
+        { action: 'wait', duration_ms: 900 },
+        { action: 'browse_near', place_id: 'restaurant', movement_style: 'slow' }
+      ]
+    },
+    base_patrol_agency_shop: {
+      id: 'base_patrol_agency_shop',
+      type: 'ActionSequence',
+      title: '基础：中介所到便利店巡街',
+      branch_kind: 'base',
+      priority: 32,
+      trigger: 'otherwise',
+      summary: '角色无互动时在中介所和便利店之间来回移动。',
+      ttl_ms: 42000,
+      steps: [
+        { action: 'patrol_segment', from_place_id: 'agency', to_place_id: 'convenience', movement_style: 'patrol' },
+        { action: 'emote', text: '像是在给自己找个理由散步', duration_ms: 1500 },
+        { action: 'wait', duration_ms: 900 },
+        { action: 'patrol_segment', from_place_id: 'convenience', to_place_id: 'agency', movement_style: 'patrol' }
+      ]
+    },
+    base_idle_watch_street: {
+      id: 'base_idle_watch_street',
+      type: 'ActionSequence',
+      title: '基础：站在街边看人流',
+      branch_kind: 'base',
+      priority: 20,
+      trigger: 'idle',
+      summary: '角色无互动时短暂停留，不主动开启对话。',
+      ttl_ms: 26000,
+      steps: [
+        { action: 'idle_at_place', place_id: 'agency', movement_style: 'watching' },
+        { action: 'say', text: '人来人往的。', duration_ms: 1300 },
+        { action: 'wait', duration_ms: 1500 }
+      ]
+    },
+    base_idle_turn_pause: {
+      id: 'base_idle_turn_pause',
+      type: 'ActionSequence',
+      title: '基础：短暂停顿转向',
+      branch_kind: 'base',
+      priority: 18,
+      trigger: 'idle',
+      summary: '角色无互动时做极轻的站立变化。',
+      ttl_ms: 22000,
+      steps: [
+        { action: 'idle_at_place', place_id: 'convenience', movement_style: 'idle' },
+        { action: 'emote', text: '轻轻换了个站姿', duration_ms: 1200 },
+        { action: 'wait', duration_ms: 1200 }
+      ]
+    }
+  };
+  return {
+    tree_id: 'street_runtime_single_character',
+    schema: 'full_behavior_tree_patch_v1',
+    version: 1,
+    root_id: 'street_character_root',
+    active_node_id: '',
+    nodes,
+    memory: {},
+    patch_history: []
+  };
+}
+function normalizeCommercialBehaviorNodeId(value, fallback = 'node') {
+  const raw = String(value || '').trim().slice(0, 80);
+  const safe = raw
+    .replace(/[^\w\u4e00-\u9fa5-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return safe || `${fallback}_${Date.now().toString(36)}`;
+}
+function createCommercialBehaviorPatchFromBranch(branch, source = 'manual', patchMeta = {}) {
+  if (!branch || typeof branch !== 'object') return null;
+  const branchId = normalizeCommercialBehaviorNodeId(branch.branch_id || branch.id || patchMeta.node_id, 'branch');
+  const targetNodeId = normalizeCommercialBehaviorNodeId(patchMeta.target_node_id || patchMeta.targetNodeId || 'player_interaction', 'target');
+  return {
+    patch_id: normalizeCommercialBehaviorNodeId(patchMeta.patch_id || `patch_${branchId}_${Date.now().toString(36)}`, 'patch'),
+    source,
+    operation: 'upsert_child',
+    target_node_id: targetNodeId,
+    next_active_node_id: branchId,
+    reason: String(patchMeta.reason || branch.summary || '').slice(0, 180),
+    node: {
+      id: branchId,
+      type: 'ActionSequence',
+      title: String(branch.title || '行为枝丫').slice(0, 80),
+      priority: Number(branch.priority) || 90,
+      trigger: branch.trigger || {},
+      summary: String(branch.summary || '').slice(0, 180),
+      ttl_ms: Number(branch.ttl_ms || branch.ttlMs) || 45000,
+      steps: Array.isArray(branch.steps) ? branch.steps : [],
+      branch_kind: branch.branch_kind || branch.branchKind || (targetNodeId === 'player_interaction' ? 'special' : 'base'),
+      source
+    },
+    memory_delta: patchMeta.memory_delta || patchMeta.memoryDelta || {}
+  };
+}
+function normalizeCommercialBehaviorPatch(rawPatch, fallbackBranch = null, source = 'ai') {
+  const patch = rawPatch && typeof rawPatch === 'object' ? rawPatch : null;
+  const rawNode = patch?.node && typeof patch.node === 'object' ? patch.node : null;
+  const branchLike = rawNode?.steps ? rawNode : (fallbackBranch || patch?.branch || null);
+  if (!branchLike) return null;
+  const branch = {
+    branch_id: branchLike.branch_id || branchLike.id || patch?.next_active_node_id || patch?.nextActiveNodeId,
+    title: branchLike.title,
+    priority: branchLike.priority,
+    ttl_ms: branchLike.ttl_ms || branchLike.ttlMs,
+    trigger: branchLike.trigger,
+    summary: branchLike.summary,
+    steps: branchLike.steps,
+    branch_kind: branchLike.branch_kind || branchLike.branchKind
+  };
+  const normalized = createCommercialBehaviorPatchFromBranch(branch, source, {
+    patch_id: patch?.patch_id || patch?.patchId,
+    target_node_id: patch?.target_node_id || patch?.targetNodeId,
+    reason: patch?.reason,
+    memory_delta: patch?.memory_delta || patch?.memoryDelta
+  });
+  if (!normalized) return null;
+  normalized.operation = patch?.operation || 'upsert_child';
+  normalized.next_active_node_id = normalizeCommercialBehaviorNodeId(
+    patch?.next_active_node_id || patch?.nextActiveNodeId || normalized.next_active_node_id,
+    'active'
+  );
+  normalized.node.id = normalizeCommercialBehaviorNodeId(rawNode?.id || rawNode?.node_id || normalized.node.id, 'node');
+  if (normalized.next_active_node_id !== normalized.node.id && !patch?.next_active_node_id && !patch?.nextActiveNodeId) {
+    normalized.next_active_node_id = normalized.node.id;
+  }
+  return normalized;
+}
+function applyCommercialBehaviorTreePatch(treeState, rawPatch) {
+  const patch = normalizeCommercialBehaviorPatch(rawPatch, rawPatch?.branch, rawPatch?.source || 'manual');
+  if (!patch?.node?.steps?.length) return { tree: treeState || createCommercialV2BehaviorTreeState(), patch: null, activeBranch: null };
+  const currentTree = treeState && typeof treeState === 'object' ? treeState : createCommercialV2BehaviorTreeState();
+  const nodes = {
+    ...createCommercialV2BehaviorTreeState().nodes,
+    ...(currentTree.nodes || {})
+  };
+  const targetNodeId = nodes[patch.target_node_id] ? patch.target_node_id : 'player_interaction';
+  const targetNode = nodes[targetNodeId] || { id: targetNodeId, type: 'Selector', children_ids: [] };
+  const branchKind = patch.node.branch_kind || patch.node.branchKind || (targetNodeId === 'player_interaction' ? 'special' : 'base');
+  nodes[patch.node.id] = {
+    ...(nodes[patch.node.id] || {}),
+    ...patch.node,
+    id: patch.node.id,
+    branch_kind: branchKind
+  };
+  const nextChildren = [
+    patch.node.id,
+    ...(Array.isArray(targetNode.children_ids) ? targetNode.children_ids : []).filter((id) => id !== patch.node.id)
+  ].slice(0, 12);
+  nodes[targetNodeId] = {
+    ...targetNode,
+    children_ids: nextChildren
+  };
+  const historyItem = {
+    patch_id: patch.patch_id,
+    source: patch.source,
+    operation: patch.operation,
+    target_node_id: targetNodeId,
+    node_id: patch.node.id,
+    title: patch.node.title,
+    created_at: new Date().toISOString(),
+    reason: patch.reason || ''
+  };
+  const nextTree = {
+    ...currentTree,
+    schema: 'full_behavior_tree_patch_v1',
+    version: (Number(currentTree.version) || 1) + 1,
+    root_id: currentTree.root_id || 'street_character_root',
+    active_node_id: patch.next_active_node_id || patch.node.id,
+    nodes,
+    memory: {
+      ...(currentTree.memory || {}),
+      ...(patch.memory_delta || {}),
+      last_patch_id: patch.patch_id,
+      last_active_node_id: patch.next_active_node_id || patch.node.id
+    },
+    patch_history: [historyItem, ...((currentTree.patch_history || []).filter((item) => item.patch_id !== patch.patch_id))].slice(0, 24)
+  };
+  return {
+    tree: nextTree,
+    patch,
+    activeBranch: {
+      branch_id: patch.node.id,
+      title: patch.node.title,
+      priority: patch.node.priority,
+      ttl_ms: patch.node.ttl_ms,
+      trigger: patch.node.trigger || {},
+      summary: patch.node.summary || '',
+      steps: patch.node.steps || [],
+      branch_kind: branchKind
+    }
+  };
+}
+function createCommercialBehaviorBranchFromNode(node) {
+  if (!node || !Array.isArray(node.steps) || !node.steps.length) return null;
+  return {
+    branch_id: node.id,
+    title: node.title || node.id,
+    priority: node.priority,
+    ttl_ms: node.ttl_ms || node.ttlMs,
+    trigger: node.trigger || {},
+    summary: node.summary || '',
+    steps: node.steps,
+    branch_kind: node.branch_kind || node.branchKind || 'base'
+  };
+}
 const commercialV2PlayerCharacterById = new Map(commercialV2PlayerCharacters.map((character) => [character.id, character]));
 const createCommercialV2PlayerState = (character) => ({
   ...commercialV2PlayerInitial,
@@ -60,9 +879,81 @@ const commercialV2PlayerFrame = (player, fileName) => {
   const character = getCommercialV2PlayerCharacter(player);
   return `${character.spriteBase}/${fileName}?v=${character.assetVersion}`;
 };
+function readStoredCommercialBehaviorConfig() {
+  if (typeof localStorage === 'undefined') return commercialV2BehaviorDefaultConfig;
+  try {
+    const raw = localStorage.getItem(commercialV2BehaviorConfigStorageKey);
+    if (!raw) return commercialV2BehaviorDefaultConfig;
+    const parsed = JSON.parse(raw);
+    return {
+      ...commercialV2BehaviorDefaultConfig,
+      api_endpoint: String(parsed.api_endpoint || ''),
+      model_name: String(parsed.model_name || '')
+    };
+  } catch (error) {
+    localStorage.removeItem(commercialV2BehaviorConfigStorageKey);
+    return commercialV2BehaviorDefaultConfig;
+  }
+}
+function readStoredCommercialBehaviorTreeState() {
+  const fallback = createCommercialV2BehaviorTreeState();
+  if (typeof localStorage === 'undefined') return fallback;
+  try {
+    const raw = localStorage.getItem(commercialV2BehaviorTreeStorageKey);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return fallback;
+    const nodes = {
+      ...fallback.nodes,
+      ...(parsed.nodes || {})
+    };
+    delete nodes.temporary_ai_branch;
+    delete nodes.city_agent_goal;
+    delete nodes.memory_echo;
+    delete nodes.base_schedule_home_agency;
+    delete nodes.base_schedule_notice_check;
+    delete nodes.base_memory_walk_cafe;
+    delete nodes.base_memory_slow_down;
+    nodes.street_character_root = {
+      ...fallback.nodes.street_character_root,
+      ...(nodes.street_character_root || {}),
+      children_ids: commercialV2BehaviorRootNodeIds
+    };
+    nodes.player_interaction = {
+      ...fallback.nodes.player_interaction,
+      ...(nodes.player_interaction || {}),
+      title: '玩家特殊互动枝',
+      branch_kind: 'special',
+      trigger: 'player_event.active'
+    };
+    commercialV2BehaviorBaseNodeIds.forEach((nodeId) => {
+      nodes[nodeId] = {
+        ...fallback.nodes[nodeId],
+        ...(nodes[nodeId] || {}),
+        branch_kind: 'base',
+        children_ids: fallback.nodes[nodeId]?.children_ids || []
+      };
+    });
+    commercialV2BehaviorDefaultBaseActionNodeIds.forEach((nodeId) => {
+      nodes[nodeId] = fallback.nodes[nodeId];
+    });
+    return {
+      ...fallback,
+      ...parsed,
+      root_id: 'street_character_root',
+      nodes,
+      memory: parsed.memory && typeof parsed.memory === 'object' ? parsed.memory : {},
+      patch_history: Array.isArray(parsed.patch_history) ? parsed.patch_history.slice(0, 24) : []
+    };
+  } catch (error) {
+    localStorage.removeItem(commercialV2BehaviorTreeStorageKey);
+    return fallback;
+  }
+}
 const commercialV2DefaultPlayerScale = 2;
 const commercialV2DefaultZoom = 0.85;
 const commercialV2PlayerSpeed = 220;
+const commercialV2BehaviorPlayerSpeed = 180;
 const commercialV2LayerBaseZIndex = 10000;
 const commercialV2LayerStepZIndex = 20;
 const commercialV2PlayerLayerGap = 10;
@@ -2718,7 +3609,7 @@ function getPointerStagePoint(event, stage, stageSize) {
   };
 }
 
-function CommercialStreetEditor() {
+function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   const stageRef = useRef(null);
   const canvasWrapRef = useRef(null);
   const loopScrollGuardRef = useRef(false);
@@ -2732,6 +3623,12 @@ function CommercialStreetEditor() {
   const playerRef = useRef(playersRef.current[commercialV2DefaultControlledPlayerId]);
   const playerSpawnedRef = useRef(false);
   const autoTravelRef = useRef(null);
+  const behaviorRuntimeRef = useRef(null);
+  const behaviorChoicePendingRef = useRef(false);
+  const behaviorTreeStateRef = useRef(null);
+  const autonomousBehaviorCooldownRef = useRef(Date.now() + commercialV2BehaviorAutonomousInitialDelayMs);
+  const autonomousBehaviorCursorRef = useRef(0);
+  const autonomousBehaviorRecentRef = useRef([]);
   const [initialLayout] = useState(() => readStoredCommercialLayout());
   const [items, setItemsState] = useState(initialLayout.items);
   const itemsRef = useRef(initialLayout.items);
@@ -2753,7 +3650,36 @@ function CommercialStreetEditor() {
   const [players, setPlayers] = useState(() => createCommercialV2PlayerStates());
   const [playerScale, setPlayerScale] = useState(commercialV2DefaultPlayerScale);
   const [playerActionBubble, setPlayerActionBubble] = useState('');
+  const [playerActionBubbles, setPlayerActionBubbles] = useState({});
+  const [activeBehaviorDialog, setActiveBehaviorDialog] = useState(null);
+  const [interactionMenuOpen, setInteractionMenuOpen] = useState(false);
   const [assetSilhouettes, setAssetSilhouettes] = useState({});
+  const [behaviorCharacters, setBehaviorCharacters] = useState([]);
+  const [behaviorCharacterId, setBehaviorCharacterId] = useState('');
+  const [behaviorAction, setBehaviorAction] = useState('greet');
+  const [behaviorPlaceId, setBehaviorPlaceId] = useState('');
+  const [behaviorPromptText, setBehaviorPromptText] = useState('');
+  const [behaviorConfig, setBehaviorConfig] = useState(() => readStoredCommercialBehaviorConfig());
+  const [behaviorModelOptions, setBehaviorModelOptions] = useState([]);
+  const [behaviorInput, setBehaviorInput] = useState(null);
+  const [behaviorOutput, setBehaviorOutput] = useState(null);
+  const [behaviorTreeState, setBehaviorTreeState] = useState(() => readStoredCommercialBehaviorTreeState());
+  const [behaviorPatchOutput, setBehaviorPatchOutput] = useState(null);
+  const [activeBehaviorBranch, setActiveBehaviorBranch] = useState(null);
+  const [behaviorStatus, setBehaviorStatus] = useState('等待读取大输入背景。');
+  const [behaviorModelStatus, setBehaviorModelStatus] = useState('默认使用绑定角色的模型配置；需要覆盖时再填写 URL 和 Key。');
+  const [behaviorLoading, setBehaviorLoading] = useState(false);
+  const [behaviorModelsLoading, setBehaviorModelsLoading] = useState(false);
+  const [behaviorShowKey, setBehaviorShowKey] = useState(false);
+  const [behaviorPanelCollapsed, setBehaviorPanelCollapsed] = useState(true);
+  const [behaviorFoldOpen, setBehaviorFoldOpen] = useState({
+    model: false,
+    constraints: false,
+    branchMap: false,
+    interaction: false,
+    runtime: true,
+    debug: false
+  });
   const stageSize = useMemo(() => getCommercialV2StageSize(segmentCount, items), [items, segmentCount]);
   const assetById = useMemo(() => new Map(commercialV2AssetCatalog.map((asset) => [asset.id, asset])), []);
   const walkableRects = useMemo(() => items
@@ -2804,6 +3730,22 @@ function CommercialStreetEditor() {
     .filter(Boolean), [assetById, items]);
   const placeLinks = useMemo(() => buildCommercialV2Places(items, assetById), [assetById, items]);
   const travelTargetOptions = useMemo(() => buildCommercialV2TravelTargetOptions(placeLinks), [placeLinks]);
+  const behaviorOrderedPlaces = useMemo(() => placeLinks
+    .filter((place) => commercialV2BehaviorImportantPlaceIds.has(place.placeId))
+    .slice()
+    .sort((a, b) => (a.anchor?.x || 0) - (b.anchor?.x || 0))
+    .map((place, index) => ({
+      ...place,
+      order: index + 1
+    })), [placeLinks]);
+  const behaviorPlaceOptions = useMemo(() => {
+    const importantOptions = behaviorOrderedPlaces.map((place) => ({
+      id: place.placeId,
+      label: place.name,
+      order: place.order
+    }));
+    return importantOptions.length ? importantOptions : travelTargetOptions;
+  }, [behaviorOrderedPlaces, travelTargetOptions]);
   const silhouetteAssetIds = useMemo(() => Array.from(new Set(items
     .filter((item) => isCommercialV2DynamicOcclusionItem(item, assetById.get(item.assetId)))
     .map((item) => item.assetId))), [assetById, items]);
@@ -2860,10 +3802,43 @@ function CommercialStreetEditor() {
   const player = players[controlledPlayerId]
     || players[commercialV2DefaultControlledPlayerId]
     || createCommercialV2PlayerState(commercialV2PlayerCharacters[0]);
+  const roleActor = players[commercialV2RoleActorId]
+    || createCommercialV2PlayerState(commercialV2PlayerCharacterById.get(commercialV2RoleActorId) || commercialV2PlayerCharacters[0]);
+  const userActor = players[commercialV2UserActorId]
+    || createCommercialV2PlayerState(commercialV2PlayerCharacterById.get(commercialV2UserActorId) || commercialV2PlayerCharacters[0]);
   const controlledPlayerCharacter = getCommercialV2PlayerCharacter(player);
+  const behaviorCharacter = behaviorCharacters.find((item) => item.id === behaviorCharacterId) || behaviorCharacters[0] || null;
+  const behaviorPrimaryActions = commercialV2BehaviorPrimaryActionIds
+    .map((id) => commercialV2BehaviorActions.find((item) => item.id === id))
+    .filter(Boolean);
+  const behaviorContextActions = commercialV2BehaviorContextActionIds
+    .map((id) => commercialV2BehaviorActions.find((item) => item.id === id))
+    .filter(Boolean);
+  const behaviorInteractionState = useMemo(() => {
+    const dx = getCommercialV2LoopDeltaX(roleActor.x, userActor.x, stageSize.width);
+    const dy = userActor.y - roleActor.y;
+    const distance = Math.hypot(dx, dy);
+    let side = dx >= 0 ? 'left' : 'right';
+    if (roleActor.x < 320) side = 'right';
+    if (roleActor.x > stageSize.width - 320) side = 'left';
+    const bodyY = roleActor.y - playerDimensions.height * 0.42 + playerDimensions.footOffset;
+    const menuY = Math.max(96, Math.min(stageSize.height - 90, bodyY));
+    return {
+      distance,
+      nearby: distance <= commercialV2BehaviorInteractionDistance,
+      x: wrapLoopCoordinate(roleActor.x, stageSize.width),
+      y: menuY,
+      side
+    };
+  }, [playerDimensions.footOffset, playerDimensions.height, roleActor.x, roleActor.y, stageSize.height, stageSize.width, userActor.x, userActor.y]);
 
-  const setPlayer = useCallback((updater) => {
-    const playerId = controlledPlayerIdRef.current;
+  useEffect(() => {
+    if (!behaviorInteractionState.nearby || activeBehaviorDialog) {
+      setInteractionMenuOpen(false);
+    }
+  }, [activeBehaviorDialog, behaviorInteractionState.nearby]);
+
+  const setPlayerById = useCallback((playerId, updater) => {
     const character = commercialV2PlayerCharacterById.get(playerId) || commercialV2PlayerCharacters[0];
     setPlayers((currentPlayers) => {
       const currentPlayer = currentPlayers[playerId] || createCommercialV2PlayerState(character);
@@ -2874,12 +3849,32 @@ function CommercialStreetEditor() {
         id: playerId,
         characterId: currentPlayer.characterId || playerId
       };
-      return {
+      const nextPlayers = {
         ...currentPlayers,
         [playerId]: nextPlayer
       };
+      playersRef.current = nextPlayers;
+      if (playerId === controlledPlayerIdRef.current) playerRef.current = nextPlayer;
+      return nextPlayers;
     });
   }, []);
+
+  const setPlayer = useCallback((updater) => {
+    setPlayerById(controlledPlayerIdRef.current, updater);
+  }, [setPlayerById]);
+
+  function setWorldPlayerBubble(playerId, text) {
+    const safeText = String(text || '').trim().slice(0, 80);
+    setPlayerActionBubbles((current) => {
+      const next = { ...current };
+      if (safeText) next[playerId] = safeText;
+      else delete next[playerId];
+      return next;
+    });
+    if (playerId === controlledPlayerIdRef.current) {
+      setPlayerActionBubble(safeText);
+    }
+  }
 
   const commitItems = useCallback((updater) => {
     const previous = itemsRef.current;
@@ -2930,6 +3925,91 @@ function CommercialStreetEditor() {
   }, [autoTargetId, travelTargetOptions]);
 
   useEffect(() => {
+    if (!behaviorPlaceOptions.length) {
+      setBehaviorPlaceId('');
+      return;
+    }
+    if (behaviorPlaceId && behaviorPlaceOptions.some((option) => option.id === behaviorPlaceId)) return;
+    const preferredTarget = behaviorPlaceOptions.find((option) => option.id === 'restaurant')
+      || behaviorPlaceOptions.find((option) => option.id === 'convenience')
+      || behaviorPlaceOptions[0];
+    setBehaviorPlaceId(preferredTarget.id);
+  }, [behaviorPlaceId, behaviorPlaceOptions]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(commercialV2BehaviorConfigStorageKey, JSON.stringify({
+        api_endpoint: behaviorConfig.api_endpoint || '',
+        model_name: behaviorConfig.model_name || ''
+      }));
+    } catch (error) {
+      // Ignore storage failures; the API key is intentionally never persisted here.
+    }
+  }, [behaviorConfig.api_endpoint, behaviorConfig.model_name]);
+
+  useEffect(() => {
+    behaviorTreeStateRef.current = behaviorTreeState;
+  }, [behaviorTreeState]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(commercialV2BehaviorTreeStorageKey, JSON.stringify(behaviorTreeState));
+    } catch (error) {
+      // The tree can still live in memory if browser storage is full or unavailable.
+    }
+  }, [behaviorTreeState]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      if (!behaviorCharacterId || !behaviorOrderedPlaces.length) return;
+      if (behaviorLoading || activeBehaviorDialog || interactionMenuOpen) return;
+      if (behaviorChoicePendingRef.current || behaviorRuntimeRef.current) return;
+      if (Date.now() < autonomousBehaviorCooldownRef.current) return;
+      const branch = pickAutonomousBehaviorBranch({ nearby: behaviorInteractionState.nearby });
+      if (!branch) return;
+      autonomousBehaviorCooldownRef.current = Date.now() + (behaviorInteractionState.nearby
+        ? commercialV2BehaviorNearbyCooldownMs
+        : commercialV2BehaviorAutonomousCooldownMs);
+      activateBehaviorBranch(branch, 'base');
+      setBehaviorStatus(`基础枝丫自动执行：${branch.title}`);
+    }, 700);
+    return () => window.clearInterval(intervalId);
+  }, [
+    activeBehaviorDialog,
+    behaviorCharacterId,
+    behaviorInteractionState.nearby,
+    behaviorLoading,
+    behaviorOrderedPlaces.length,
+    behaviorTreeState.version,
+    interactionMenuOpen
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const token = localStorage.getItem('cp_token') || localStorage.getItem('token') || '';
+    fetch(`${apiUrl}/city/characters`, {
+      headers: { Authorization: token ? `Bearer ${token}` : '' }
+    })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error(`角色列表读取失败 ${response.status}`)))
+      .then((data) => {
+        if (cancelled) return;
+        const characters = Array.isArray(data?.characters) ? data.characters : [];
+        setBehaviorCharacters(characters);
+        setBehaviorCharacterId((current) => {
+          if (current && characters.some((item) => item.id === current)) return current;
+          const preferred = characters.find((item) => Number(item.sys_survival ?? 1) === 1) || characters[0];
+          return preferred?.id || '';
+        });
+      })
+      .catch((error) => {
+        if (!cancelled) setBehaviorStatus(`角色列表读取失败：${error.message}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiUrl]);
+
+  useEffect(() => {
     const missingAssetIds = silhouetteAssetIds.filter((assetId) => assetSilhouettes[assetId] === undefined);
     if (!missingAssetIds.length) return undefined;
     let cancelled = false;
@@ -2969,6 +4049,1018 @@ function CommercialStreetEditor() {
       setNotice(next ? '地点锚点已显示：粉色点是角色后续自动前往和交互的位置。' : '地点锚点已隐藏，地点联动数据仍会保留在布局 JSON。');
       return next;
     });
+  }
+
+  function focusCanvasForKeyboard() {
+    const activeElement = document.activeElement;
+    const activeTag = activeElement?.tagName?.toLowerCase();
+    if (activeElement?.isContentEditable || activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
+      activeElement.blur();
+    }
+    canvasWrapRef.current?.focus?.({ preventScroll: true });
+  }
+
+  function updateBehaviorConfig(patch) {
+    setBehaviorConfig((current) => ({
+      ...current,
+      ...patch
+    }));
+  }
+
+  function getBehaviorAuthHeaders() {
+    const token = localStorage.getItem('cp_token') || localStorage.getItem('token') || '';
+    return {
+      'Content-Type': 'application/json',
+      Authorization: token ? `Bearer ${token}` : ''
+    };
+  }
+
+  async function fetchBehaviorJsonWithTimeout(url, options = {}, timeoutMs = 18000) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal
+      });
+      const data = await response.json().catch(() => ({}));
+      return { response, data };
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+
+  function resolveBehaviorAction(actionId = behaviorAction) {
+    return commercialV2BehaviorActions.find((item) => item.id === actionId) || commercialV2BehaviorActions[0];
+  }
+
+  function resolveBehaviorPlace(placeId = behaviorPlaceId) {
+    return behaviorPlaceOptions.find((option) => option.id === placeId)
+      || behaviorPlaceOptions.find((option) => option.id === 'restaurant')
+      || behaviorPlaceOptions[0]
+      || null;
+  }
+
+  function resolveBehaviorPlaceLink(placeOption) {
+    if (!placeOption) return null;
+    const targetId = String(placeOption.id || '');
+    return placeLinks.find((place) => (
+      place.placeId === targetId || place.locationId === targetId || place.locationIds?.includes(targetId)
+    )) || null;
+  }
+
+  function summarizeBehaviorActor(actorId, label) {
+    const character = commercialV2PlayerCharacterById.get(actorId) || commercialV2PlayerCharacters[0];
+    const actor = players[actorId] || createCommercialV2PlayerState(character);
+    return {
+      id: actorId,
+      label,
+      sprite: character.label,
+      direction: actor.direction,
+      moving: Boolean(actor.moving),
+      controlled: actorId === controlledPlayerId,
+      movement_mode: 'side_scrolling_semantic'
+    };
+  }
+
+  function summarizeBehaviorPlace(place) {
+    if (!place) return null;
+    return {
+      order: place.order || 0,
+      id: place.placeId,
+      location_id: place.locationId,
+      location_ids: place.locationIds || [],
+      label: place.name,
+      kind: place.kind,
+      actions: place.actions || [],
+      aliases: place.aliases || []
+    };
+  }
+
+  function summarizeBehaviorTreeForPayload() {
+    const nodes = behaviorTreeState?.nodes || {};
+    const compactNodes = {};
+    Object.entries(nodes).slice(0, 60).forEach(([id, node]) => {
+      compactNodes[id] = {
+        id: node.id || id,
+        type: node.type || 'Node',
+        title: node.title || '',
+        priority: node.priority,
+        trigger: node.trigger,
+        children_ids: Array.isArray(node.children_ids) ? node.children_ids.slice(0, 12) : [],
+        summary: node.summary || '',
+        steps: Array.isArray(node.steps) ? node.steps.slice(0, 10) : undefined,
+        branch_kind: node.branch_kind || node.branchKind || '',
+        source: node.source || ''
+      };
+    });
+    return {
+      tree_id: behaviorTreeState?.tree_id || 'street_runtime_single_character',
+      schema: behaviorTreeState?.schema || 'full_behavior_tree_patch_v1',
+      version: behaviorTreeState?.version || 1,
+      root_id: behaviorTreeState?.root_id || 'street_character_root',
+      active_node_id: behaviorTreeState?.active_node_id || '',
+      nodes: compactNodes,
+      memory: behaviorTreeState?.memory || {},
+      patch_history: Array.isArray(behaviorTreeState?.patch_history)
+        ? behaviorTreeState.patch_history.slice(0, 8)
+        : []
+    };
+  }
+
+  function buildBehaviorPayload(options = {}) {
+    const selectedAction = resolveBehaviorAction(options.actionId || behaviorAction);
+    const selectedPlace = resolveBehaviorPlace(options.placeId || behaviorPlaceId);
+    const selectedPlaceLink = resolveBehaviorPlaceLink(selectedPlace);
+    return {
+      player_event: {
+        active: true,
+        action: selectedAction?.id || options.actionId || behaviorAction,
+        action_label: selectedAction?.label || options.actionId || behaviorAction,
+        action_hint: selectedAction?.hint || '',
+        place_id: selectedPlace?.id || options.placeId || behaviorPlaceId || '',
+        place_label: selectedPlace?.label || '',
+        free_text: behaviorPromptText
+      },
+      world: {
+        movement_model: 'side_scrolling_semantic_v1',
+        movement_rule: '角色可以决定自由活动、靠近玩家、闲逛或去语义地点；不要生成像素坐标，前端会把 place_id 映射到本地平移锚点。',
+        ordered_place_text: behaviorOrderedPlaces.map((place) => `${place.order}. ${place.name}`).join(' -> '),
+        allowed_place_ids: behaviorOrderedPlaces.map((place) => place.placeId),
+        allowed_movement_actions: commercialV2BehaviorMovementActions,
+        actors: {
+          role: summarizeBehaviorActor(commercialV2RoleActorId, '角色小人'),
+          user: summarizeBehaviorActor(commercialV2UserActorId, '玩家小人')
+        },
+        selected_place: selectedPlace
+          ? {
+            id: selectedPlace.id,
+            label: selectedPlace.label,
+            place: summarizeBehaviorPlace(selectedPlaceLink)
+          }
+          : null,
+        places_ordered: behaviorOrderedPlaces.map((place) => summarizeBehaviorPlace(place)).filter(Boolean),
+        free_activity_options: [
+          'go_to_place: 前往表内地点',
+          'wander_between: 在两个表内地点之间来回闲逛',
+          'loop_in_front_of: 在表内地点前小范围循环移动',
+          'browse_near: 在表内地点附近停停走走',
+          'patrol_segment: 在两个表内地点之间巡逻',
+          'approach_player: 靠近玩家',
+          'follow_player: 跟随玩家',
+          'walk_with_player: 陪玩家向表内地点移动',
+          'idle_at_place: 在表内地点附近停留'
+        ]
+      },
+      behavior_tree: summarizeBehaviorTreeForPayload()
+    };
+  }
+
+  function formatBehaviorJson(value, fallback = '{}') {
+    try {
+      return JSON.stringify(value || JSON.parse(fallback), null, 2);
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  async function pullBehaviorModels() {
+    const customEndpoint = String(behaviorConfig.api_endpoint || '').trim();
+    const customKey = String(behaviorConfig.api_key || '').trim();
+    const customComplete = Boolean(customEndpoint && customKey);
+    const customIncomplete = Boolean(customEndpoint || customKey) && !customComplete;
+    if (customIncomplete && !behaviorCharacterId) {
+      const message = '自定义模型配置需要同时填写 URL 和 Key；当前也没有可用绑定角色。';
+      setBehaviorModelStatus(message);
+      setBehaviorStatus(message);
+      return;
+    }
+    if (!customComplete && !behaviorCharacterId) {
+      const message = '没有绑定角色，无法使用角色模型配置。';
+      setBehaviorModelStatus(message);
+      setBehaviorStatus(message);
+      return;
+    }
+    setBehaviorModelsLoading(true);
+    const sourceLabel = customComplete ? '自定义配置' : '绑定角色配置';
+    setBehaviorModelStatus(customIncomplete
+      ? '自定义 URL/Key 未填完整，正在改用绑定角色配置拉取模型列表...'
+      : `正在通过${sourceLabel}拉取模型列表...`);
+    setBehaviorStatus('正在拉取模型列表...');
+    try {
+      const url = customComplete
+        ? `${apiUrl}/models?endpoint=${encodeURIComponent(customEndpoint)}&key=${encodeURIComponent(customKey)}`
+        : `${apiUrl}/city/characters/${encodeURIComponent(behaviorCharacterId)}/behavior-models`;
+      const { response, data } = await fetchBehaviorJsonWithTimeout(url, {
+        headers: customComplete ? undefined : getBehaviorAuthHeaders()
+      });
+      if (!response.ok) throw new Error(data?.error || `模型列表读取失败 ${response.status}`);
+      const models = Array.isArray(data?.models) ? data.models : [];
+      setBehaviorModelOptions(models);
+      const preferredModel = behaviorConfig.model_name || data?.model_name || behaviorCharacter?.model_name || '';
+      if (!behaviorConfig.model_name && (models.includes(preferredModel) || preferredModel)) {
+        updateBehaviorConfig({ model_name: preferredModel || models[0] });
+      } else if (!behaviorConfig.model_name && models[0]) {
+        updateBehaviorConfig({ model_name: models[0] });
+      }
+      const message = models.length
+        ? `已通过${sourceLabel}拉取 ${models.length} 个模型。`
+        : '模型接口返回为空，可以手动填写模型名。';
+      setBehaviorModelStatus(message);
+      setBehaviorStatus(message);
+    } catch (error) {
+      const message = `模型拉取失败：${error.name === 'AbortError' ? '请求超时' : error.message}`;
+      setBehaviorModelStatus(message);
+      setBehaviorStatus(message);
+    } finally {
+      setBehaviorModelsLoading(false);
+    }
+  }
+
+  async function requestBehaviorInput() {
+    if (!behaviorCharacterId) {
+      setBehaviorStatus('没有可用角色，先在角色设置里创建或启用一个角色。');
+      return;
+    }
+    setBehaviorLoading(true);
+    setBehaviorStatus('正在读取大输入背景...');
+    try {
+      const response = await fetch(`${apiUrl}/city/characters/${encodeURIComponent(behaviorCharacterId)}/behavior-input`, {
+        method: 'POST',
+        headers: getBehaviorAuthHeaders(),
+        body: JSON.stringify(buildBehaviorPayload())
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || `读取失败 ${response.status}`);
+      setBehaviorInput(data.input || null);
+      setBehaviorOutput(null);
+      setBehaviorStatus('已读取大输入背景；私聊和商业街活动只作背景，不会触发小人行动。');
+    } catch (error) {
+      setBehaviorStatus(`大输入背景读取失败：${error.message}`);
+    } finally {
+      setBehaviorLoading(false);
+    }
+  }
+
+  async function generateBehaviorBranch(options = {}) {
+    if (!behaviorCharacterId) {
+      setBehaviorStatus('没有可用角色，先在角色设置里创建或启用一个角色。');
+      return;
+    }
+    const actionId = options.actionId || behaviorAction;
+    const placeId = options.placeId || behaviorPlaceId;
+    const selectedAction = resolveBehaviorAction(actionId);
+    if (actionId !== behaviorAction) setBehaviorAction(actionId);
+    if (placeId && placeId !== behaviorPlaceId) setBehaviorPlaceId(placeId);
+    setBehaviorLoading(true);
+    setBehaviorStatus('正在生成玩家特殊枝丫...');
+    setPlayerActionBubble(selectedAction?.label || '互动');
+    try {
+      const response = await fetch(`${apiUrl}/city/characters/${encodeURIComponent(behaviorCharacterId)}/behavior-branch`, {
+        method: 'POST',
+        headers: getBehaviorAuthHeaders(),
+        body: JSON.stringify({
+          ...buildBehaviorPayload({ actionId, placeId }),
+          api_endpoint: behaviorConfig.api_endpoint,
+          api_key: behaviorConfig.api_key,
+          model_name: behaviorConfig.model_name
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || `生成失败 ${response.status}`);
+      setBehaviorInput(data.input || null);
+      const source = data.fallback ? 'fallback' : 'ai';
+      const patchResult = mergeBehaviorTreePatch(data.tree_patch || data.patch, data.branch, source);
+      setBehaviorOutput({
+        branch: data.branch || null,
+        tree_patch: patchResult?.patch || data.tree_patch || data.patch || null,
+        tree_version: patchResult?.tree?.version || behaviorTreeState.version,
+        fallback: Boolean(data.fallback),
+        error: data.error || '',
+        raw_output: data.raw_output || ''
+      });
+      if (patchResult?.activeBranch) activateBehaviorBranch(patchResult.activeBranch, source);
+      setBehaviorStatus(data.fallback ? '已生成 fallback patch，并合并进完整行为树。' : 'AI patch 已合并进完整行为树。');
+    } catch (error) {
+      setBehaviorStatus(`特殊枝丫生成失败：${error.message}`);
+    } finally {
+      setBehaviorLoading(false);
+    }
+  }
+
+  async function generateBaseBehaviorBranches() {
+    if (!behaviorCharacterId) {
+      setBehaviorStatus('没有可用角色，先在角色设置里创建或启用一个角色。');
+      return;
+    }
+    setBehaviorLoading(true);
+    setBehaviorStatus('正在生成基础枝丫包...');
+    try {
+      const response = await fetch(`${apiUrl}/city/characters/${encodeURIComponent(behaviorCharacterId)}/behavior-base-branches`, {
+        method: 'POST',
+        headers: getBehaviorAuthHeaders(),
+        body: JSON.stringify({
+          ...buildBehaviorPayload(),
+          api_endpoint: behaviorConfig.api_endpoint,
+          api_key: behaviorConfig.api_key,
+          model_name: behaviorConfig.model_name
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || `生成失败 ${response.status}`);
+      setBehaviorInput(data.input || null);
+      const source = data.fallback ? 'fallback-base' : 'ai-base';
+      const patchResult = mergeBehaviorTreePatches(data.base_patches || [], source);
+      const branchCount = patchResult?.patches?.length || data.base_branches?.length || 0;
+      setBehaviorOutput({
+        base_branches: data.base_branches || [],
+        base_patches: patchResult?.patches || data.base_patches || [],
+        tree_version: patchResult?.tree?.version || behaviorTreeState.version,
+        fallback: Boolean(data.fallback),
+        error: data.error || '',
+        raw_output: data.raw_output || ''
+      });
+      autonomousBehaviorCursorRef.current = 0;
+      autonomousBehaviorRecentRef.current = [];
+      setBehaviorStatus(data.fallback
+        ? `已生成 fallback 基础枝丫 ${branchCount} 条，并合并进基础池。`
+        : `AI 基础枝丫 ${branchCount} 条已合并进基础池。`);
+    } catch (error) {
+      setBehaviorStatus(`基础枝丫生成失败：${error.message}`);
+    } finally {
+      setBehaviorLoading(false);
+    }
+  }
+
+  function mergeBehaviorTreePatch(rawPatch, fallbackBranch = null, source = 'manual') {
+    const patch = rawPatch || (fallbackBranch ? createCommercialBehaviorPatchFromBranch(fallbackBranch, source) : null);
+    const result = applyCommercialBehaviorTreePatch(behaviorTreeState, {
+      ...(patch || {}),
+      source,
+      branch: fallbackBranch || patch?.branch
+    });
+    if (!result.patch) return null;
+    setBehaviorTreeState(result.tree);
+    setBehaviorPatchOutput({
+      patch: result.patch,
+      active_node_id: result.tree.active_node_id,
+      tree_version: result.tree.version,
+      patch_history: result.tree.patch_history.slice(0, 6)
+    });
+    return result;
+  }
+
+  function mergeBehaviorTreePatches(rawPatches = [], source = 'manual') {
+    if (!Array.isArray(rawPatches) || !rawPatches.length) return null;
+    let nextTree = behaviorTreeState;
+    const patches = [];
+    rawPatches.forEach((rawPatch) => {
+      const result = applyCommercialBehaviorTreePatch(nextTree, {
+        ...(rawPatch || {}),
+        source
+      });
+      if (!result.patch) return;
+      nextTree = result.tree;
+      patches.push(result.patch);
+    });
+    if (!patches.length) return null;
+    setBehaviorTreeState(nextTree);
+    setBehaviorPatchOutput({
+      patches,
+      count: patches.length,
+      active_node_id: nextTree.active_node_id,
+      tree_version: nextTree.version,
+      patch_history: nextTree.patch_history.slice(0, 10)
+    });
+    return { tree: nextTree, patches };
+  }
+
+  function behaviorBranchUsesOnlyAvailablePlaces(branch) {
+    const allowedPlaceIds = new Set(behaviorOrderedPlaces.map((place) => place.placeId));
+    if (!allowedPlaceIds.size || !Array.isArray(branch?.steps)) return false;
+    return branch.steps.every((step) => {
+      const rawIds = [
+        step?.place_id,
+        step?.placeId,
+        step?.from_place_id,
+        step?.fromPlaceId,
+        step?.to_place_id,
+        step?.toPlaceId,
+        step?.target_place_id,
+        step?.targetPlaceId
+      ].map((value) => String(value || '').trim()).filter(Boolean);
+      return rawIds.every((id) => allowedPlaceIds.has(id));
+    });
+  }
+
+  function pickAutonomousBehaviorBranch(options = {}) {
+    const tree = behaviorTreeStateRef.current || behaviorTreeState || createCommercialV2BehaviorTreeState();
+    const nodes = tree.nodes || {};
+    const dynamicBaseNodeIds = commercialV2BehaviorBaseNodeIds
+      .flatMap((nodeId) => Array.isArray(nodes[nodeId]?.children_ids) ? nodes[nodeId].children_ids : [])
+      .filter(Boolean);
+    const sourceNodeIds = options.nearby
+      ? Array.from(new Set([...commercialV2BehaviorNearbyAutonomousNodeIds, ...dynamicBaseNodeIds, ...commercialV2BehaviorAutonomousNodeIds]))
+      : Array.from(new Set([...(dynamicBaseNodeIds.length ? dynamicBaseNodeIds : commercialV2BehaviorAutonomousNodeIds), ...commercialV2BehaviorAutonomousNodeIds]));
+    const candidates = sourceNodeIds
+      .map((nodeId) => createCommercialBehaviorBranchFromNode(nodes[nodeId]))
+      .filter((branch) => branch && behaviorBranchUsesOnlyAvailablePlaces(branch));
+    if (!candidates.length) return null;
+    const recentIds = autonomousBehaviorRecentRef.current || [];
+    const freshCandidates = candidates.length > 3
+      ? candidates.filter((branch) => !recentIds.includes(branch.branch_id))
+      : candidates;
+    const playableCandidates = freshCandidates.length ? freshCandidates : candidates;
+    const cursor = autonomousBehaviorCursorRef.current % playableCandidates.length;
+    autonomousBehaviorCursorRef.current += 1;
+    const selected = playableCandidates[cursor];
+    autonomousBehaviorRecentRef.current = [
+      selected.branch_id,
+      ...recentIds.filter((id) => id !== selected.branch_id)
+    ].slice(0, Math.min(4, Math.max(1, candidates.length - 1)));
+    return selected;
+  }
+
+  function runPlayerInteraction(actionId) {
+    if (!behaviorInteractionState.nearby || behaviorLoading) return;
+    const selectedAction = resolveBehaviorAction(actionId);
+    const selectedPlace = resolveBehaviorPlace(behaviorPlaceId);
+    if (actionId !== behaviorAction) setBehaviorAction(actionId);
+    setInteractionMenuOpen(false);
+    if (behaviorRuntimeRef.current?.source === 'base') {
+      clearBehaviorRuntime('');
+    }
+    const presetBranch = createCommercialV2PresetInteractionBranch(
+      actionId,
+      selectedPlace?.id || behaviorPlaceId || 'restaurant',
+      selectedPlace?.label || '街区'
+    );
+    executeBehaviorBranch(presetBranch, 'preset');
+    setPlayerActionBubble(selectedAction?.label || '互动');
+    setBehaviorStatus(`已触发预制互动：${presetBranch.title}。请选择枝丫末尾选项生成后续。`);
+  }
+
+  function normalizeBehaviorDialogChoices(choices) {
+    if (!Array.isArray(choices)) return [];
+    return choices.slice(0, 4).map((choice, index) => {
+      if (typeof choice === 'string') {
+        const label = choice.trim();
+        return label ? { id: `choice_${index + 1}`, label } : null;
+      }
+      if (!choice || typeof choice !== 'object') return null;
+      const label = String(choice.label || choice.text || choice.title || `选项 ${index + 1}`).trim();
+      return {
+        ...choice,
+        id: String(choice.id || choice.trigger || `choice_${index + 1}`),
+        label: label || `选项 ${index + 1}`
+      };
+    }).filter(Boolean);
+  }
+
+  function continueBehaviorDialog() {
+    const runtime = behaviorRuntimeRef.current;
+    if (runtime && activeBehaviorDialog?.runtimeId === runtime.id) {
+      runtime.waitingForDialog = false;
+      runtime.waitingForChoice = false;
+      runtime.stepIndex += 1;
+      runtime.waitingUntil = Date.now() + 120;
+      setBehaviorStatus('已继续执行当前行为枝丫。');
+    }
+    setActiveBehaviorDialog(null);
+  }
+
+  async function chooseBehaviorDialogChoice(choice) {
+    if (behaviorChoicePendingRef.current || behaviorLoading) return;
+    const triggerAction = [
+      choice?.trigger,
+      choice?.action_id,
+      choice?.actionId,
+      choice?.next_action,
+      choice?.action
+    ].map((value) => String(value || '').trim()).find((value) => commercialV2BehaviorActionIds.has(value));
+    const nextPlaceId = String(choice?.place_id || choice?.placeId || choice?.to_place_id || choice?.toPlaceId || behaviorPlaceId || '').trim();
+    if (!triggerAction) {
+      continueBehaviorDialog();
+      return;
+    }
+    behaviorChoicePendingRef.current = true;
+    const selectedLabel = String(choice?.label || choice?.text || '这个回应').trim();
+    const runtime = behaviorRuntimeRef.current;
+    if (runtime && activeBehaviorDialog?.runtimeId === runtime.id) {
+      runtime.waitingForDialog = false;
+      runtime.waitingForChoice = false;
+      runtime.stepIndex += 1;
+      runtime.waitingUntil = Date.now() + 120;
+    }
+    setInteractionMenuOpen(false);
+    setBehaviorStatus(`已选择“${selectedLabel}”，正在生成后续特殊枝丫...`);
+    setActiveBehaviorDialog({
+      runtimeId: activeBehaviorDialog?.runtimeId || '',
+      type: 'pending',
+      title: behaviorCharacter?.name || '角色',
+      text: `已选择“${selectedLabel}”，正在生成后续特殊枝丫...`,
+      choices: [],
+      stepIndex: activeBehaviorDialog?.stepIndex || 0,
+      totalSteps: activeBehaviorDialog?.totalSteps || 1
+    });
+    try {
+      await generateBehaviorBranch({ actionId: triggerAction, placeId: nextPlaceId || behaviorPlaceId });
+    } finally {
+      behaviorChoicePendingRef.current = false;
+      setActiveBehaviorDialog((current) => current?.type === 'pending' ? null : current);
+    }
+  }
+
+  function executeBehaviorBranch(branch, source = 'manual') {
+    if (!branch) {
+      setBehaviorStatus('当前没有可执行的枝丫。');
+      return;
+    }
+    const patchResult = mergeBehaviorTreePatch(createCommercialBehaviorPatchFromBranch(branch, source), branch, source);
+    setBehaviorOutput({
+      branch,
+      tree_patch: patchResult?.patch || null,
+      tree_version: patchResult?.tree?.version || behaviorTreeState.version,
+      fallback: source !== 'ai',
+      error: '',
+      raw_output: JSON.stringify(branch, null, 2)
+    });
+    if (patchResult?.activeBranch) activateBehaviorBranch(patchResult.activeBranch, source);
+    setBehaviorStatus(source === 'demo' ? '已把 demo patch 合并进完整行为树，并开始执行。' : '已重新合并当前输出 patch 并执行。');
+  }
+
+  function renderPlayerInteractionMenu() {
+    if (!behaviorInteractionState.nearby || activeBehaviorDialog) return null;
+    const style = {
+      left: `${(behaviorInteractionState.x / stageSize.width) * 100}%`,
+      top: `${(behaviorInteractionState.y / stageSize.height) * 100}%`
+    };
+    const sideClass = behaviorInteractionState.side === 'left' ? 'side-left' : 'side-right';
+    if (!interactionMenuOpen) {
+      return (
+        <button
+          type="button"
+          className={`pixel-world-interaction-entry ${sideClass}`}
+          style={style}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={() => setInteractionMenuOpen(true)}
+          disabled={behaviorLoading || !behaviorCharacterId}
+        >
+          <strong>{behaviorLoading ? '生成中' : '互动'}</strong>
+          <span>{behaviorCharacter?.name || '角色'}</span>
+        </button>
+      );
+    }
+    return (
+      <div
+        className={`pixel-world-interaction-menu ${sideClass}`}
+        style={style}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <div className="pixel-world-interaction-menu-head">
+          <strong>{behaviorCharacter?.name || '角色'}</strong>
+          <button
+            type="button"
+            className="pixel-world-interaction-close"
+            onClick={() => setInteractionMenuOpen(false)}
+          >
+            收起
+          </button>
+        </div>
+        <div className="pixel-world-interaction-menu-primary">
+          {behaviorPrimaryActions.map((action) => (
+            <button
+              key={action.id}
+              type="button"
+              className={behaviorAction === action.id ? 'active' : ''}
+              disabled={behaviorLoading || !behaviorCharacterId}
+              title={action.hint}
+              onClick={() => runPlayerInteraction(action.id)}
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
+        <div className="pixel-world-interaction-menu-target">
+          <span>目的地</span>
+          <select
+            value={behaviorPlaceId}
+            onChange={(event) => setBehaviorPlaceId(event.target.value)}
+            disabled={behaviorLoading || !behaviorPlaceOptions.length}
+            aria-label="互动目的地"
+          >
+            {behaviorPlaceOptions.length ? behaviorPlaceOptions.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.order ? `${option.order}. ` : ''}{option.label}
+              </option>
+            )) : (
+              <option value="">暂无地点</option>
+            )}
+          </select>
+        </div>
+        <div className="pixel-world-interaction-menu-context">
+          {behaviorContextActions.map((action) => (
+            <button
+              key={action.id}
+              type="button"
+              className={behaviorAction === action.id ? 'active' : ''}
+              disabled={behaviorLoading || !behaviorCharacterId}
+              title={action.hint}
+              onClick={() => runPlayerInteraction(action.id)}
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  function renderBehaviorActorCard(actorId, title, note) {
+    const character = commercialV2PlayerCharacterById.get(actorId) || commercialV2PlayerCharacters[0];
+    const actor = players[actorId] || createCommercialV2PlayerState(character);
+    return (
+      <div className={`pixel-world-behavior-actor ${actorId === commercialV2RoleActorId ? 'role' : 'user'}`}>
+        <img src={commercialV2PlayerFrame(actor, `${actor.direction || 'front'}_walk_idle.png`)} alt="" draggable={false} />
+        <div>
+          <strong>{title}</strong>
+          <span>{character.label} · 平移街区</span>
+          <small>{note}</small>
+        </div>
+      </div>
+    );
+  }
+
+  function toggleBehaviorFold(key) {
+    setBehaviorFoldOpen((current) => ({
+      ...current,
+      [key]: !current[key]
+    }));
+  }
+
+  function renderBehaviorFold(key, title, summary, children) {
+    const open = behaviorFoldOpen[key];
+    return (
+      <section className={`pixel-world-behavior-fold ${open ? 'open' : ''}`}>
+        <button
+          type="button"
+          className="pixel-world-behavior-fold-head"
+          onClick={() => toggleBehaviorFold(key)}
+          aria-expanded={open}
+        >
+          <span>{title}</span>
+          {summary && <small>{summary}</small>}
+          <strong>{open ? '收起' : '展开'}</strong>
+        </button>
+        {open && (
+          <div className="pixel-world-behavior-fold-body">
+            {children}
+          </div>
+        )}
+      </section>
+    );
+  }
+
+  function renderBehaviorTreePanel() {
+    if (behaviorPanelCollapsed) {
+      return (
+        <aside className="pixel-world-behavior-panel collapsed">
+          <button
+            type="button"
+            className="pixel-world-behavior-panel-expand"
+            onClick={() => setBehaviorPanelCollapsed(false)}
+            title="展开行为树面板"
+            aria-label="展开行为树面板"
+          >
+            <span>行为树</span>
+            <strong>{behaviorOutput?.fallback ? 'Fallback' : behaviorOutput ? 'AI' : 'Draft'}</strong>
+            <small>展开</small>
+          </button>
+        </aside>
+      );
+    }
+
+    return (
+      <aside className="pixel-world-behavior-panel">
+        <div className="pixel-world-behavior-head">
+          <div>
+            <h3>行为树 V1</h3>
+            <span>单角色街区行为运行时</span>
+          </div>
+          <div className="pixel-world-behavior-head-actions">
+            <strong>{behaviorOutput?.fallback ? 'Fallback' : behaviorOutput ? 'AI' : 'Draft'}</strong>
+            <button
+              type="button"
+              onClick={() => setBehaviorPanelCollapsed(true)}
+              title="收起整个行为树面板"
+            >
+              收起
+            </button>
+          </div>
+        </div>
+
+        <div className="pixel-world-behavior-actors">
+          {renderBehaviorActorCard(commercialV2RoleActorId, '角色小人', behaviorCharacter?.name ? `绑定：${behaviorCharacter.name}` : '等待绑定角色')}
+          {renderBehaviorActorCard(commercialV2UserActorId, '玩家小人', userProfile?.name ? `玩家：${userProfile.name}` : '玩家控制入口')}
+        </div>
+
+        <label className="pixel-world-behavior-field">
+          <span>绑定角色</span>
+          <select
+            value={behaviorCharacterId}
+            onChange={(event) => setBehaviorCharacterId(event.target.value)}
+            disabled={!behaviorCharacters.length}
+          >
+            {behaviorCharacters.length ? behaviorCharacters.map((item) => (
+              <option key={item.id} value={item.id}>{item.name || item.id}</option>
+            )) : (
+              <option value="">暂无角色</option>
+            )}
+          </select>
+        </label>
+
+        {renderBehaviorFold(
+          'model',
+          '模型配置',
+          behaviorConfig.model_name || behaviorCharacter?.model_name || '使用绑定角色',
+          (
+            <div className="pixel-world-behavior-model-grid">
+              <label className="pixel-world-behavior-field">
+                <span>URL</span>
+                <input
+                  value={behaviorConfig.api_endpoint}
+                  onChange={(event) => updateBehaviorConfig({ api_endpoint: event.target.value })}
+                  placeholder={behaviorCharacter?.api_endpoint ? '留空使用绑定角色 URL' : 'https://api.example.com/v1'}
+                />
+              </label>
+              <label className="pixel-world-behavior-field">
+                <span>Key</span>
+                <input
+                  type={behaviorShowKey ? 'text' : 'password'}
+                  value={behaviorConfig.api_key}
+                  onChange={(event) => updateBehaviorConfig({ api_key: event.target.value })}
+                  placeholder="留空使用绑定角色 Key"
+                />
+              </label>
+              <label className="pixel-world-behavior-field">
+                <span>模型</span>
+                <input
+                  list="pixel-world-behavior-models"
+                  value={behaviorConfig.model_name}
+                  onChange={(event) => updateBehaviorConfig({ model_name: event.target.value })}
+                  placeholder={behaviorCharacter?.model_name || '模型名'}
+                />
+                <datalist id="pixel-world-behavior-models">
+                  {behaviorModelOptions.map((model) => <option key={model} value={model} />)}
+                </datalist>
+              </label>
+              <div className="pixel-world-behavior-model-actions">
+                <button type="button" onClick={pullBehaviorModels} disabled={behaviorModelsLoading}>
+                  {behaviorModelsLoading ? '拉取中' : '拉取模型'}
+                </button>
+                <button type="button" onClick={() => setBehaviorShowKey((value) => !value)}>
+                  {behaviorShowKey ? '隐藏 Key' : '显示 Key'}
+                </button>
+              </div>
+              <div className={`pixel-world-behavior-model-status ${behaviorModelStatus.includes('失败') ? 'error' : ''}`}>
+                {behaviorModelStatus}
+              </div>
+              {behaviorModelOptions.length > 0 && (
+                <div className="pixel-world-behavior-model-list">
+                  <div className="pixel-world-behavior-model-list-head">
+                    <strong>模型列表</strong>
+                    <span>{behaviorModelOptions.length} 个</span>
+                  </div>
+                  <div className="pixel-world-behavior-model-options">
+                    {behaviorModelOptions.map((model) => (
+                      <button
+                        key={model}
+                        type="button"
+                        className={behaviorConfig.model_name === model ? 'active' : ''}
+                        title={model}
+                        onClick={() => updateBehaviorConfig({ model_name: model })}
+                      >
+                        {model}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        )}
+
+        {renderBehaviorFold(
+          'constraints',
+          'AI 可选白名单',
+          `${behaviorOrderedPlaces.length} 地点 / ${commercialV2BehaviorMovementActions.length} 移动枝丫`,
+          (
+            <div className="pixel-world-behavior-constraints">
+              <div>
+                <strong>地点</strong>
+                <div className="pixel-world-behavior-chip-list">
+                  {behaviorOrderedPlaces.map((place) => (
+                    <span key={place.placeId}>{place.order}. {place.name}</span>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <strong>移动枝丫</strong>
+                <div className="pixel-world-behavior-chip-list">
+                  {commercialV2BehaviorMovementActions.map((action) => (
+                    <span key={action.id}>{action.label}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )
+        )}
+
+        {renderBehaviorFold(
+          'branchMap',
+          '枝丫分层',
+          '基础枝 / 特殊枝',
+          (
+            <div className="pixel-world-behavior-branch-map">
+              <div>
+                <strong>特殊枝丫</strong>
+                <span>player_interaction · 玩家点击互动或选择回应后，AI 局部 patch 到这里。</span>
+              </div>
+              <div>
+                <strong>基础枝丫</strong>
+                <span>无互动时自动轮询：硬需求、本地例行、地点能力、背景情绪、好奇、自由活动、微动作。</span>
+              </div>
+            </div>
+          )
+        )}
+
+        {renderBehaviorFold(
+          'interaction',
+          '互动设置',
+          behaviorInteractionState.nearby ? `距离 ${Math.round(behaviorInteractionState.distance)} / ${commercialV2BehaviorInteractionDistance}` : '靠近后弹出菜单',
+          (
+            <>
+              <div className={`pixel-world-behavior-proximity ${behaviorInteractionState.nearby ? 'nearby' : ''}`}>
+                <strong>{behaviorInteractionState.nearby ? '角色已在互动范围' : '玩家靠近角色后弹出菜单'}</strong>
+                <span>距离 {Math.round(behaviorInteractionState.distance)} / {commercialV2BehaviorInteractionDistance}</span>
+              </div>
+
+        <label className="pixel-world-behavior-field">
+          <span>目标地点</span>
+          <select
+            value={behaviorPlaceId}
+            onChange={(event) => setBehaviorPlaceId(event.target.value)}
+            disabled={!behaviorPlaceOptions.length}
+          >
+            {behaviorPlaceOptions.length ? behaviorPlaceOptions.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.order ? `${option.order}. ` : ''}{option.label}
+              </option>
+            )) : (
+              <option value="">暂无地点</option>
+            )}
+          </select>
+        </label>
+        <label className="pixel-world-behavior-field">
+          <span>补充输入</span>
+          <textarea
+            value={behaviorPromptText}
+            onChange={(event) => setBehaviorPromptText(event.target.value)}
+            placeholder="例如：玩家想让角色陪自己去便利店，但别太听话，要有一点临场反应。"
+          />
+        </label>
+
+        <div className="pixel-world-behavior-run-row">
+          <button type="button" onClick={requestBehaviorInput} disabled={behaviorLoading || !behaviorCharacterId}>
+            读取大输入
+          </button>
+          <button type="button" onClick={generateBaseBehaviorBranches} disabled={behaviorLoading || !behaviorCharacterId}>
+            生成基础枝丫
+          </button>
+          <button type="button" className="primary" onClick={generateBehaviorBranch} disabled={behaviorLoading || !behaviorCharacterId}>
+            调试生成后续
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const branch = pickAutonomousBehaviorBranch();
+              if (!branch) {
+                setBehaviorStatus('当前没有可执行的基础枝丫，先确认地点白名单是否存在。');
+                return;
+              }
+              autonomousBehaviorCooldownRef.current = Date.now() + commercialV2BehaviorAutonomousCooldownMs;
+              activateBehaviorBranch(branch, 'base');
+              setBehaviorStatus(`已手动执行基础枝丫：${branch.title}`);
+            }}
+            disabled={behaviorLoading || !behaviorCharacterId}
+          >
+            执行基础枝
+          </button>
+          <button type="button" onClick={() => executeBehaviorBranch(behaviorOutput?.branch, 'replay')} disabled={behaviorLoading || !behaviorOutput?.branch}>
+            重放当前输出
+          </button>
+          <button type="button" onClick={() => executeBehaviorBranch(commercialV2BehaviorLastDemoBranch, 'demo')} disabled={behaviorLoading}>
+            填入刚刚枝丫
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const resetTree = createCommercialV2BehaviorTreeState();
+              setBehaviorTreeState(resetTree);
+              setBehaviorPatchOutput(null);
+              setBehaviorStatus('完整行为树已重置。');
+            }}
+            disabled={behaviorLoading}
+          >
+            重置完整树
+          </button>
+        </div>
+            </>
+          )
+        )}
+
+        {renderBehaviorFold(
+          'runtime',
+          '运行状态',
+          activeBehaviorBranch ? activeBehaviorBranch.title : `版本 ${behaviorTreeState.version} · patch ${behaviorTreeState.patch_history?.length || 0}`,
+          (
+            <>
+              <div className="pixel-world-behavior-status">{behaviorLoading ? '处理中...' : behaviorStatus}</div>
+              <div className={`pixel-world-behavior-runtime ${activeBehaviorBranch ? 'active' : ''}`}>
+          {activeBehaviorBranch ? (
+            <>
+              <strong>{activeBehaviorBranch.branchKindLabel || '完整树运行节点'}</strong>
+              <span>{activeBehaviorBranch.title}</span>
+              <small>
+                {Math.min((activeBehaviorBranch.stepIndex || 0) + 1, activeBehaviorBranch.totalSteps || 1)}
+                /{activeBehaviorBranch.totalSteps || 1}
+                {activeBehaviorBranch.currentAction ? ` · ${activeBehaviorBranch.currentAction}` : ''}
+                {behaviorTreeState?.active_node_id ? ` · node:${behaviorTreeState.active_node_id}` : ''}
+              </small>
+              {activeBehaviorDialog && (
+                <div className="pixel-world-behavior-runtime-control">
+                  <strong>{activeBehaviorDialog.type === 'choice' ? '等待玩家选择' : '等待点击下一句'}</strong>
+                  <p>{activeBehaviorDialog.text}</p>
+                  {activeBehaviorDialog.type === 'pending' ? (
+                    <button type="button" disabled>生成中...</button>
+                  ) : activeBehaviorDialog.type === 'choice' && activeBehaviorDialog.choices?.length ? (
+                    <div className="pixel-world-behavior-runtime-choice-grid">
+                      {activeBehaviorDialog.choices.map((choice) => (
+                        <button
+                          key={choice.id}
+                          type="button"
+                          onClick={() => chooseBehaviorDialogChoice(choice)}
+                          disabled={behaviorLoading}
+                        >
+                          {choice.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <button type="button" onClick={continueBehaviorDialog}>下一句</button>
+                  )}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <strong>完整行为树</strong>
+              <span>版本 {behaviorTreeState.version} · patch {behaviorTreeState.patch_history?.length || 0}</span>
+              <small>基础枝丫自动执行；玩家互动会返回局部 patch，合并进特殊互动枝后执行。</small>
+            </>
+          )}
+              </div>
+            </>
+          )
+        )}
+
+        {renderBehaviorFold(
+          'debug',
+          '调试 JSON',
+          '完整树 / 输入 / Patch / 输出',
+          (
+            <div className="pixel-world-behavior-json-grid">
+              <section>
+                <h4>完整树</h4>
+                <pre>{formatBehaviorJson(behaviorTreeState)}</pre>
+              </section>
+              <section>
+                <h4>输入</h4>
+                <pre>{formatBehaviorJson(behaviorInput || buildBehaviorPayload())}</pre>
+              </section>
+              <section>
+                <h4>Patch</h4>
+                <pre>{formatBehaviorJson(behaviorPatchOutput || { patch: null, note: '生成后显示本次局部行为树 patch。' })}</pre>
+              </section>
+              <section>
+                <h4>输出</h4>
+                <pre>{formatBehaviorJson(behaviorOutput || { base_branches: null, branch: null, tree_patch: null, note: '点击“生成基础枝丫”显示基础枝丫包；互动按钮会先播放预制枝丫，枝丫末尾选项才生成后续 patch。' })}</pre>
+              </section>
+            </div>
+          )
+        )}
+      </aside>
+    );
   }
 
   function cancelAssetDrag() {
@@ -3232,8 +5324,13 @@ function CommercialStreetEditor() {
         stepTime: 0
       };
     });
+    const roleSpawn = nextPlayers[commercialV2RoleActorId];
+    const userSpawn = nextPlayers[commercialV2UserActorId];
+    if (roleSpawn && userSpawn && isPlayerPositionAllowed(roleSpawn.x, userSpawn.y, { ignorePlayers: true })) {
+      roleSpawn.y = userSpawn.y;
+    }
     return nextPlayers;
-  }, [getSafePlayerSpawnPoint, stageSize.width]);
+  }, [getSafePlayerSpawnPoint, isPlayerPositionAllowed, stageSize.width]);
 
   const spawnPlayersOnStage = useCallback((basePlayers = playersRef.current) => {
     const nextPlayers = buildSafePlayerStates(basePlayers);
@@ -3771,9 +5868,16 @@ function CommercialStreetEditor() {
   }, [getAutoTravelPropApproachPoint, getNearestWalkablePlayerPoint, isAutoTravelPositionAllowed, playerDimensions.height, stageSize.height, stageSize.width]);
 
   const cancelAutoTravel = useCallback((message = '') => {
+    const travelPlayerId = autoTravelRef.current?.playerId || controlledPlayerIdRef.current;
     autoTravelRef.current = null;
     setAutoTravelActive(false);
     setPlayerActionBubble('');
+    setPlayerActionBubbles((current) => {
+      if (!current[travelPlayerId]) return current;
+      const next = { ...current };
+      delete next[travelPlayerId];
+      return next;
+    });
     if (message) setNotice(message);
   }, []);
 
@@ -3928,10 +6032,10 @@ function CommercialStreetEditor() {
     };
   }, [buildStreetCruiseSegment]);
 
-  const resolveAutoTravelTarget = useCallback((targetId) => {
+  const resolveAutoTravelTarget = useCallback((targetId, currentPlayerOverride = null) => {
     const requestedId = String(targetId || '').trim();
     if (!requestedId) return null;
-    const currentPlayer = playerRef.current;
+    const currentPlayer = currentPlayerOverride || playerRef.current;
     if (requestedId === 'street') {
       return resolveStreetCruiseTarget(currentPlayer);
     }
@@ -3967,7 +6071,8 @@ function CommercialStreetEditor() {
   }, [buildAutoTravelPath, getAutoTravelTargetPoint, placeLinks, resolveStreetCruiseTarget]);
 
   const startAutoTravel = useCallback((targetId = autoTargetId) => {
-    const target = resolveAutoTravelTarget(targetId);
+    const playerId = controlledPlayerIdRef.current;
+    const target = resolveAutoTravelTarget(targetId, playerRef.current);
     if (!target) {
       setNotice('这个地点现在没有可用锚点或绕行路线，先检查地点锚点和碰撞箱。');
       return;
@@ -3975,6 +6080,7 @@ function CommercialStreetEditor() {
     pressedKeysRef.current.clear();
     autoTravelRef.current = {
       ...target,
+      playerId,
       pathIndex: 0,
       stuckTime: 0,
       lastX: playerRef.current.x,
@@ -3990,6 +6096,285 @@ function CommercialStreetEditor() {
     setPlayerActionBubble(`去 ${target.label}`);
     setNotice(`自动前往 ${target.label}，已规划 ${target.path.length} 个绕行点。`);
   }, [autoTargetId, resolveAutoTravelTarget]);
+
+  function getBehaviorStepPlaceId(step) {
+    return String(step?.place_id || step?.to_place_id || step?.target_place_id || step?.placeId || step?.toPlaceId || '').trim();
+  }
+
+  function buildBehaviorSmoothTravelPath(fromPoint, toPoint) {
+    if (!fromPoint || !toPoint) return [];
+    const targetPoint = {
+      x: wrapLoopCoordinate(Number.isFinite(toPoint.x) ? toPoint.x : fromPoint.x, stageSize.width),
+      y: Number.isFinite(toPoint.y) ? toPoint.y : fromPoint.y
+    };
+    const dx = getCommercialV2LoopDeltaX(fromPoint.x, targetPoint.x, stageSize.width);
+    const dy = targetPoint.y - fromPoint.y;
+    if (Math.hypot(dx, dy) < 4) return [targetPoint];
+    if (Math.abs(dx) < 36 || Math.abs(dy) > Math.abs(dx) * 0.55) {
+      return [targetPoint];
+    }
+    const laneY = Math.round(fromPoint.y + dy * 0.32);
+    const midPoint = {
+      x: wrapLoopCoordinate(fromPoint.x + dx * 0.5, stageSize.width),
+      y: laneY
+    };
+    return [
+      midPoint,
+      { x: targetPoint.x, y: laneY },
+      targetPoint
+    ];
+  }
+
+  function activateBehaviorBranch(branch, source = 'ai') {
+    if (!branch || !Array.isArray(branch.steps) || !branch.steps.length) return;
+    const now = Date.now();
+    if (autoTravelRef.current?.behaviorRuntimeId) {
+      autoTravelRef.current = null;
+      setAutoTravelActive(false);
+    }
+    const ttl = Math.max(3000, Math.min(Number(branch.ttl_ms || branch.ttlMs) || 45000, 120000));
+    const runtime = {
+      id: `${branch.branch_id || branch.id || 'branch'}_${now}`,
+      source,
+      branch,
+      stepIndex: 0,
+      waitingUntil: 0,
+      waitingForTravelId: '',
+      expiresAt: now + ttl,
+      startedAt: now
+    };
+    behaviorRuntimeRef.current = runtime;
+    const branchKindLabel = source === 'base' || branch.branch_kind === 'base'
+      ? '基础枝丫'
+      : '特殊枝丫';
+    const activeNodeId = branch.branch_id || branch.id || runtime.id;
+    setBehaviorTreeState((currentTree) => ({
+      ...currentTree,
+      active_node_id: activeNodeId,
+      memory: {
+        ...(currentTree.memory || {}),
+        last_active_node_id: activeNodeId,
+        last_active_source: source
+      }
+    }));
+    setActiveBehaviorBranch({
+      branch_id: activeNodeId,
+      title: branch.title || branchKindLabel,
+      summary: branch.summary || '',
+      branchKindLabel,
+      source,
+      stepIndex: 0,
+      totalSteps: branch.steps.length,
+      expiresAt: runtime.expiresAt
+    });
+    setActiveBehaviorDialog(null);
+    setInteractionMenuOpen(false);
+    setWorldPlayerBubble(commercialV2RoleActorId, branch.title || branchKindLabel);
+    setNotice(`${branchKindLabel}开始执行：${branch.title || branch.branch_id || '未命名'}。`);
+  }
+
+  function clearBehaviorRuntime(message = '') {
+    behaviorRuntimeRef.current = null;
+    if (autoTravelRef.current?.behaviorRuntimeId) {
+      autoTravelRef.current = null;
+      setAutoTravelActive(false);
+    }
+    setActiveBehaviorBranch(null);
+    setActiveBehaviorDialog((current) => current?.type === 'pending' ? current : null);
+    setWorldPlayerBubble(commercialV2RoleActorId, '');
+    if (message) setNotice(message);
+  }
+
+  function startBehaviorTravelStep(runtime, step) {
+    const action = String(step?.action || '');
+    let targetId = getBehaviorStepPlaceId(step);
+    if ((action === 'approach_player' || action === 'follow_player') && !targetId) {
+      const role = playersRef.current[commercialV2RoleActorId] || createCommercialV2PlayerState(commercialV2PlayerCharacterById.get(commercialV2RoleActorId));
+      const user = playersRef.current[commercialV2UserActorId] || createCommercialV2PlayerState(commercialV2PlayerCharacterById.get(commercialV2UserActorId));
+      const dx = getCommercialV2LoopDeltaX(role.x, user.x, stageSize.width);
+      const targetPoint = getNearestWalkablePlayerPoint(user.x - Math.sign(dx || 1) * 58, user.y, role, {
+        useAutoTravelBlocks: true,
+        fallbackToCurrent: false
+      });
+      const route = targetPoint ? buildAutoTravelPath(role, targetPoint) : null;
+      const smoothPath = buildBehaviorSmoothTravelPath(role, targetPoint);
+      if (!smoothPath.length && !route?.waypoints?.length) return false;
+      const travelId = `${runtime.id}_step_${runtime.stepIndex}`;
+      autoTravelRef.current = {
+        targetId: 'player',
+        playerId: commercialV2RoleActorId,
+        behaviorRuntimeId: runtime.id,
+        behaviorTravelId: travelId,
+        place: { facing: dx > 0 ? 'right' : 'left' },
+        point: smoothPath[smoothPath.length - 1] || route.destination,
+        anchorPoint: targetPoint,
+        path: smoothPath.length ? smoothPath : route.waypoints,
+        semanticSlide: true,
+        pathIndex: 0,
+        stuckTime: 0,
+        lastX: role.x,
+        lastY: role.y,
+        label: '玩家',
+        action: action === 'follow_player' ? '跟随玩家' : '靠近玩家'
+      };
+      runtime.waitingForTravelId = travelId;
+      setAutoTravelActive(true);
+      setWorldPlayerBubble(commercialV2RoleActorId, action === 'follow_player' ? '跟上你' : '靠近你');
+      return true;
+    }
+    if (!targetId) return false;
+    const role = playersRef.current[commercialV2RoleActorId] || createCommercialV2PlayerState(commercialV2PlayerCharacterById.get(commercialV2RoleActorId));
+    const target = resolveAutoTravelTarget(targetId, role);
+    if (!target) return false;
+    const travelId = `${runtime.id}_step_${runtime.stepIndex}`;
+    const targetPoint = target.anchorPoint || target.point;
+    const smoothPath = buildBehaviorSmoothTravelPath(role, targetPoint);
+    autoTravelRef.current = {
+      ...target,
+      playerId: commercialV2RoleActorId,
+      behaviorRuntimeId: runtime.id,
+      behaviorTravelId: travelId,
+      point: smoothPath[smoothPath.length - 1] || target.point,
+      path: smoothPath.length ? smoothPath : target.path,
+      semanticSlide: true,
+      pathIndex: 0,
+      stuckTime: 0,
+      lastX: role.x,
+      lastY: role.y,
+      action: step?.movement_style || target.action || '行动中'
+    };
+    runtime.waitingForTravelId = travelId;
+    setAutoTravelActive(true);
+    setWorldPlayerBubble(commercialV2RoleActorId, target.label ? `去 ${target.label}` : '行动中');
+    return true;
+  }
+
+  function advanceBehaviorRuntime() {
+    const runtime = behaviorRuntimeRef.current;
+    if (!runtime?.branch) return;
+    const now = Date.now();
+    if ((runtime.waitingForDialog || runtime.waitingForChoice) && now > runtime.expiresAt - 10000) {
+      runtime.expiresAt = now + 60000;
+    }
+    if (now > runtime.expiresAt) {
+      const label = runtime.source === 'base' || runtime.branch.branch_kind === 'base' ? '基础枝丫' : '特殊枝丫';
+      clearBehaviorRuntime(`${label}已过期：${runtime.branch.title || runtime.branch.branch_id || '未命名'}。`);
+      return;
+    }
+    if (runtime.waitingForDialog || runtime.waitingForChoice) return;
+    if (runtime.waitingUntil && now < runtime.waitingUntil) return;
+    if (runtime.waitingForTravelId) {
+      if (autoTravelRef.current?.behaviorTravelId === runtime.waitingForTravelId) return;
+      runtime.waitingForTravelId = '';
+      runtime.stepIndex += 1;
+    }
+    const steps = runtime.branch.steps || [];
+    if (runtime.stepIndex >= steps.length) {
+      const label = runtime.source === 'base' || runtime.branch.branch_kind === 'base' ? '基础枝丫' : '特殊枝丫';
+      clearBehaviorRuntime(`${label}执行完毕：${runtime.branch.title || runtime.branch.branch_id || '未命名'}。`);
+      return;
+    }
+    const step = steps[runtime.stepIndex] || {};
+    const action = String(step.action || '').trim();
+    setActiveBehaviorBranch((current) => current ? {
+      ...current,
+      stepIndex: runtime.stepIndex,
+      totalSteps: steps.length,
+      currentAction: action
+    } : current);
+    if (action === 'say' || action === 'emote') {
+      const isBaseBranch = runtime.source === 'base' || runtime.branch.branch_kind === 'base';
+      if (isBaseBranch) {
+        const text = String(step.text || (action === 'say' ? '……' : '停顿了一下')).trim();
+        setWorldPlayerBubble(commercialV2RoleActorId, text);
+        setBehaviorStatus(action === 'say' ? `基础枝丫气泡：${text}` : `基础枝丫动作：${text}`);
+        const requestedDuration = Number(step.duration_ms || step.durationMs);
+        const readableDuration = Math.min(5200, 1600 + text.length * 85);
+        runtime.waitingUntil = now + Math.max(1200, Math.min(Number.isFinite(requestedDuration) ? requestedDuration : readableDuration, 5200));
+        runtime.stepIndex += 1;
+        return;
+      }
+      runtime.waitingForDialog = true;
+      runtime.waitingUntil = 0;
+      setWorldPlayerBubble(commercialV2RoleActorId, '');
+      setInteractionMenuOpen(false);
+      setActiveBehaviorDialog({
+        runtimeId: runtime.id,
+        type: action,
+        title: action === 'say' ? (behaviorCharacter?.name || '角色') : '动作',
+        text: String(step.text || (action === 'say' ? '……' : '停顿了一下')).trim(),
+        stepIndex: runtime.stepIndex,
+        totalSteps: steps.length
+      });
+      setBehaviorStatus(action === 'say' ? '行为树等待：点击“下一句”继续角色台词。' : '行为树等待：点击“下一句”继续角色动作。');
+      return;
+    }
+    if (action === 'wait') {
+      const isBaseBranch = runtime.source === 'base' || runtime.branch.branch_kind === 'base';
+      runtime.waitingUntil = isBaseBranch
+        ? now + Math.max(220, Math.min(Number(step.duration_ms || step.durationMs) || commercialV2BehaviorBaseWaitMs, commercialV2BehaviorBaseWaitMs))
+        : now + Math.max(300, Math.min(Number(step.duration_ms || step.durationMs) || 900, 6000));
+      runtime.stepIndex += 1;
+      return;
+    }
+    if (action === 'face_player') {
+      const role = playersRef.current[commercialV2RoleActorId] || createCommercialV2PlayerState(commercialV2PlayerCharacterById.get(commercialV2RoleActorId));
+      const user = playersRef.current[commercialV2UserActorId] || createCommercialV2PlayerState(commercialV2PlayerCharacterById.get(commercialV2UserActorId));
+      const dx = getCommercialV2LoopDeltaX(role.x, user.x, stageSize.width);
+      const dy = user.y - role.y;
+      const direction = Math.abs(dx) > Math.abs(dy)
+        ? (dx > 0 ? 'right' : 'left')
+        : (dy > 0 ? 'front' : 'back');
+      setPlayerById(commercialV2RoleActorId, (current) => ({
+        ...current,
+        direction,
+        moving: false,
+        frame: 0
+      }));
+      runtime.waitingUntil = now + 350;
+      runtime.stepIndex += 1;
+      return;
+    }
+    if (
+      action === 'go_to_place'
+      || action === 'walk_with_player'
+      || action === 'idle_at_place'
+      || action === 'browse_near'
+      || action === 'loop_in_front_of'
+      || action === 'wander_between'
+      || action === 'patrol_segment'
+      || action === 'approach_player'
+      || action === 'follow_player'
+    ) {
+      const moved = startBehaviorTravelStep(runtime, step);
+      if (!moved) {
+        setWorldPlayerBubble(commercialV2RoleActorId, step.movement_style || action);
+        const isBaseBranch = runtime.source === 'base' || runtime.branch.branch_kind === 'base';
+        runtime.waitingUntil = now + (isBaseBranch ? commercialV2BehaviorBaseFallbackMs : 1200);
+        runtime.stepIndex += 1;
+      }
+      return;
+    }
+    if (action === 'offer_choices') {
+      const choices = normalizeBehaviorDialogChoices(step.choices);
+      runtime.waitingForChoice = true;
+      runtime.waitingUntil = 0;
+      setWorldPlayerBubble(commercialV2RoleActorId, '');
+      setInteractionMenuOpen(false);
+      setActiveBehaviorDialog({
+        runtimeId: runtime.id,
+        type: 'choice',
+        title: behaviorCharacter?.name || '角色',
+        text: String(step.text || '你要怎么回应？').trim(),
+        choices,
+        stepIndex: runtime.stepIndex,
+        totalSteps: steps.length
+      });
+      setBehaviorStatus('行为树等待：请选择玩家回应。');
+      return;
+    }
+    runtime.stepIndex += 1;
+  }
 
   useEffect(() => {
     if (playerSpawnedRef.current) return;
@@ -4101,7 +6486,7 @@ function CommercialStreetEditor() {
     const onKeyDown = (event) => {
       const key = event.key.toLowerCase();
       if (!commercialV2MovementKeys.has(key) || isTypingTarget(event.target)) return;
-      if (autoTravelRef.current) {
+      if (!autoTravelRef.current?.playerId || autoTravelRef.current.playerId === controlledPlayerIdRef.current) {
         cancelAutoTravel('已切回手动控制。');
       }
       const wasPressed = pressedKeys.has(key);
@@ -4128,9 +6513,77 @@ function CommercialStreetEditor() {
   useEffect(() => {
     let frameId = 0;
     let previousTime = performance.now();
+    const stepConcurrentAutoTravel = (delta) => {
+      const travel = autoTravelRef.current;
+      if (!travel?.playerId || travel.playerId === controlledPlayerIdRef.current) return;
+      const travelPlayerId = travel.playerId;
+      const travelCharacter = commercialV2PlayerCharacterById.get(travelPlayerId) || commercialV2PlayerCharacters[0];
+      const currentPlayer = playersRef.current[travelPlayerId] || createCommercialV2PlayerState(travelCharacter);
+      const path = travel.path?.length ? travel.path : [travel.point];
+      let waypointIndex = Math.min(travel.pathIndex || 0, path.length - 1);
+      let waypoint = path[waypointIndex] || travel.point;
+      let targetDx = getCommercialV2LoopDeltaX(currentPlayer.x, waypoint.x, stageSize.width);
+      let targetDy = waypoint.y - currentPlayer.y;
+      let distance = Math.hypot(targetDx, targetDy);
+      const waypointReach = travel.behaviorRuntimeId ? Math.max(5, commercialV2PathWaypointReach * 0.65) : commercialV2PathWaypointReach;
+      while (distance <= waypointReach && waypointIndex < path.length - 1) {
+        waypointIndex += 1;
+        travel.pathIndex = waypointIndex;
+        waypoint = path[waypointIndex] || travel.point;
+        targetDx = getCommercialV2LoopDeltaX(currentPlayer.x, waypoint.x, stageSize.width);
+        targetDy = waypoint.y - currentPlayer.y;
+        distance = Math.hypot(targetDx, targetDy);
+      }
+      if (distance <= waypointReach) {
+        autoTravelRef.current = null;
+        setAutoTravelActive(false);
+        setWorldPlayerBubble(travelPlayerId, travel.action);
+        setNotice(`已到达 ${travel.label}，当前状态：${travel.action}。`);
+        setPlayerById(travelPlayerId, (current) => ({
+          ...current,
+          x: wrapLoopCoordinate(waypoint.x, stageSize.width),
+          y: waypoint.y,
+          direction: travel.place?.facing || current.direction,
+          moving: false,
+          frame: 0,
+          stepTime: 0
+        }));
+        return;
+      }
+      const normalizedX = targetDx / distance;
+      const normalizedY = targetDy / distance;
+      const direction = Math.abs(normalizedX) > Math.abs(normalizedY)
+        ? (normalizedX > 0 ? 'right' : 'left')
+        : (normalizedY > 0 ? 'front' : 'back');
+      const travelSpeed = travel.behaviorRuntimeId ? commercialV2BehaviorPlayerSpeed : commercialV2PlayerSpeed;
+      const frameRate = travel.behaviorRuntimeId ? 6 : 8;
+      const stepDistance = Math.min(travelSpeed * delta, distance);
+      const rawNextPoint = {
+        x: wrapLoopCoordinate(currentPlayer.x + normalizedX * stepDistance, stageSize.width),
+        y: currentPlayer.y + normalizedY * stepDistance
+      };
+      const groundedPoint = travel.semanticSlide
+        ? rawNextPoint
+        : resolvePlayerGroundMove(
+          currentPlayer,
+          rawNextPoint.x,
+          rawNextPoint.y,
+          { useAutoTravelBlocks: true }
+        );
+      const stepTime = currentPlayer.stepTime + delta;
+      setPlayerById(travelPlayerId, {
+        x: groundedPoint.x,
+        y: groundedPoint.y,
+        direction,
+        moving: true,
+        stepTime,
+        frame: Math.floor(stepTime * frameRate) % commercialV2PlayerFrameOrder.length
+      });
+    };
     const tick = (time) => {
       const delta = Math.min(0.05, (time - previousTime) / 1000);
       previousTime = time;
+      advanceBehaviorRuntime();
       const keys = pressedKeysRef.current;
       let dx = 0;
       let dy = 0;
@@ -4139,22 +6592,29 @@ function CommercialStreetEditor() {
       if (keys.has('w') || keys.has('arrowup')) dy -= 1;
       if (keys.has('s') || keys.has('arrowdown')) dy += 1;
       const moving = dx !== 0 || dy !== 0;
+      if (moving) stepConcurrentAutoTravel(delta);
       if (!moving) {
         const travel = autoTravelRef.current;
         if (travel) {
-          const currentPlayer = playerRef.current;
+          const travelPlayerId = travel.playerId || controlledPlayerIdRef.current;
+          const travelCharacter = commercialV2PlayerCharacterById.get(travelPlayerId) || commercialV2PlayerCharacters[0];
+          const currentPlayer = playersRef.current[travelPlayerId] || createCommercialV2PlayerState(travelCharacter);
           const path = travel.path?.length ? travel.path : [travel.point];
-          const waypointIndex = Math.min(travel.pathIndex || 0, path.length - 1);
-          const waypoint = path[waypointIndex] || travel.point;
-          const targetDx = getCommercialV2LoopDeltaX(currentPlayer.x, waypoint.x, stageSize.width);
-          const targetDy = waypoint.y - currentPlayer.y;
-          const distance = Math.hypot(targetDx, targetDy);
-          if (distance <= commercialV2PathWaypointReach) {
-            if (waypointIndex < path.length - 1) {
-              travel.pathIndex = waypointIndex + 1;
-              frameId = requestAnimationFrame(tick);
-              return;
-            }
+          let waypointIndex = Math.min(travel.pathIndex || 0, path.length - 1);
+          let waypoint = path[waypointIndex] || travel.point;
+          let targetDx = getCommercialV2LoopDeltaX(currentPlayer.x, waypoint.x, stageSize.width);
+          let targetDy = waypoint.y - currentPlayer.y;
+          let distance = Math.hypot(targetDx, targetDy);
+          const waypointReach = travel.behaviorRuntimeId ? Math.max(5, commercialV2PathWaypointReach * 0.65) : commercialV2PathWaypointReach;
+          while (distance <= waypointReach && waypointIndex < path.length - 1) {
+            waypointIndex += 1;
+            travel.pathIndex = waypointIndex;
+            waypoint = path[waypointIndex] || travel.point;
+            targetDx = getCommercialV2LoopDeltaX(currentPlayer.x, waypoint.x, stageSize.width);
+            targetDy = waypoint.y - currentPlayer.y;
+            distance = Math.hypot(targetDx, targetDy);
+          }
+          if (distance <= waypointReach) {
             if (travel.mode === 'streetCruise') {
               const arrivedPoint = {
                 x: wrapLoopCoordinate(waypoint.x, stageSize.width),
@@ -4174,8 +6634,8 @@ function CommercialStreetEditor() {
                   lastX: arrivedPoint.x,
                   lastY: arrivedPoint.y
                 };
-                setPlayerActionBubble(`逛 ${travel.label}`);
-                setPlayer((current) => ({
+                setWorldPlayerBubble(travelPlayerId, `逛 ${travel.label}`);
+                setPlayerById(travelPlayerId, (current) => ({
                   ...current,
                   ...arrivedPoint,
                   direction: 'right',
@@ -4186,9 +6646,9 @@ function CommercialStreetEditor() {
               }
               autoTravelRef.current = null;
               setAutoTravelActive(false);
-              setPlayerActionBubble('');
+              setWorldPlayerBubble(travelPlayerId, '');
               setNotice(`${travel.label} 前方没有可继续行走的路，已先停下。`);
-              setPlayer((current) => ({
+              setPlayerById(travelPlayerId, (current) => ({
                 ...current,
                 ...arrivedPoint,
                 direction: 'right',
@@ -4201,9 +6661,9 @@ function CommercialStreetEditor() {
             }
             autoTravelRef.current = null;
             setAutoTravelActive(false);
-            setPlayerActionBubble(travel.action);
+            setWorldPlayerBubble(travelPlayerId, travel.action);
             setNotice(`已到达 ${travel.label}，当前状态：${travel.action}。`);
-            setPlayer((current) => ({
+            setPlayerById(travelPlayerId, (current) => ({
               ...current,
               x: wrapLoopCoordinate(waypoint.x, stageSize.width),
               y: waypoint.y,
@@ -4220,13 +6680,22 @@ function CommercialStreetEditor() {
           const direction = Math.abs(normalizedX) > Math.abs(normalizedY)
             ? (normalizedX > 0 ? 'right' : 'left')
             : (normalizedY > 0 ? 'front' : 'back');
-          const stepDistance = Math.min(commercialV2PlayerSpeed * delta, distance);
-          const groundedPoint = resolvePlayerGroundMove(
-            currentPlayer,
-            currentPlayer.x + normalizedX * stepDistance,
-            currentPlayer.y + normalizedY * stepDistance,
-            { useAutoTravelBlocks: true }
-          );
+          const travelDelta = delta;
+          const travelSpeed = travel.behaviorRuntimeId ? commercialV2BehaviorPlayerSpeed : commercialV2PlayerSpeed;
+          const frameRate = travel.behaviorRuntimeId ? 6 : 8;
+          const stepDistance = Math.min(travelSpeed * travelDelta, distance);
+          const rawNextPoint = {
+            x: wrapLoopCoordinate(currentPlayer.x + normalizedX * stepDistance, stageSize.width),
+            y: currentPlayer.y + normalizedY * stepDistance
+          };
+          const groundedPoint = travel.semanticSlide
+            ? rawNextPoint
+            : resolvePlayerGroundMove(
+              currentPlayer,
+              rawNextPoint.x,
+              rawNextPoint.y,
+              { useAutoTravelBlocks: true }
+            );
           const movedDistance = Math.hypot(
             getCommercialV2LoopDeltaX(currentPlayer.x, groundedPoint.x, stageSize.width),
             currentPlayer.y - groundedPoint.y
@@ -4235,10 +6704,10 @@ function CommercialStreetEditor() {
             getCommercialV2LoopDeltaX(groundedPoint.x, waypoint.x, stageSize.width),
             waypoint.y - groundedPoint.y
           );
-          travel.stuckTime = movedDistance < 0.25 && nextDistance > 10
+          travel.stuckTime = !travel.semanticSlide && movedDistance < 0.25 && nextDistance > 10
             ? (travel.stuckTime || 0) + delta
             : 0;
-          if (travel.stuckTime > 1.2) {
+          if (!travel.semanticSlide && travel.stuckTime > 1.2) {
             const reroute = (travel.replanCount || 0) < 2
               ? (travel.mode === 'streetCruise'
                 ? buildStreetCruiseSegment(groundedPoint)
@@ -4259,11 +6728,11 @@ function CommercialStreetEditor() {
             }
             autoTravelRef.current = null;
             setAutoTravelActive(false);
-            setPlayerActionBubble('');
+            setWorldPlayerBubble(travelPlayerId, '');
             setNotice(travel.mode === 'streetCruise'
               ? `${travel.label} 前方被碰撞挡住了，先停在附近。`
               : `去 ${travel.label} 的路被碰撞挡住了，先停在附近。`);
-            setPlayer((current) => ({
+            setPlayerById(travelPlayerId, (current) => ({
               ...current,
               moving: false,
               frame: 0,
@@ -4272,14 +6741,14 @@ function CommercialStreetEditor() {
             frameId = requestAnimationFrame(tick);
             return;
           }
-          const stepTime = currentPlayer.stepTime + delta;
-          setPlayer({
+          const stepTime = currentPlayer.stepTime + travelDelta;
+          setPlayerById(travelPlayerId, {
             x: groundedPoint.x,
             y: groundedPoint.y,
             direction,
             moving: true,
             stepTime,
-            frame: Math.floor(stepTime * 8) % commercialV2PlayerFrameOrder.length
+            frame: Math.floor(stepTime * frameRate) % commercialV2PlayerFrameOrder.length
           });
           frameId = requestAnimationFrame(tick);
           return;
@@ -5195,12 +7664,22 @@ function CommercialStreetEditor() {
 
     function renderPlayer(targetPlayer, offset = 0, zIndex = getPlayerZIndex(targetPlayer)) {
       const isControlled = targetPlayer.id === controlledPlayerId;
+      const actorKind = targetPlayer.id === commercialV2RoleActorId
+        ? 'role-actor'
+        : targetPlayer.id === commercialV2UserActorId
+          ? 'user-actor'
+          : '';
+      const actorLabel = actorKind === 'role-actor' ? '角色' : actorKind === 'user-actor' ? '玩家' : '';
       const frameName = targetPlayer.moving ? commercialV2PlayerFrameOrder[targetPlayer.frame] : 'idle';
       const src = commercialV2PlayerFrame(targetPlayer, `${targetPlayer.direction}_walk_${frameName}.png`);
       const visualX = targetPlayer.x + offset;
-      const left = ((visualX - playerDimensions.width / 2) / stageSize.width) * 100;
-      const top = ((targetPlayer.y - playerDimensions.height + playerDimensions.footOffset) / stageSize.height) * 100;
+      const behaviorDialog = targetPlayer.id === commercialV2RoleActorId ? activeBehaviorDialog : null;
+      const actionBubble = behaviorDialog ? '' : (playerActionBubbles[targetPlayer.id] || (isControlled ? playerActionBubble : ''));
+      const playerLeftPx = (visualX - playerDimensions.width / 2) * zoom;
+      const playerTopPx = (targetPlayer.y - playerDimensions.height + playerDimensions.footOffset) * zoom;
       const bubbleTop = ((targetPlayer.y - playerDimensions.height + playerDimensions.footOffset - 8) / stageSize.height) * 100;
+      const dialogTop = (Math.max(20, targetPlayer.y - playerDimensions.height + playerDimensions.footOffset - 34) / stageSize.height) * 100;
+      const nameplateTop = ((targetPlayer.y - playerDimensions.height + playerDimensions.footOffset - 22) / stageSize.height) * 100;
       const peerCollisionWidth = Math.max(
         commercialV2PlayerPeerCollision.minWidth,
         playerDimensions.width * commercialV2PlayerPeerCollision.widthRatio
@@ -5218,19 +7697,32 @@ function CommercialStreetEditor() {
       return (
         <React.Fragment key={`player-${targetPlayer.id}-${offset}`}>
           <img
-            className={`pixel-world-player ${isControlled ? 'controlled' : ''}`}
+            className={`pixel-world-player ${isControlled ? 'controlled' : ''} ${actorKind}`}
             src={src}
             alt=""
             draggable={false}
             style={{
-              left: `${left}%`,
-              top: `${top}%`,
-              width: `${(playerDimensions.width / stageSize.width) * 100}%`,
-              height: `${(playerDimensions.height / stageSize.height) * 100}%`,
+              left: 0,
+              top: 0,
+              width: `${playerDimensions.width * zoom}px`,
+              height: `${playerDimensions.height * zoom}px`,
+              transform: `translate3d(${playerLeftPx}px, ${playerTopPx}px, 0)`,
               zIndex
             }}
           />
-          {isControlled && playerActionBubble && (
+          {actorLabel && (
+            <span
+              className={`pixel-world-player-nameplate ${actorKind}`}
+              style={{
+                left: `${(visualX / stageSize.width) * 100}%`,
+                top: `${nameplateTop}%`,
+                zIndex: zIndex + 900
+              }}
+            >
+              {actorLabel}
+            </span>
+          )}
+          {actionBubble && (
             <span
               className="pixel-world-player-action-bubble"
               style={{
@@ -5239,8 +7731,45 @@ function CommercialStreetEditor() {
                 zIndex: zIndex + 1000
               }}
             >
-              {playerActionBubble}
+              {actionBubble}
             </span>
+          )}
+          {behaviorDialog && (
+            <div
+              className={`pixel-world-behavior-dialog ${behaviorDialog.type || ''}`}
+              style={{
+                left: `${(visualX / stageSize.width) * 100}%`,
+                top: `${dialogTop}%`,
+                zIndex: zIndex + 1300
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <div className="pixel-world-behavior-dialog-head">
+                <strong>{behaviorDialog.title || '角色'}</strong>
+                <span>{Math.min((behaviorDialog.stepIndex || 0) + 1, behaviorDialog.totalSteps || 1)}/{behaviorDialog.totalSteps || 1}</span>
+              </div>
+              <p>{behaviorDialog.text}</p>
+              {behaviorDialog.type === 'pending' ? (
+                <button type="button" disabled>生成中...</button>
+              ) : behaviorDialog.type === 'choice' && behaviorDialog.choices?.length ? (
+                <div className="pixel-world-behavior-dialog-choices">
+                  {behaviorDialog.choices.map((choice) => (
+                    <button
+                      key={choice.id}
+                      type="button"
+                      onClick={() => chooseBehaviorDialogChoice(choice)}
+                      disabled={behaviorLoading}
+                    >
+                      {choice.label}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <button type="button" onClick={continueBehaviorDialog}>
+                  下一句
+                </button>
+              )}
+            </div>
           )}
           {showCollisionLines && (
             <span
@@ -5307,6 +7836,7 @@ function CommercialStreetEditor() {
       >
         <div className="pixel-world-editor-bg" aria-hidden="true" />
         {orderedNodes}
+        {interactive && renderPlayerInteractionMenu()}
       </div>
     );
   }
@@ -5459,7 +7989,7 @@ function CommercialStreetEditor() {
         <span>{notice}</span>
       </div>
 
-      <div className="pixel-world-editor-body">
+      <div className={`pixel-world-editor-body ${behaviorPanelCollapsed ? 'behavior-collapsed' : ''}`}>
         <aside className="pixel-world-asset-panel">
           <h3>素材</h3>
           <div className="pixel-world-asset-type-tabs" role="tablist" aria-label="素材分类">
@@ -5490,7 +8020,14 @@ function CommercialStreetEditor() {
           )}
         </aside>
 
-        <div className="pixel-world-editor-canvas-wrap" ref={canvasWrapRef} onScroll={onLoopScroll}>
+        <div
+          className="pixel-world-editor-canvas-wrap"
+          ref={canvasWrapRef}
+          tabIndex={0}
+          onPointerDownCapture={focusCanvasForKeyboard}
+          onScroll={onLoopScroll}
+          aria-label="商业街画布，点击后可用 WASD 控制当前人物"
+        >
           <div className="pixel-world-editor-loop-track">
             {renderEditorPanel('loop-before')}
             {renderEditorPanel('loop-current', true)}
@@ -5670,12 +8207,14 @@ function CommercialStreetEditor() {
           <h3>布局 JSON</h3>
           <textarea value={layoutJson} readOnly />
         </aside>
+
+        {renderBehaviorTreePanel()}
       </div>
     </div>
   );
 }
 
-function PixelWorldPanelContent() {
+function PixelWorldPanelContent({ apiUrl = '/api', userProfile = null }) {
   const [activeScene, setActiveScene] = useState('street');
   const [activeRoomStyle, setActiveRoomStyle] = useState('cute');
   const scene = activeScene === 'room' ? roomScenes[activeRoomStyle] : scenes.street;
@@ -5710,7 +8249,7 @@ function PixelWorldPanelContent() {
       )}
 
       {activeScene === 'street' ? (
-        <CommercialStreetEditor />
+        <CommercialStreetEditor apiUrl={apiUrl} userProfile={userProfile} />
       ) : (
         <div className="pixel-world-main">
           <section className="pixel-world-scene-panel">
@@ -5802,7 +8341,8 @@ class PixelWorldErrorBoundary extends React.Component {
       commercialV2StorageKey,
       commercialV2CanvasStorageKey,
       commercialV2ResetBackupStorageKey,
-      commercialV2DefaultSnapshotStorageKey
+      commercialV2DefaultSnapshotStorageKey,
+      commercialV2BehaviorConfigStorageKey
     ].forEach((key) => localStorage.removeItem(key));
     window.location.reload();
   };
@@ -5827,10 +8367,10 @@ class PixelWorldErrorBoundary extends React.Component {
   }
 }
 
-export default function PixelWorldPanel() {
+export default function PixelWorldPanel(props) {
   return (
     <PixelWorldErrorBoundary>
-      <PixelWorldPanelContent />
+      <PixelWorldPanelContent {...props} />
     </PixelWorldErrorBoundary>
   );
 }
@@ -6682,12 +9222,16 @@ const styles = `
 }
 .pixel-world-editor-body {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) 230px;
+  grid-template-columns: 220px minmax(520px, 1fr) 230px 360px;
   gap: 12px;
   align-items: stretch;
 }
+.pixel-world-editor-body.behavior-collapsed {
+  grid-template-columns: 220px minmax(760px, 1fr) 230px 58px;
+}
 .pixel-world-asset-panel,
-.pixel-world-inspector {
+.pixel-world-inspector,
+.pixel-world-behavior-panel {
   background: #fff;
   border: 1px solid #f5d5e4;
   border-radius: 8px;
@@ -6699,7 +9243,8 @@ const styles = `
   box-shadow: 0 12px 28px rgba(196, 116, 159, 0.1);
 }
 .pixel-world-asset-panel h3,
-.pixel-world-inspector h3 {
+.pixel-world-inspector h3,
+.pixel-world-behavior-panel h3 {
   margin: 0 0 10px;
   color: #60475c;
   font-size: 14px;
@@ -6764,6 +9309,7 @@ const styles = `
   line-height: 1.2;
 }
 .pixel-world-editor-canvas-wrap {
+  position: relative;
   overflow: auto;
   padding: 14px;
   background: #fff;
@@ -6772,6 +9318,10 @@ const styles = `
   box-sizing: border-box;
   min-height: 0;
   box-shadow: 0 12px 28px rgba(196, 116, 159, 0.1);
+}
+.pixel-world-editor-canvas-wrap:focus {
+  outline: 2px solid rgba(53, 166, 255, .32);
+  outline-offset: 2px;
 }
 .pixel-world-editor-loop-track {
   display: flex;
@@ -7007,26 +9557,59 @@ const styles = `
   pointer-events: none;
   user-select: none;
   filter: drop-shadow(0 4px 0 rgba(85, 56, 72, .16));
+  will-change: transform;
+  backface-visibility: hidden;
 }
 .pixel-world-player.controlled {
   filter: drop-shadow(0 0 0 rgba(255, 255, 255, 1)) drop-shadow(0 0 5px rgba(245, 177, 48, .78)) drop-shadow(0 4px 0 rgba(85, 56, 72, .16));
 }
+.pixel-world-player.role-actor {
+  filter: drop-shadow(0 0 4px rgba(75, 132, 214, .42)) drop-shadow(0 4px 0 rgba(85, 56, 72, .16));
+}
+.pixel-world-player.user-actor {
+  filter: drop-shadow(0 0 4px rgba(58, 159, 117, .42)) drop-shadow(0 4px 0 rgba(85, 56, 72, .16));
+}
+.pixel-world-player.user-actor.controlled {
+  filter: drop-shadow(0 0 0 rgba(255, 255, 255, 1)) drop-shadow(0 0 5px rgba(245, 177, 48, .78)) drop-shadow(0 0 4px rgba(58, 159, 117, .42)) drop-shadow(0 4px 0 rgba(85, 56, 72, .16));
+}
+.pixel-world-player-nameplate {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  padding: 3px 6px;
+  border: 1px solid rgba(255, 255, 255, .86);
+  border-radius: 6px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  box-shadow: 0 4px 10px rgba(70, 40, 60, .18);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.pixel-world-player-nameplate.role-actor {
+  background: rgba(75, 132, 214, .92);
+}
+.pixel-world-player-nameplate.user-actor {
+  background: rgba(58, 159, 117, .92);
+}
 .pixel-world-player-action-bubble {
   position: absolute;
   transform: translate(-50%, -100%);
-  max-width: 120px;
-  padding: 4px 7px;
+  min-width: 96px;
+  max-width: min(280px, 34vw);
+  padding: 7px 10px;
   border: 1px solid rgba(212, 88, 147, .42);
-  border-radius: 999px;
+  border-radius: 8px;
   background: rgba(255, 250, 253, .94);
   color: #75546e;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
-  line-height: 1.2;
+  line-height: 1.35;
   text-align: center;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
   box-shadow: 0 5px 12px rgba(84, 52, 74, .16);
   pointer-events: none;
 }
@@ -7041,6 +9624,249 @@ const styles = `
 .pixel-world-player-footprint.controlled {
   border-color: rgba(212, 88, 147, .95);
   background: rgba(212, 88, 147, .18);
+}
+.pixel-world-behavior-dialog {
+  position: absolute;
+  width: min(400px, 44vw);
+  min-width: 300px;
+  box-sizing: border-box;
+  transform: translate(-50%, -100%);
+  border: 1px solid rgba(124, 168, 216, .72);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .97);
+  color: #263e58;
+  padding: 11px;
+  z-index: 999999;
+  box-shadow: 0 14px 30px rgba(42, 63, 88, .2);
+  pointer-events: auto;
+  user-select: none;
+}
+.pixel-world-behavior-dialog::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -7px;
+  width: 12px;
+  height: 12px;
+  transform: translateX(-50%) rotate(45deg);
+  border-right: 1px solid rgba(124, 168, 216, .72);
+  border-bottom: 1px solid rgba(124, 168, 216, .72);
+  background: rgba(255, 255, 255, .97);
+}
+.pixel-world-behavior-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.pixel-world-behavior-dialog-head strong {
+  min-width: 0;
+  color: #203954;
+  font-size: 12px;
+  font-weight: 950;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pixel-world-behavior-dialog-head span {
+  flex: 0 0 auto;
+  border: 1px solid #d7e7f5;
+  border-radius: 999px;
+  background: #f3f8ff;
+  color: #4f7395;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 900;
+}
+.pixel-world-behavior-dialog p {
+  margin: 0 0 10px;
+  color: #314d68;
+  font-size: 13px;
+  font-weight: 850;
+  line-height: 1.5;
+  white-space: normal;
+  word-break: break-word;
+}
+.pixel-world-behavior-dialog button {
+  min-width: 0;
+  min-height: 30px;
+  box-sizing: border-box;
+  border: 1px solid #cddff2;
+  border-radius: 7px;
+  background: #f7fbff;
+  color: #2c5f8d;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 950;
+  cursor: pointer;
+}
+.pixel-world-behavior-dialog button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+.pixel-world-behavior-dialog-choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.pixel-world-interaction-entry {
+  position: absolute;
+  min-width: 86px;
+  min-height: 36px;
+  box-sizing: border-box;
+  border: 1px solid rgba(142, 190, 232, .82);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .96);
+  color: #2d5f8d;
+  padding: 5px 9px;
+  z-index: 999998;
+  box-shadow: 0 9px 20px rgba(50, 74, 98, .18);
+  cursor: pointer;
+  pointer-events: auto;
+  user-select: none;
+  transition: transform 120ms ease;
+}
+.pixel-world-interaction-entry.side-left {
+  transform: translate(calc(-100% - 10px), -50%);
+}
+.pixel-world-interaction-entry.side-right {
+  transform: translate(10px, -50%);
+}
+.pixel-world-interaction-entry strong,
+.pixel-world-interaction-entry span {
+  display: block;
+  line-height: 1.15;
+}
+.pixel-world-interaction-entry strong {
+  font-size: 12px;
+  font-weight: 950;
+}
+.pixel-world-interaction-entry span {
+  max-width: 100px;
+  margin-top: 2px;
+  color: #5c7892;
+  font-size: 10px;
+  font-weight: 850;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pixel-world-interaction-entry:hover {
+  box-shadow: 0 12px 24px rgba(50, 74, 98, .22);
+}
+.pixel-world-interaction-entry:disabled {
+  opacity: .58;
+  cursor: not-allowed;
+}
+.pixel-world-interaction-menu {
+  position: absolute;
+  width: 270px;
+  max-height: min(360px, 72%);
+  box-sizing: border-box;
+  border: 1px solid rgba(160, 196, 226, .78);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .96);
+  color: #314d68;
+  padding: 9px;
+  z-index: 999999;
+  box-shadow: 0 14px 30px rgba(54, 73, 94, .2);
+  overflow: auto;
+  pointer-events: auto;
+  user-select: none;
+}
+.pixel-world-interaction-menu.side-left {
+  transform: translate(calc(-100% - 12px), 0);
+}
+.pixel-world-interaction-menu.side-right {
+  transform: translate(12px, 0);
+}
+.pixel-world-interaction-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.pixel-world-interaction-menu-head strong {
+  min-width: 0;
+  color: #233d57;
+  font-size: 12px;
+  font-weight: 950;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pixel-world-interaction-menu-head span {
+  flex: 0 0 auto;
+  border: 1px solid #cde7d8;
+  border-radius: 999px;
+  background: #eefaf3;
+  color: #3f775f;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 900;
+}
+.pixel-world-interaction-close {
+  flex: 0 0 auto;
+  min-height: 25px !important;
+  padding: 3px 8px !important;
+  border-color: #d7e7f5 !important;
+  background: #f6fbff !important;
+  color: #4f7395 !important;
+  font-size: 10px !important;
+}
+.pixel-world-interaction-menu-primary,
+.pixel-world-interaction-menu-context {
+  display: grid;
+  gap: 6px;
+}
+.pixel-world-interaction-menu-primary {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.pixel-world-interaction-menu-context {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.pixel-world-interaction-menu button,
+.pixel-world-interaction-menu select {
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid #d7e7f5;
+  border-radius: 7px;
+  background: #fff;
+  color: #3d5e79;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 900;
+}
+.pixel-world-interaction-menu button {
+  min-height: 30px;
+  padding: 5px 7px;
+  cursor: pointer;
+}
+.pixel-world-interaction-menu button.active {
+  border-color: #72a7d8;
+  background: #e9f4ff;
+  color: #245b8e;
+}
+.pixel-world-interaction-menu button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+.pixel-world-interaction-menu-target {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  margin: 7px 0;
+  color: #607383;
+  font-size: 11px;
+  font-weight: 900;
+}
+.pixel-world-interaction-menu select {
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 7px;
 }
 .pixel-world-player-help {
   border: 1px solid #d7efe3;
@@ -7440,6 +10266,557 @@ const styles = `
   font-size: 12px;
   line-height: 1.5;
 }
+.pixel-world-behavior-panel {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  background:
+    linear-gradient(180deg, #fbfdff 0%, #ffffff 54%, #fbfff9 100%);
+  border-color: #d7e7f5;
+  color: #4d5d68;
+}
+.pixel-world-behavior-panel.collapsed {
+  padding: 8px;
+  overflow: hidden;
+}
+.pixel-world-behavior-panel-expand {
+  width: 100%;
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  border: 1px solid #d7e7f5;
+  border-radius: 8px;
+  background: #f8fbfe;
+  color: #314d68;
+  cursor: pointer;
+  font: inherit;
+}
+.pixel-world-behavior-panel-expand span {
+  writing-mode: vertical-rl;
+  color: #314d68;
+  font-size: 13px;
+  font-weight: 950;
+  letter-spacing: 0;
+}
+.pixel-world-behavior-panel-expand strong {
+  padding: 4px 5px;
+  border-radius: 6px;
+  background: #e9f4ff;
+  color: #356fa6;
+  font-size: 9.5px;
+  font-weight: 950;
+}
+.pixel-world-behavior-panel-expand small {
+  color: #7a94aa;
+  font-size: 10px;
+  font-weight: 900;
+}
+.pixel-world-behavior-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.pixel-world-behavior-head h3 {
+  margin: 0 0 3px;
+  color: #314d68;
+}
+.pixel-world-behavior-head span {
+  color: #738698;
+  font-size: 12px;
+}
+.pixel-world-behavior-head strong {
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: #e9f4ff;
+  color: #356fa6;
+  font-size: 11px;
+  font-weight: 900;
+}
+.pixel-world-behavior-head-actions {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+}
+.pixel-world-behavior-head-actions button {
+  min-height: 26px;
+  border: 1px solid #d7e7f5;
+  border-radius: 7px;
+  background: #fff;
+  color: #356fa6;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 4px 8px;
+}
+.pixel-world-behavior-actors {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.pixel-world-behavior-actor {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 76px;
+  padding: 8px;
+  border: 1px solid #d9e8f6;
+  border-radius: 8px;
+  background: #f7fbff;
+}
+.pixel-world-behavior-actor.user {
+  border-color: #d8eadf;
+  background: #f7fff9;
+}
+.pixel-world-behavior-actor img {
+  width: 36px;
+  height: 48px;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+.pixel-world-behavior-actor div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.pixel-world-behavior-actor strong {
+  color: #314d68;
+  font-size: 12px;
+}
+.pixel-world-behavior-actor.user strong {
+  color: #3a7d61;
+}
+.pixel-world-behavior-actor span,
+.pixel-world-behavior-actor small {
+  overflow: hidden;
+  color: #738698;
+  font-size: 10px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pixel-world-behavior-field {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  color: #607383;
+  font-size: 12px;
+  font-weight: 900;
+}
+.pixel-world-behavior-field > span {
+  color: #607383;
+}
+.pixel-world-behavior-field input,
+.pixel-world-behavior-field select,
+.pixel-world-behavior-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #d7e7f5;
+  border-radius: 7px;
+  background: #fff;
+  color: #314d68;
+  padding: 8px 9px;
+  font: inherit;
+}
+.pixel-world-behavior-field textarea {
+  min-height: 72px;
+  resize: vertical;
+  line-height: 1.45;
+}
+.pixel-world-behavior-model-grid {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #e1ecf6;
+  border-radius: 8px;
+  background: #f8fbfe;
+}
+.pixel-world-behavior-model-actions,
+.pixel-world-behavior-run-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.pixel-world-behavior-model-actions button,
+.pixel-world-behavior-run-row button,
+.pixel-world-behavior-actions button {
+  min-height: 34px;
+  border: 1px solid #d7e7f5;
+  border-radius: 7px;
+  background: #fff;
+  color: #356fa6;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+}
+.pixel-world-behavior-model-actions button:disabled,
+.pixel-world-behavior-run-row button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+.pixel-world-behavior-run-row button.primary {
+  border-color: #b9ddca;
+  background: #edf9f2;
+  color: #3a7d61;
+}
+.pixel-world-behavior-model-status {
+  min-height: 28px;
+  padding: 7px 8px;
+  border: 1px solid #dcebf6;
+  border-radius: 7px;
+  background: #fff;
+  color: #607383;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+.pixel-world-behavior-model-status.error {
+  border-color: #f0c5d3;
+  background: #fff8fb;
+  color: #9c4f68;
+}
+.pixel-world-behavior-model-list {
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid #dcebf6;
+  border-radius: 8px;
+  background: #fff;
+}
+.pixel-world-behavior-model-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #607383;
+  font-size: 11px;
+  font-weight: 900;
+}
+.pixel-world-behavior-model-list-head span {
+  color: #7a94aa;
+}
+.pixel-world-behavior-model-options {
+  display: grid;
+  gap: 5px;
+  max-height: 180px;
+  overflow: auto;
+  padding-right: 2px;
+}
+.pixel-world-behavior-model-options button {
+  width: 100%;
+  min-height: 28px;
+  border: 1px solid #e0ebf5;
+  border-radius: 7px;
+  background: #fbfdff;
+  color: #3d5e79;
+  padding: 5px 7px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.25;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.pixel-world-behavior-model-options button.active {
+  border-color: #72a7d8;
+  background: #e9f4ff;
+  color: #245b8e;
+  box-shadow: 0 0 0 2px rgba(114, 167, 216, .12);
+}
+.pixel-world-behavior-fold {
+  min-width: 0;
+  border: 1px solid #e1ecf6;
+  border-radius: 8px;
+  background: #fbfdff;
+  overflow: hidden;
+}
+.pixel-world-behavior-fold-head {
+  width: 100%;
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: #314d68;
+  padding: 8px 9px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.pixel-world-behavior-fold.open .pixel-world-behavior-fold-head {
+  border-bottom: 1px solid #e1ecf6;
+  background: #f8fbfe;
+}
+.pixel-world-behavior-fold-head span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 950;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pixel-world-behavior-fold-head small {
+  max-width: 150px;
+  overflow: hidden;
+  color: #7a94aa;
+  font-size: 10.5px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pixel-world-behavior-fold-head strong {
+  min-width: 38px;
+  border: 1px solid #d7e7f5;
+  border-radius: 999px;
+  background: #fff;
+  color: #356fa6;
+  padding: 3px 7px;
+  font-size: 10.5px;
+  font-weight: 950;
+  text-align: center;
+}
+.pixel-world-behavior-fold-body {
+  display: grid;
+  gap: 9px;
+  padding: 9px;
+}
+.pixel-world-behavior-fold-body > .pixel-world-behavior-model-grid,
+.pixel-world-behavior-fold-body > .pixel-world-behavior-constraints,
+.pixel-world-behavior-fold-body > .pixel-world-behavior-branch-map {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+.pixel-world-behavior-section-title {
+  color: #314d68;
+  font-size: 12px;
+  font-weight: 900;
+}
+.pixel-world-behavior-constraints {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid #e1ecf6;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+.pixel-world-behavior-constraints strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #607383;
+  font-size: 11px;
+}
+.pixel-world-behavior-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.pixel-world-behavior-chip-list span {
+  min-height: 23px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #dbe8f4;
+  border-radius: 7px;
+  background: #fff;
+  color: #3d5e79;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 850;
+}
+.pixel-world-behavior-branch-map {
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid #e7e1f3;
+  border-radius: 8px;
+  background: #fdfbff;
+}
+.pixel-world-behavior-branch-map div {
+  display: grid;
+  gap: 3px;
+}
+.pixel-world-behavior-branch-map strong {
+  color: #604f82;
+  font-size: 11px;
+  font-weight: 950;
+}
+.pixel-world-behavior-branch-map span {
+  color: #7c6f93;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.pixel-world-behavior-proximity {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 9px;
+  border: 1px solid #eadde6;
+  border-radius: 8px;
+  background: #fffafd;
+  color: #75546e;
+  font-size: 11px;
+  font-weight: 900;
+}
+.pixel-world-behavior-proximity strong,
+.pixel-world-behavior-proximity span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pixel-world-behavior-proximity.nearby {
+  border-color: #cde7d8;
+  background: #f1fff8;
+  color: #3f775f;
+}
+.pixel-world-behavior-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+.pixel-world-behavior-actions button {
+  color: #607383;
+}
+.pixel-world-behavior-actions button.active {
+  border-color: #72a7d8;
+  background: #e9f4ff;
+  color: #245b8e;
+  box-shadow: 0 0 0 2px rgba(114, 167, 216, .14);
+}
+.pixel-world-behavior-status {
+  min-height: 34px;
+  padding: 8px 9px;
+  border: 1px solid #e2edf5;
+  border-radius: 7px;
+  background: #fbfdff;
+  color: #607383;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.pixel-world-behavior-runtime {
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+  border: 1px solid #eadde6;
+  border-radius: 8px;
+  background: #fffafd;
+  color: #75546e;
+}
+.pixel-world-behavior-runtime.active {
+  border-color: #cde7d8;
+  background: #f1fff8;
+  color: #3f775f;
+}
+.pixel-world-behavior-runtime strong {
+  color: inherit;
+  font-size: 11px;
+  font-weight: 950;
+}
+.pixel-world-behavior-runtime span {
+  color: #314d68;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.25;
+}
+.pixel-world-behavior-runtime small {
+  color: #7a94aa;
+  font-size: 10.5px;
+  font-weight: 800;
+}
+.pixel-world-behavior-runtime-control {
+  display: grid;
+  gap: 7px;
+  margin-top: 5px;
+  padding: 8px;
+  border: 1px solid #cde7d8;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .74);
+}
+.pixel-world-behavior-runtime-control strong {
+  color: #3f775f;
+  font-size: 11px;
+}
+.pixel-world-behavior-runtime-control p {
+  margin: 0;
+  color: #314d68;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.4;
+  word-break: break-word;
+}
+.pixel-world-behavior-runtime-control button {
+  min-height: 30px;
+  border: 1px solid #cddff2;
+  border-radius: 7px;
+  background: #f7fbff;
+  color: #2c5f8d;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 950;
+}
+.pixel-world-behavior-runtime-control button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+.pixel-world-behavior-runtime-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.pixel-world-behavior-json-grid {
+  display: grid;
+  gap: 9px;
+}
+.pixel-world-behavior-json-grid section {
+  min-width: 0;
+  border: 1px solid #e1ecf6;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+.pixel-world-behavior-json-grid h4 {
+  margin: 0;
+  padding: 7px 9px;
+  border-bottom: 1px solid #e1ecf6;
+  background: #f8fbfe;
+  color: #314d68;
+  font-size: 12px;
+}
+.pixel-world-behavior-json-grid pre {
+  max-height: 230px;
+  margin: 0;
+  padding: 9px;
+  overflow: auto;
+  color: #314d68;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+@media (max-width: 1500px) {
+  .pixel-world-editor-body {
+    grid-template-columns: 220px minmax(420px, 1fr) 300px;
+  }
+  .pixel-world-editor-body.behavior-collapsed {
+    grid-template-columns: 200px minmax(560px, 1fr) 230px 54px;
+  }
+  .pixel-world-behavior-panel {
+    grid-column: 1 / -1;
+  }
+  .pixel-world-editor-body.behavior-collapsed .pixel-world-behavior-panel {
+    grid-column: auto;
+  }
+  .pixel-world-behavior-json-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
 @media (max-width: 980px) {
   .pixel-world-header {
     align-items: stretch;
@@ -7452,6 +10829,26 @@ const styles = `
     grid-template-columns: 1fr;
   }
   .pixel-world-editor-body {
+    grid-template-columns: 1fr;
+  }
+  .pixel-world-editor-body.behavior-collapsed {
+    grid-template-columns: 1fr;
+  }
+  .pixel-world-behavior-panel {
+    grid-column: auto;
+  }
+  .pixel-world-behavior-panel.collapsed {
+    min-height: 54px;
+  }
+  .pixel-world-behavior-panel-expand {
+    min-height: 38px;
+    grid-template-columns: 1fr auto auto;
+  }
+  .pixel-world-behavior-panel-expand span {
+    writing-mode: horizontal-tb;
+  }
+  .pixel-world-behavior-json-grid,
+  .pixel-world-behavior-actors {
     grid-template-columns: 1fr;
   }
   .pixel-world-editor-stage {

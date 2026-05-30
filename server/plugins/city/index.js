@@ -2133,6 +2133,1106 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         return `\n[竞争任务现场]\n${names} 正在竞争同一条公告任务：${quest.emoji || '📜'} ${quest.title}。\n任务内容：${quest.description || ''}\n${onSite}\n这次偶遇请明显体现“彼此知道对方在抢同一单”的紧张感、试探、让步、暗中较劲或嘴上不说破的竞争。`;
     }
 
+    const behaviorTreeAllowedActions = [
+        'say',
+        'emote',
+        'wait',
+        'face_player',
+        'go_to_place',
+        'wander_between',
+        'loop_in_front_of',
+        'browse_near',
+        'patrol_segment',
+        'approach_player',
+        'follow_player',
+        'walk_with_player',
+        'idle_at_place',
+        'offer_choices',
+        'create_memory',
+        'relationship_delta',
+        'end_interaction'
+    ];
+    const behaviorTreeAllowedActionSet = new Set(behaviorTreeAllowedActions);
+    const behaviorSemanticMovementActions = [
+        { id: 'go_to_place', label: '前往地点', needs: ['place_id'], description: '走到某个表内地点附近。' },
+        { id: 'wander_between', label: '两点间闲逛', needs: ['from_place_id', 'to_place_id'], description: '在两个表内地点之间来回平移。' },
+        { id: 'loop_in_front_of', label: '门前循环', needs: ['place_id'], description: '在某个表内地点前面小范围左右移动。' },
+        { id: 'browse_near', label: '附近浏览', needs: ['place_id'], description: '靠近某个表内地点，停停走走。' },
+        { id: 'patrol_segment', label: '街段巡逻', needs: ['from_place_id', 'to_place_id'], description: '在两个表内地点之间巡逻式移动。' },
+        { id: 'approach_player', label: '靠近玩家', needs: [], description: '靠近玩家并面对玩家。' },
+        { id: 'follow_player', label: '跟随玩家', needs: [], description: '跟随玩家，保持一小段距离。' },
+        { id: 'walk_with_player', label: '陪玩家走', needs: ['to_place_id?'], description: '和玩家一起向某个表内地点走，地点可选。' },
+        { id: 'idle_at_place', label: '地点停留', needs: ['place_id'], description: '在某个表内地点附近站立、等待、转向或说话。' }
+    ];
+    const behaviorSemanticMovementActionSet = new Set(behaviorSemanticMovementActions.map((action) => action.id));
+    const behaviorPatchTargetIds = new Set([
+        'player_interaction',
+        'hard_needs',
+        'routine_goal',
+        'place_affordance',
+        'background_mood',
+        'curiosity',
+        'wander',
+        'idle_micro'
+    ]);
+    const behaviorBasePatchTargetIds = new Set([
+        'hard_needs',
+        'routine_goal',
+        'place_affordance',
+        'background_mood',
+        'curiosity',
+        'wander',
+        'idle_micro'
+    ]);
+
+    function limitText(value, maxLength = 220) {
+        return String(value || '').trim().slice(0, maxLength);
+    }
+
+    function parseJsonObjectFromLlmText(text) {
+        const cleaned = String(text || '').replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim();
+        const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) return null;
+        return JSON.parse(jsonMatch[0]);
+    }
+
+    async function fetchBehaviorModelList(endpoint, key, timeoutMs = 18000) {
+        const apiEndpoint = String(endpoint || '').trim();
+        const apiKey = String(key || '').trim();
+        if (!apiEndpoint || !apiKey) throw new Error('Missing endpoint or key');
+        let baseUrl = apiEndpoint.endsWith('/') ? apiEndpoint.slice(0, -1) : apiEndpoint;
+        if (baseUrl.endsWith('/chat/completions')) baseUrl = baseUrl.slice(0, -'/chat/completions'.length);
+        const modelsUrl = `${baseUrl}/models`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            const response = await fetch(modelsUrl, {
+                headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+                signal: controller.signal
+            });
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(`API ${response.status}: ${text.slice(0, 200)}`);
+            }
+            const data = await response.json();
+            return (data.data || data.models || []).map((model) => model.id || model.name || model).filter(Boolean).sort();
+        } catch (error) {
+            if (error?.name === 'AbortError') throw new Error('请求超时');
+            throw error;
+        } finally {
+            clearTimeout(timeoutId);
+        }
+    }
+
+    function getBehaviorTreeSkeleton() {
+        return {
+            version: 'single-character-street-runtime-v1',
+            root: {
+                id: 'street_character_root',
+                type: 'PrioritySelector',
+                children: [
+                    {
+                        id: 'player_interaction',
+                        branch_kind: 'special',
+                        priority: 100,
+                        trigger: 'player_event.active',
+                        note: '玩家靠近点击互动、或在互动里选择回应后，只局部更新这里。',
+                        branches: ['greet', 'small_talk', 'ask_current_action', 'suggest_destination', 'treat_food', 'comfort']
+                    },
+                    {
+                        id: 'hard_needs',
+                        branch_kind: 'base',
+                        priority: 82,
+                        trigger: 'runtime_state.need_high',
+                        branches: ['base_needs_cafe_snack', 'base_needs_home_rest']
+                    },
+                    {
+                        id: 'routine_goal',
+                        branch_kind: 'base',
+                        priority: 76,
+                        trigger: 'runtime_state.routine_tick',
+                        note: '本地默认节奏，不由私聊或商业街活动触发。',
+                        branches: ['base_routine_home_agency', 'base_routine_sign_check']
+                    },
+                    {
+                        id: 'place_affordance',
+                        branch_kind: 'base',
+                        priority: 68,
+                        trigger: 'location.has_affordance',
+                        branches: ['base_affordance_agency_window', 'base_affordance_cafe_pause']
+                    },
+                    {
+                        id: 'background_mood',
+                        branch_kind: 'base',
+                        priority: 60,
+                        trigger: 'runtime_state.mood_idle',
+                        note: '大输入只作背景情绪，不因私聊或商业街活动触发行动。',
+                        branches: ['base_background_walk_cafe', 'base_background_slow_down']
+                    },
+                    {
+                        id: 'curiosity',
+                        branch_kind: 'base',
+                        priority: 52,
+                        trigger: 'nearby_place_or_player',
+                        branches: ['base_curiosity_player_glance', 'base_curiosity_window_watch']
+                    },
+                    {
+                        id: 'wander',
+                        branch_kind: 'base',
+                        priority: 36,
+                        trigger: 'otherwise',
+                        branches: ['base_wander_convenience_cafe', 'base_loop_cafe_front', 'base_patrol_agency_shop']
+                    },
+                    {
+                        id: 'idle_micro',
+                        branch_kind: 'base',
+                        priority: 20,
+                        trigger: 'idle',
+                        branches: ['base_idle_watch_street', 'base_idle_turn_pause']
+                    }
+                ]
+            }
+        };
+    }
+
+    function getBehaviorOutputContract(world = {}) {
+        const allowedPlaceIds = Array.isArray(world.allowed_place_ids) ? world.allowed_place_ids : [];
+        const allowedMovementActions = Array.isArray(world.allowed_movement_actions) && world.allowed_movement_actions.length
+            ? world.allowed_movement_actions
+            : behaviorSemanticMovementActions;
+        return {
+            type: 'full_behavior_tree_patch_v1',
+            allowed_place_ids: allowedPlaceIds,
+            allowed_movement_actions: allowedMovementActions,
+            schema: {
+                patch_id: 'string',
+                operation: 'upsert_child',
+                target_node_id: '玩家互动必须为 player_interaction；基础自主枝丫是无互动时角色自己的默认行为，只有明确要求改基础树时才使用 hard_needs/routine_goal/place_affordance/background_mood/curiosity/wander/idle_micro',
+                next_active_node_id: '本次 patch 合并后立刻执行的 node.id',
+                reason: '一两句话说明为什么更新这个枝丫',
+                node: {
+                    id: 'string，局部枝丫节点 ID',
+                    type: 'ActionSequence',
+                    title: 'string',
+                    priority: '1-100',
+                    ttl_ms: '3000-120000',
+                    trigger: {
+                        player_action: 'greet|small_talk|ask_current_action|ask_destination|suggest_destination|request_company|treat_food|request_help|joke|comfort',
+                        place_id: 'optional；如果填写，必须来自 allowed_place_ids'
+                    },
+                    summary: '一两句话说明角色为什么这么反应',
+                    steps: [
+                        {
+                            action: behaviorTreeAllowedActions.join('|'),
+                            text: 'say/emote/create_memory/relationship_delta 可用',
+                            place_id: 'go_to_place/loop_in_front_of/browse_near/idle_at_place 可用；必须来自 allowed_place_ids',
+                            from_place_id: 'wander_between/patrol_segment 可用；必须来自 allowed_place_ids',
+                            to_place_id: 'wander_between/patrol_segment/walk_with_player 可用；必须来自 allowed_place_ids',
+                            movement_style: '可选：slow、hesitating、window_shopping、patrol、walk_together 等文字风格',
+                            duration_ms: 'wait 可用',
+                            choices: 'offer_choices 可用，最多 4 个；choice.trigger 应使用玩家互动动作白名单'
+                        }
+                    ]
+                },
+                memory_delta: '可选：写入小量运行时状态，如 last_player_choice/current_topic/mood_shift'
+            },
+            allowed_actions: behaviorTreeAllowedActions
+        };
+    }
+
+    function getBehaviorBaseOutputContract(world = {}) {
+        const allowedPlaceIds = Array.isArray(world.allowed_place_ids) ? world.allowed_place_ids : [];
+        const allowedMovementActions = Array.isArray(world.allowed_movement_actions) && world.allowed_movement_actions.length
+            ? world.allowed_movement_actions
+            : behaviorSemanticMovementActions;
+        return {
+            type: 'base_behavior_branch_pack_v1',
+            allowed_place_ids: allowedPlaceIds,
+            allowed_movement_actions: allowedMovementActions,
+            target_node_ids: Array.from(behaviorBasePatchTargetIds),
+            schema: {
+                base_branches: [
+                    {
+                        id: 'string，建议以 base_ 开头',
+                        target_node_id: 'hard_needs|routine_goal|place_affordance|background_mood|curiosity|wander|idle_micro',
+                        title: '基础：xxx',
+                        priority: '1-100',
+                        ttl_ms: '3000-120000',
+                        trigger: 'runtime_state.need_high|runtime_state.routine_tick|location.has_affordance|runtime_state.mood_idle|nearby_place_or_player|otherwise|idle',
+                        summary: '一两句话说明无互动时角色为什么做这件事',
+                        steps: [
+                            {
+                                action: behaviorTreeAllowedActions.join('|'),
+                                text: 'say/emote 可用；基础枝丫里不要使用 offer_choices',
+                                place_id: 'go_to_place/loop_in_front_of/browse_near/idle_at_place 可用；必须来自 allowed_place_ids',
+                                from_place_id: 'wander_between/patrol_segment 可用；必须来自 allowed_place_ids',
+                                to_place_id: 'wander_between/patrol_segment/walk_with_player 可用；必须来自 allowed_place_ids',
+                                movement_style: '可选：slow、window_shopping、patrol、distracted 等文字风格',
+                                duration_ms: 'wait/say/emote 可用'
+                            }
+                        ]
+                    }
+                ]
+            },
+            allowed_actions: behaviorTreeAllowedActions
+        };
+    }
+
+    function buildFallbackBehaviorBranch(char, payload = {}, reason = 'local_fallback') {
+        const event = payload?.player_event || {};
+        const action = String(event.action || 'greet');
+        const placeId = limitText(event.place_id || event.placeId || '', 60);
+        const placeLabel = limitText(event.place_label || event.placeLabel || '', 80);
+        const name = limitText(char?.name || '角色', 40);
+        const branchId = `bt_${action}_${Date.now()}`;
+        const templates = {
+            greet: {
+                title: '玩家靠近打招呼',
+                summary: `${name}先看向玩家，给一个短回应。`,
+                steps: [
+                    { action: 'face_player' },
+                    { action: 'say', text: '我在。你刚刚也在这条街上晃吗？' },
+                    { action: 'wait', duration_ms: 1200 }
+                ]
+            },
+            small_talk: {
+                title: '街边闲聊',
+                summary: `${name}把商业街最近的气氛带进闲聊。`,
+                steps: [
+                    { action: 'face_player' },
+                    { action: 'emote', text: '停下脚步，往街边看了一眼' },
+                    { action: 'say', text: '这条街今天挺有动静的，我刚还在想要不要换个地方走走。' },
+                    { action: 'offer_choices', choices: [
+                        { id: 'ask_more', label: '继续问' },
+                        { id: 'walk_together', label: '一起走' }
+                    ] }
+                ]
+            },
+            ask_current_action: {
+                title: '询问正在做什么',
+                summary: `${name}把当前状态解释给玩家听。`,
+                steps: [
+                    { action: 'face_player' },
+                    { action: 'say', text: '我在整理今天要做的事，顺便看看街上有没有适合下手的机会。' },
+                    { action: 'wait', duration_ms: 900 }
+                ]
+            },
+            suggest_destination: {
+                title: '玩家提出目的地',
+                summary: `${name}根据玩家选的地点临时改道。`,
+                steps: [
+                    { action: 'face_player' },
+                    { action: 'say', text: placeLabel ? `去${placeLabel}？行，我先过去看看。` : '行，我跟你过去看看。' },
+                    { action: 'walk_with_player', to_place_id: placeId || 'restaurant', target_label: placeLabel || '街区', movement_style: 'walk_together' },
+                    { action: 'end_interaction' }
+                ]
+            },
+            treat_food: {
+                title: '玩家请吃东西',
+                summary: `${name}接住玩家的好意，并留下轻量记忆。`,
+                steps: [
+                    { action: 'face_player' },
+                    { action: 'say', text: '你请？那我可记住了。先找个能坐下的地方。' },
+                    { action: 'walk_with_player', to_place_id: placeId || 'restaurant', target_label: placeLabel || '餐饮点', movement_style: 'walk_together' },
+                    { action: 'relationship_delta', value: 1, reason: '玩家主动请吃东西' },
+                    { action: 'create_memory', text: '玩家在商业街主动提出请我吃东西。', importance: 0.35 }
+                ]
+            },
+            comfort: {
+                title: '玩家请求安慰',
+                summary: `${name}用短句和靠近动作回应玩家。`,
+                steps: [
+                    { action: 'face_player' },
+                    { action: 'emote', text: '靠近半步，语气放轻' },
+                    { action: 'say', text: '先别急着硬撑。你说，我听着。' },
+                    { action: 'wait', duration_ms: 1600 }
+                ]
+            }
+        };
+        const chosen = templates[action] || templates.greet;
+        const steps = chosen.steps.some((step) => step?.action === 'offer_choices')
+            ? chosen.steps
+            : [
+                ...chosen.steps,
+                {
+                    action: 'offer_choices',
+                    text: '你要怎么继续？',
+                    choices: [
+                        { id: 'ask_more', label: '继续问', trigger: 'small_talk' },
+                        { id: 'walk_together', label: '一起走', trigger: 'request_company' },
+                        { id: 'help_out', label: '请他帮忙', trigger: 'request_help' },
+                        { id: 'comfort', label: '认真回应', trigger: 'comfort' }
+                    ]
+                }
+            ];
+        return {
+            branch_id: branchId,
+            title: chosen.title,
+            priority: 95,
+            ttl_ms: 45000,
+            trigger: {
+                player_action: action,
+                place_id: placeId || ''
+            },
+            summary: chosen.summary,
+            steps,
+            fallback_reason: reason
+        };
+    }
+
+    function normalizeAllowedBehaviorPlaceIds(rawIds = []) {
+        if (!Array.isArray(rawIds)) return [];
+        return Array.from(new Set(rawIds
+            .map((id) => limitText(id, 80))
+            .filter(Boolean)))
+            .slice(0, 80);
+    }
+
+    function toAllowedBehaviorPlaceId(value, allowedPlaceIdSet) {
+        const id = limitText(value, 80);
+        if (!id || !allowedPlaceIdSet.has(id)) return '';
+        return id;
+    }
+
+    function readBehaviorStepPlaceId(step, keys, allowedPlaceIdSet) {
+        for (const key of keys) {
+            const id = toAllowedBehaviorPlaceId(step?.[key], allowedPlaceIdSet);
+            if (id) return id;
+        }
+        return '';
+    }
+
+    function normalizeSemanticMovementStep(step, action, allowedPlaceIdSet) {
+        const normalized = { action };
+        if (action === 'go_to_place' || action === 'loop_in_front_of' || action === 'browse_near' || action === 'idle_at_place') {
+            const placeId = readBehaviorStepPlaceId(step, ['place_id', 'placeId', 'target_place_id', 'targetPlaceId', 'to_place_id', 'toPlaceId'], allowedPlaceIdSet);
+            if (!placeId) return null;
+            normalized.place_id = placeId;
+            return normalized;
+        }
+        if (action === 'wander_between' || action === 'patrol_segment') {
+            const fromPlaceId = readBehaviorStepPlaceId(step, ['from_place_id', 'fromPlaceId', 'source_place_id', 'sourcePlaceId'], allowedPlaceIdSet);
+            const toPlaceId = readBehaviorStepPlaceId(step, ['to_place_id', 'toPlaceId', 'target_place_id', 'targetPlaceId', 'place_id', 'placeId'], allowedPlaceIdSet);
+            if (!fromPlaceId || !toPlaceId) return null;
+            normalized.from_place_id = fromPlaceId;
+            normalized.to_place_id = toPlaceId;
+            return normalized;
+        }
+        if (action === 'walk_with_player') {
+            const toPlaceId = readBehaviorStepPlaceId(step, ['to_place_id', 'toPlaceId', 'target_place_id', 'targetPlaceId', 'place_id', 'placeId'], allowedPlaceIdSet);
+            if (toPlaceId) normalized.to_place_id = toPlaceId;
+            return normalized;
+        }
+        if (action === 'approach_player' || action === 'follow_player') {
+            return normalized;
+        }
+        return null;
+    }
+
+    function sanitizeBehaviorSteps(rawSteps, allowedPlaceIds = [], maxSteps = 10, options = {}) {
+        const allowedPlaceIdSet = new Set(normalizeAllowedBehaviorPlaceIds(allowedPlaceIds));
+        const allowChoices = options.allowChoices !== false;
+        return (Array.isArray(rawSteps) ? rawSteps : [])
+            .map((step) => {
+                if (!step || typeof step !== 'object') return null;
+                const action = String(step.action || '').trim();
+                if (!behaviorTreeAllowedActionSet.has(action)) return null;
+                if (!allowChoices && action === 'offer_choices') return null;
+                const normalized = behaviorSemanticMovementActionSet.has(action)
+                    ? normalizeSemanticMovementStep(step, action, allowedPlaceIdSet)
+                    : { action };
+                if (!normalized) return null;
+                if (step.text !== undefined) normalized.text = limitText(step.text, action === 'create_memory' ? 180 : 140);
+                if (step.target_label !== undefined || step.targetLabel !== undefined) {
+                    normalized.target_label = limitText(step.target_label || step.targetLabel, 80);
+                }
+                if (step.movement_style !== undefined || step.movementStyle !== undefined) {
+                    normalized.movement_style = limitText(step.movement_style || step.movementStyle, 80);
+                }
+                if (step.activity !== undefined) normalized.activity = limitText(step.activity, 100);
+                if (step.duration_ms !== undefined || step.durationMs !== undefined) {
+                    normalized.duration_ms = clamp(Number(step.duration_ms || step.durationMs) || 900, 300, 6000);
+                }
+                if (step.value !== undefined) normalized.value = clamp(Number(step.value) || 0, -3, 3);
+                if (step.reason !== undefined) normalized.reason = limitText(step.reason, 120);
+                if (step.importance !== undefined) normalized.importance = clamp(Number(step.importance) || 0.2, 0, 1);
+                if (allowChoices && Array.isArray(step.choices)) {
+                    normalized.choices = step.choices.slice(0, 4).map((choice, index) => {
+                        if (typeof choice === 'string') {
+                            return {
+                                id: `choice_${index + 1}`,
+                                label: limitText(choice, 24),
+                                trigger: ''
+                            };
+                        }
+                        return {
+                            id: limitText(choice?.id || `choice_${index + 1}`, 40),
+                            label: limitText(choice?.label || choice?.text || `选项 ${index + 1}`, 24),
+                            trigger: limitText(choice?.trigger || '', 80)
+                        };
+                    });
+                }
+                return normalized;
+            })
+            .filter(Boolean)
+            .slice(0, maxSteps);
+    }
+
+    function sanitizeBehaviorBranch(rawBranch, char, payload = {}, fallbackReason = 'sanitize_empty', allowedPlaceIds = []) {
+        if (!rawBranch || typeof rawBranch !== 'object') return buildFallbackBehaviorBranch(char, payload, fallbackReason);
+        const fallback = buildFallbackBehaviorBranch(char, payload, fallbackReason);
+        const allowedPlaceIdSet = new Set(normalizeAllowedBehaviorPlaceIds(allowedPlaceIds));
+        const steps = sanitizeBehaviorSteps(rawBranch.steps, allowedPlaceIds, 10, { allowChoices: true });
+        if (!steps.length) return fallback;
+        const triggerPlaceId = toAllowedBehaviorPlaceId(
+            rawBranch.trigger?.place_id || rawBranch.trigger?.placeId || payload?.player_event?.place_id || '',
+            allowedPlaceIdSet
+        );
+        return {
+            branch_id: limitText(rawBranch.branch_id || rawBranch.id || fallback.branch_id, 80),
+            title: limitText(rawBranch.title || fallback.title, 80),
+            priority: clamp(Number(rawBranch.priority) || 95, 1, 100),
+            ttl_ms: clamp(Number(rawBranch.ttl_ms || rawBranch.ttlMs) || 45000, 3000, 120000),
+            trigger: {
+                player_action: limitText(rawBranch.trigger?.player_action || rawBranch.trigger?.playerAction || payload?.player_event?.action || 'greet', 60),
+                place_id: triggerPlaceId
+            },
+            summary: limitText(rawBranch.summary || fallback.summary, 180),
+            steps
+        };
+    }
+
+    function normalizeBehaviorNodeId(value, fallback = 'node') {
+        const raw = limitText(value, 80);
+        const safe = raw
+            .replace(/[^\w\u4e00-\u9fa5-]+/g, '_')
+            .replace(/_+/g, '_')
+            .replace(/^_+|_+$/g, '');
+        return safe || `${fallback}_${Date.now().toString(36)}`;
+    }
+
+    function sanitizeBehaviorTreePatch(rawPatch, char, payload = {}, fallbackReason = 'patch_empty', allowedPlaceIds = []) {
+        const patch = rawPatch && typeof rawPatch === 'object' ? rawPatch : {};
+        const rawNode = patch.node && typeof patch.node === 'object' ? patch.node : null;
+        const rawBranch = rawNode?.steps ? rawNode : (patch.branch || patch);
+        const branch = sanitizeBehaviorBranch(rawBranch, char, payload, fallbackReason, allowedPlaceIds);
+        const nodeId = normalizeBehaviorNodeId(rawNode?.id || rawNode?.node_id || branch.branch_id, 'branch');
+        const requestedTargetNodeId = normalizeBehaviorNodeId(patch.target_node_id || patch.targetNodeId || 'player_interaction', 'target');
+        const targetNodeId = behaviorPatchTargetIds.has(requestedTargetNodeId) ? requestedTargetNodeId : 'player_interaction';
+        const nextActiveNodeId = normalizeBehaviorNodeId(patch.next_active_node_id || patch.nextActiveNodeId || nodeId, 'active');
+        const patchId = normalizeBehaviorNodeId(patch.patch_id || patch.patchId || `patch_${nodeId}_${Date.now().toString(36)}`, 'patch');
+        const memoryDelta = patch.memory_delta && typeof patch.memory_delta === 'object'
+            ? Object.fromEntries(Object.entries(patch.memory_delta).slice(0, 12).map(([key, value]) => [limitText(key, 60), limitText(value, 180)]))
+            : {};
+        return {
+            patch_id: patchId,
+            operation: 'upsert_child',
+            target_node_id: targetNodeId,
+            next_active_node_id: nextActiveNodeId,
+            reason: limitText(patch.reason || branch.summary || '', 180),
+            node: {
+                id: nodeId,
+                type: 'ActionSequence',
+                title: branch.title,
+                branch_kind: targetNodeId === 'player_interaction' ? 'special' : 'base',
+                priority: branch.priority,
+                ttl_ms: branch.ttl_ms,
+                trigger: branch.trigger,
+                summary: branch.summary,
+                steps: branch.steps
+            },
+            memory_delta: memoryDelta
+        };
+    }
+
+    function inferBaseBehaviorTargetNode(triggerValue = '', fallback = 'wander') {
+        const trigger = limitText(triggerValue, 100);
+        if (trigger.includes('need') || trigger.includes('hunger') || trigger.includes('energy')) return 'hard_needs';
+        if (trigger.includes('routine')) return 'routine_goal';
+        if (trigger.includes('affordance') || trigger.includes('location')) return 'place_affordance';
+        if (trigger.includes('mood')) return 'background_mood';
+        if (trigger.includes('nearby')) return 'curiosity';
+        if (trigger === 'idle') return 'idle_micro';
+        return fallback;
+    }
+
+    function buildFallbackBaseBehaviorBranches(char, payload = {}, reason = 'local_fallback', allowedPlaceIds = []) {
+        const allowed = normalizeAllowedBehaviorPlaceIds(allowedPlaceIds);
+        const pick = (...ids) => ids.find((id) => allowed.includes(id)) || allowed[0] || '';
+        const cafe = pick('restaurant', 'convenience', 'agency');
+        const shop = pick('convenience', 'restaurant', 'agency');
+        const agency = pick('agency', 'convenience', 'restaurant');
+        const home = pick('home_exit', 'agency', 'restaurant');
+        const name = limitText(char?.name || '角色', 40);
+        return [
+            {
+                id: 'base_ai_morning_agency_walk',
+                target_node_id: 'routine_goal',
+                title: '基础：慢慢走到中介所',
+                priority: 76,
+                trigger: 'runtime_state.routine_tick',
+                summary: `${name}无互动时按自己的节奏从住处走到中介所。`,
+                steps: [
+                    { action: 'go_to_place', place_id: home, movement_style: 'normal' },
+                    { action: 'emote', text: '低头确认了一下口袋里的东西', duration_ms: 900 },
+                    { action: 'go_to_place', place_id: agency, movement_style: 'normal' },
+                    { action: 'say', text: '先看看今天有没有新消息。', duration_ms: 1100 },
+                    { action: 'idle_at_place', place_id: agency, movement_style: 'checking' }
+                ]
+            },
+            {
+                id: 'base_ai_cafe_refuel',
+                target_node_id: 'hard_needs',
+                title: '基础：去咖啡馆补一点精神',
+                priority: 82,
+                trigger: 'runtime_state.need_high',
+                summary: `${name}状态低时会去餐饮点附近短暂停留。`,
+                steps: [
+                    { action: 'go_to_place', place_id: cafe, movement_style: 'slow' },
+                    { action: 'say', text: '买点热的，脑子会清醒一点。', duration_ms: 1100 },
+                    { action: 'idle_at_place', place_id: cafe, movement_style: 'resting' }
+                ]
+            },
+            {
+                id: 'base_ai_shop_cafe_wander',
+                target_node_id: 'wander',
+                title: '基础：便利店和咖啡馆之间闲逛',
+                priority: 38,
+                trigger: 'otherwise',
+                summary: `${name}没有目标时在街区右侧来回走动。`,
+                steps: [
+                    { action: 'wander_between', from_place_id: shop, to_place_id: cafe, movement_style: 'window_shopping' },
+                    { action: 'say', text: '从这边走过去刚好。', duration_ms: 900 },
+                    { action: 'wander_between', from_place_id: cafe, to_place_id: shop, movement_style: 'window_shopping' }
+                ]
+            },
+            {
+                id: 'base_ai_agency_window',
+                target_node_id: 'place_affordance',
+                title: '基础：在中介所前看橱窗',
+                priority: 68,
+                trigger: 'location.has_affordance',
+                summary: `${name}经过中介所时会看看橱窗内容。`,
+                steps: [
+                    { action: 'browse_near', place_id: agency, movement_style: 'window_shopping' },
+                    { action: 'say', text: '这套看起来还不错。', duration_ms: 1000 },
+                    { action: 'loop_in_front_of', place_id: agency, movement_style: 'small_loop' }
+                ]
+            },
+            {
+                id: 'base_ai_player_glance',
+                target_node_id: 'curiosity',
+                title: '基础：注意到玩家但不打断',
+                priority: 54,
+                trigger: 'nearby_place_or_player',
+                summary: `${name}靠近玩家时会有轻微反应，但不会主动打开互动。`,
+                steps: [
+                    { action: 'approach_player', movement_style: 'curious' },
+                    { action: 'face_player' },
+                    { action: 'emote', text: '看了你一眼，又把视线挪开', duration_ms: 1000 }
+                ]
+            },
+            {
+                id: 'base_ai_quiet_mood_walk',
+                target_node_id: 'background_mood',
+                title: '基础：心情放慢到咖啡馆',
+                priority: 60,
+                trigger: 'runtime_state.mood_idle',
+                summary: '大输入只影响语气和轻微情绪，角色不会因为私聊或商业街活动改目标。',
+                steps: [
+                    { action: 'go_to_place', place_id: cafe, movement_style: 'distracted' },
+                    { action: 'emote', text: '走着走着忽然慢了一点', duration_ms: 900 },
+                    { action: 'say', text: '今天街上有点安静。', duration_ms: 1000 },
+                    { action: 'idle_at_place', place_id: cafe, movement_style: 'quiet' }
+                ]
+            }
+        ].filter((branch) => sanitizeBehaviorSteps(branch.steps, allowed, 12, { allowChoices: false }).length);
+    }
+
+    function sanitizeBaseBehaviorBranch(rawBranch, char, payload = {}, fallbackReason = 'base_branch_invalid', allowedPlaceIds = []) {
+        if (!rawBranch || typeof rawBranch !== 'object') return null;
+        const rawTrigger = rawBranch.trigger || rawBranch.trigger_id || rawBranch.triggerId || 'otherwise';
+        const requestedTarget = normalizeBehaviorNodeId(rawBranch.target_node_id || rawBranch.targetNodeId || '', 'target');
+        const targetNodeId = behaviorBasePatchTargetIds.has(requestedTarget)
+            ? requestedTarget
+            : inferBaseBehaviorTargetNode(rawTrigger, 'wander');
+        const steps = sanitizeBehaviorSteps(rawBranch.steps, allowedPlaceIds, 12, { allowChoices: false });
+        if (!steps.length) return null;
+        const nodeId = normalizeBehaviorNodeId(rawBranch.id || rawBranch.branch_id || `base_ai_${targetNodeId}_${Date.now().toString(36)}`, 'base_branch');
+        const patchId = normalizeBehaviorNodeId(rawBranch.patch_id || rawBranch.patchId || `patch_${nodeId}_${Date.now().toString(36)}`, 'patch');
+        return {
+            patch_id: patchId,
+            operation: 'upsert_child',
+            target_node_id: targetNodeId,
+            next_active_node_id: nodeId,
+            reason: limitText(rawBranch.reason || rawBranch.summary || fallbackReason, 180),
+            node: {
+                id: nodeId,
+                type: 'ActionSequence',
+                title: limitText(rawBranch.title || '基础：街区行动', 80),
+                branch_kind: 'base',
+                priority: clamp(Number(rawBranch.priority) || 50, 1, 100),
+                ttl_ms: clamp(Number(rawBranch.ttl_ms || rawBranch.ttlMs) || 45000, 3000, 120000),
+                trigger: limitText(rawTrigger, 100),
+                summary: limitText(rawBranch.summary || '', 180),
+                steps
+            },
+            memory_delta: {}
+        };
+    }
+
+    function sanitizeBaseBehaviorBranchPack(rawValue, char, payload = {}, fallbackReason = 'base_pack_invalid', allowedPlaceIds = []) {
+        const rawBranches = Array.isArray(rawValue?.base_branches)
+            ? rawValue.base_branches
+            : (Array.isArray(rawValue?.branches) ? rawValue.branches : (Array.isArray(rawValue) ? rawValue : []));
+        let patches = rawBranches
+            .map((branch) => sanitizeBaseBehaviorBranch(branch, char, payload, fallbackReason, allowedPlaceIds))
+            .filter(Boolean)
+            .slice(0, 20);
+        let fallback = false;
+        if (!patches.length) {
+            fallback = true;
+            patches = buildFallbackBaseBehaviorBranches(char, payload, fallbackReason, allowedPlaceIds)
+                .map((branch) => sanitizeBaseBehaviorBranch(branch, char, payload, fallbackReason, allowedPlaceIds))
+                .filter(Boolean)
+                .slice(0, 20);
+        }
+        const baseBranches = patches.map((patch) => ({
+            id: patch.node.id,
+            branch_id: patch.node.id,
+            target_node_id: patch.target_node_id,
+            title: patch.node.title,
+            priority: patch.node.priority,
+            ttl_ms: patch.node.ttl_ms,
+            trigger: patch.node.trigger,
+            summary: patch.node.summary,
+            steps: patch.node.steps,
+            branch_kind: 'base'
+        }));
+        return { base_branches: baseBranches, base_patches: patches, fallback };
+    }
+
+    function summarizeBehaviorCharacter(char) {
+        const emotion = deriveEmotion(char);
+        return {
+            id: char.id,
+            name: char.name,
+            location: char.location || 'home',
+            city_status: char.city_status || 'idle',
+            wallet: char.wallet ?? 0,
+            calories: char.calories ?? 2000,
+            energy: char.energy ?? 100,
+            mood: char.mood ?? 50,
+            stress: char.stress ?? 20,
+            social_need: char.social_need ?? 50,
+            health: char.health ?? 100,
+            emotion_state: emotion.state,
+            emotion_label: emotion.label
+        };
+    }
+
+    function summarizeBehaviorCity(db, char) {
+        const config = db.city.getConfig();
+        const selfLimit = Math.max(1, parseInt(config.city_self_log_limit, 10) || 5);
+        const announcementLimit = Math.max(1, parseInt(config.city_announcement_limit, 10) || 5);
+        const globalLimit = Math.max(1, parseInt(config.city_global_log_limit, 10) || 5);
+        return {
+            date: getCityDate(config).toISOString(),
+            config_limits: {
+                city_self_log_limit: selfLimit,
+                city_announcement_limit: announcementLimit,
+                city_global_log_limit: globalLimit
+            },
+            enabled_districts: db.city.getEnabledDistricts?.() || [],
+            current_district: db.city.getDistrict?.(char.location) || null,
+            recent_self_logs: db.city.getCharacterRecentLogs?.(char.id, selfLimit) || [],
+            announcements: db.city.getCityAnnouncements?.(announcementLimit) || [],
+            global_logs: db.city.getCityLogs?.(globalLimit) || [],
+            active_events: db.city.getActiveEvents?.() || [],
+            active_quests: db.city.getActiveQuests?.() || [],
+            active_quest_claim: db.city.getCharacterActiveQuestClaim?.(char.id) || null,
+            inventory: db.city.getInventory?.(char.id) || []
+        };
+    }
+
+    function summarizeSemanticBehaviorWorld(rawWorld = {}) {
+        const raw = rawWorld && typeof rawWorld === 'object' ? rawWorld : {};
+        const rawPlaces = Array.isArray(raw.places_ordered || raw.placesOrdered)
+            ? (raw.places_ordered || raw.placesOrdered)
+            : (Array.isArray(raw.places) ? raw.places : []);
+        const placesOrdered = rawPlaces.slice(0, 80).map((place, index) => ({
+            order: clamp(Number(place?.order) || index + 1, 1, 999),
+            id: limitText(place?.id || place?.place_id || place?.placeId || '', 80),
+            location_id: limitText(place?.location_id || place?.locationId || '', 80),
+            location_ids: Array.isArray(place?.location_ids || place?.locationIds)
+                ? (place.location_ids || place.locationIds).slice(0, 8).map((id) => limitText(id, 80)).filter(Boolean)
+                : [],
+            label: limitText(place?.label || place?.name || '', 80),
+            kind: limitText(place?.kind || place?.type || '', 60),
+            actions: Array.isArray(place?.actions) ? place.actions.slice(0, 8).map((action) => limitText(action, 40)).filter(Boolean) : [],
+            aliases: Array.isArray(place?.aliases) ? place.aliases.slice(0, 8).map((alias) => limitText(alias, 40)).filter(Boolean) : []
+        })).filter((place) => place.id && place.label);
+        const placeIdSet = new Set(placesOrdered.map((place) => place.id));
+        let allowedPlaceIds = normalizeAllowedBehaviorPlaceIds(raw.allowed_place_ids || raw.allowedPlaceIds);
+        if (placeIdSet.size) {
+            allowedPlaceIds = allowedPlaceIds.filter((id) => placeIdSet.has(id));
+        }
+        if (!allowedPlaceIds.length) {
+            allowedPlaceIds = placesOrdered.map((place) => place.id).filter(Boolean);
+        }
+        const allowedPlaceIdSet = new Set(allowedPlaceIds);
+        const rawMovementActions = Array.isArray(raw.allowed_movement_actions || raw.allowedMovementActions)
+            ? (raw.allowed_movement_actions || raw.allowedMovementActions)
+            : [];
+        const allowedMovementActions = rawMovementActions
+            .map((action) => {
+                const id = limitText(action?.id || action, 80);
+                if (!behaviorSemanticMovementActionSet.has(id)) return null;
+                const fallbackAction = behaviorSemanticMovementActions.find((item) => item.id === id) || { id, needs: [], description: '' };
+                return {
+                    id,
+                    label: limitText(action?.label || fallbackAction.label || id, 40),
+                    needs: Array.isArray(action?.needs) ? action.needs.slice(0, 4).map((need) => limitText(need, 40)).filter(Boolean) : fallbackAction.needs,
+                    description: limitText(action?.description || fallbackAction.description || '', 100)
+                };
+            })
+            .filter(Boolean);
+        const movementActions = allowedMovementActions.length ? allowedMovementActions : behaviorSemanticMovementActions;
+        const selectedRaw = raw.selected_place && typeof raw.selected_place === 'object' ? raw.selected_place : null;
+        const selectedPlaceId = selectedRaw
+            ? toAllowedBehaviorPlaceId(selectedRaw.place_id || selectedRaw.placeId || selectedRaw.id || selectedRaw.place?.id || '', allowedPlaceIdSet)
+            : '';
+        const selectedPlace = selectedRaw && selectedPlaceId
+            ? {
+                id: selectedPlaceId,
+                label: limitText(selectedRaw.label || placesOrdered.find((place) => place.id === selectedPlaceId)?.label || '', 80),
+                place_id: selectedPlaceId
+            }
+            : null;
+        const orderedPlaceText = limitText(
+            raw.ordered_place_text || raw.orderedPlaceText || placesOrdered.map((place) => `${place.order}. ${place.label}`).join(' -> '),
+            1200
+        );
+        return {
+            movement_model: 'side_scrolling_semantic_v1',
+            movement_rule: '角色只能从 allowed_place_ids 选择语义地点，只能从 allowed_movement_actions 选择移动动作；不要决定像素坐标。像素锚点、碰撞和平移移动由前端执行器本地映射。',
+            ordered_place_text: orderedPlaceText,
+            allowed_place_ids: allowedPlaceIds,
+            allowed_movement_actions: movementActions,
+            actors: raw.actors || {},
+            selected_place: selectedPlace,
+            places_ordered: placesOrdered,
+            travel_targets: placesOrdered.map((place) => ({ id: place.id, label: place.label })),
+            free_activity_options: Array.isArray(raw.free_activity_options || raw.freeActivityOptions)
+                ? (raw.free_activity_options || raw.freeActivityOptions).slice(0, 20).map((item) => limitText(item, 80)).filter(Boolean)
+                : movementActions.map((action) => `${action.id}: ${action.description || action.label}`).slice(0, 20)
+        };
+    }
+
+    async function buildBehaviorInputPackage(userId, db, char, payload = {}) {
+        const engineContextWrapper = { getUserDb: context.getUserDb, getMemory: context.getMemory, userId, forceCityDetail: true };
+        const universalResult = await buildUniversalContext(engineContextWrapper, char, '', false);
+        const userProfile = db.getUserProfile?.() || {};
+        const world = summarizeSemanticBehaviorWorld(payload.world || payload.renderer || {});
+        return {
+            input_kind: 'commercial_street_behavior_input_v1',
+            generated_at: new Date().toISOString(),
+            character: summarizeBehaviorCharacter(char),
+            user: {
+                id: userId,
+                name: userProfile.name || '用户'
+            },
+            player_event: payload.player_event || {},
+            behavior_tree: payload.behavior_tree && typeof payload.behavior_tree === 'object' ? payload.behavior_tree : null,
+            world,
+            input_policy: {
+                large_input_enabled: true,
+                private_chat_can_trigger_behavior: false,
+                city_activity_can_trigger_behavior: false,
+                rule: '读取大输入库作为背景材料，但私聊和商业街活动记录不得触发小人移动、发起互动、改变目的地或重写基础枝丫。'
+            },
+            large_input: {
+                source: 'buildUniversalContext(forceCityDetail=true)',
+                usage: 'background_only',
+                blocked_triggers: ['private_chat', 'city_activity', 'commercial_street_activity'],
+                preamble: universalResult.preamble || '',
+                breakdown: universalResult.breakdown || {},
+                module_routes: universalResult.moduleRoutes || {},
+                anti_repeat_hints: universalResult.antiRepeatHints || null
+            },
+            output_contract: getBehaviorOutputContract(world)
+        };
+    }
+
+    async function createBehaviorBranchWithModel(char, inputPackage, payload = {}) {
+        const payloadEndpoint = limitText(payload.api_endpoint || payload.endpoint || '', 500);
+        const payloadKey = String(payload.api_key || payload.key || '').trim();
+        const usePayloadCredentials = Boolean(payloadEndpoint && payloadKey);
+        const apiEndpoint = usePayloadCredentials ? payloadEndpoint : limitText(char?.api_endpoint || '', 500);
+        const apiKey = usePayloadCredentials ? payloadKey : String(char?.api_key || '').trim();
+        const modelName = limitText(payload.model_name || payload.model || char?.model_name || '', 200);
+        if (!apiEndpoint || !apiKey || !modelName) {
+            const branch = buildFallbackBehaviorBranch(char, payload, 'missing_model_config');
+            return {
+                branch,
+                tree_patch: sanitizeBehaviorTreePatch({ node: branch, target_node_id: 'player_interaction' }, char, payload, 'missing_model_config', inputPackage?.world?.allowed_place_ids || []),
+                raw_output: '',
+                fallback: true
+            };
+        }
+        const messages = [
+            {
+                role: 'system',
+                content: [
+                    '你是“单角色街区行为运行时 V1”的完整行为树 patch 生成器。',
+                    '你只返回一个 JSON 对象，不要输出 markdown、解释或额外文本。',
+                    '你的任务不是替换整棵树，而是基于 input.behavior_tree 返回一个局部 patch，合并进现有完整行为树。',
+                    '基础枝丫是角色无玩家互动时自己的生活、闲逛、地点行为；玩家互动后的后续分歧才叫特殊枝丫。',
+                    '本接口正在响应玩家互动，所以 patch.operation 固定为 upsert_child，target_node_id 必须是 player_interaction，并设置 next_active_node_id 为本次 node.id。',
+                    '这通常是玩家在预制互动枝丫末尾选择某个回应后的后续枝丫；请承接 input.player_event，不要重复预制开场。',
+                    '除非明确要结束互动，否则特殊枝丫最后一步必须是 offer_choices，给 2-4 个玩家回应选项；choice.trigger 必须来自玩家互动动作白名单。',
+                    '你可以读取 input.large_input，但它只是背景材料。最近私聊、朋友圈、商业街活动记录、公告任务不能作为小人移动、发起互动、改变目的地或重写基础枝丫的原因。',
+                    '特殊枝丫只能由当前 input.player_event 触发；基础枝丫只由 runtime_state、location、nearby_player、otherwise、idle 等本地运行时触发。',
+                    '角色可以自由决定在商业街做什么，但不要输出 x/y、像素坐标、锚点或碰撞信息。',
+                    '如果要移动，node.steps.action 必须从 input.world.allowed_movement_actions 里选择。',
+                    '如果动作需要地点，place_id/from_place_id/to_place_id 必须从 input.world.allowed_place_ids 里选择。',
+                    '不要编造表外地点、表外动作、像素点或地图对象。',
+                    `node.steps.action 只能使用：${behaviorTreeAllowedActions.join(', ')}。`
+                ].join('\n')
+            },
+            {
+                role: 'user',
+                content: [
+                    '基于下面输入，为角色小人生成一个短小、可玩、能合并进完整行为树的局部 patch。',
+                    '优先且只响应当前 player_event。large_input.preamble 可以帮助理解角色语气和背景，但不要因为最近私聊或商业街活动记录让角色行动。',
+                    '请把玩家互动造成的分歧写成 player_interaction 下的新 ActionSequence 节点；不要改写基础枝丫，除非输入明确要求重规划角色的无互动默认行为。',
+                    '如果 input.behavior_tree.patch_history 里已有上一轮互动，请让新 node 承接上一轮，而不是重复开场。',
+                    '最后给出 offer_choices 让玩家继续选择；这些选择会触发下一轮特殊枝丫生成。',
+                    'world 是语义街区，不是大世界地图；不要让角色选择具体像素点。',
+                    'world.places_ordered 是从左到右的可用建筑表，world.allowed_place_ids 是唯一可用地点 ID 白名单。',
+                    'world.allowed_movement_actions 是唯一可用移动动作白名单。',
+                    '输出格式必须符合 input.output_contract.schema。',
+                    '',
+                    JSON.stringify(inputPackage, null, 2)
+                ].join('\n')
+            }
+        ];
+        const rawOutput = await callLLM({
+            endpoint: apiEndpoint,
+            key: apiKey,
+            model: modelName,
+            messages,
+            maxTokens: 1800,
+            temperature: 0.72
+        });
+        let parsed = null;
+        let parseError = '';
+        try {
+            parsed = parseJsonObjectFromLlmText(rawOutput);
+        } catch (err) {
+            parseError = err.message || 'parse_failed';
+        }
+        const treePatch = sanitizeBehaviorTreePatch(
+            parsed,
+            char,
+            payload,
+            parseError ? `model_output_parse_failed:${parseError}` : 'model_output_invalid',
+            inputPackage?.world?.allowed_place_ids || []
+        );
+        const branch = {
+            branch_id: treePatch.node.id,
+            title: treePatch.node.title,
+            priority: treePatch.node.priority,
+            ttl_ms: treePatch.node.ttl_ms,
+            trigger: treePatch.node.trigger,
+            summary: treePatch.node.summary,
+            steps: treePatch.node.steps
+        };
+        return {
+            tree_patch: treePatch,
+            branch,
+            raw_output: String(rawOutput || ''),
+            fallback: !parsed || Boolean(branch.fallback_reason)
+        };
+    }
+
+    async function createBaseBehaviorBranchesWithModel(char, inputPackage, payload = {}) {
+        const payloadEndpoint = limitText(payload.api_endpoint || payload.endpoint || '', 500);
+        const payloadKey = String(payload.api_key || payload.key || '').trim();
+        const usePayloadCredentials = Boolean(payloadEndpoint && payloadKey);
+        const apiEndpoint = usePayloadCredentials ? payloadEndpoint : limitText(char?.api_endpoint || '', 500);
+        const apiKey = usePayloadCredentials ? payloadKey : String(char?.api_key || '').trim();
+        const modelName = limitText(payload.model_name || payload.model || char?.model_name || '', 200);
+        const baseInput = {
+            ...inputPackage,
+            output_contract: getBehaviorBaseOutputContract(inputPackage?.world || {})
+        };
+        if (!apiEndpoint || !apiKey || !modelName) {
+            return {
+                ...sanitizeBaseBehaviorBranchPack(null, char, payload, 'missing_model_config', inputPackage?.world?.allowed_place_ids || []),
+                raw_output: '',
+                fallback: true
+            };
+        }
+        const messages = [
+            {
+                role: 'system',
+                content: [
+                    '你是“单角色街区行为运行时 V1”的基础枝丫包生成器。',
+                    '你只返回一个 JSON 对象，不要输出 markdown、解释或额外文本。',
+                    '本接口只生成基础枝丫：角色没有被玩家互动打断时，自己在街区里的生活、闲逛、好奇、地点停留和轻微说话。',
+                    '不要生成 player_interaction，不要生成特殊互动后续，不要等待玩家选择，不要使用 offer_choices。',
+                    '你可以读取 input.large_input，但它只是背景材料。最近私聊、朋友圈、商业街活动记录、公告任务不能作为小人移动、发起互动、改变目的地或重写基础枝丫的原因。',
+                    '基础枝丫只能由 runtime_state、location、nearby_player、otherwise、idle 等本地运行时触发。',
+                    '角色可以自由决定在商业街做什么，但不要输出 x/y、像素坐标、锚点或碰撞信息。',
+                    '如果要移动，steps.action 必须从 input.world.allowed_movement_actions 里选择。',
+                    '如果动作需要地点，place_id/from_place_id/to_place_id 必须从 input.world.allowed_place_ids 里选择。',
+                    '不要编造表外地点、表外动作、像素点或地图对象。',
+                    '生成 12 到 20 条基础枝丫，尽量分布到 hard_needs/routine_goal/place_affordance/background_mood/curiosity/wander/idle_micro。',
+                    `steps.action 只能使用：${behaviorTreeAllowedActions.filter((action) => action !== 'offer_choices').join(', ')}。`
+                ].join('\n')
+            },
+            {
+                role: 'user',
+                content: [
+                    '基于下面输入，生成一批基础枝丫包。',
+                    '这些枝丫会写入完整行为树的基础分类节点，并进入自动轮询池。',
+                    '每条枝丫 3-6 个步骤，至少包含一个移动或 idle_at_place，最好穿插一句短台词或一个 emote。',
+                    '不要因为最近私聊或商业街活动记录让角色行动；它们只能影响语气、轻微心情和说话风格。',
+                    '输出格式必须是：{"base_branches":[...]}，每项符合 input.output_contract.schema.base_branches[0]。',
+                    '',
+                    JSON.stringify(baseInput, null, 2)
+                ].join('\n')
+            }
+        ];
+        const rawOutput = await callLLM({
+            endpoint: apiEndpoint,
+            key: apiKey,
+            model: modelName,
+            messages,
+            maxTokens: 5200,
+            temperature: 0.76
+        });
+        let parsed = null;
+        let parseError = '';
+        try {
+            parsed = parseJsonObjectFromLlmText(rawOutput);
+        } catch (err) {
+            parseError = err.message || 'parse_failed';
+        }
+        const sanitized = sanitizeBaseBehaviorBranchPack(
+            parsed,
+            char,
+            payload,
+            parseError ? `model_output_parse_failed:${parseError}` : 'model_output_invalid',
+            inputPackage?.world?.allowed_place_ids || []
+        );
+        return {
+            ...sanitized,
+            raw_output: String(rawOutput || ''),
+            fallback: !parsed || sanitized.fallback
+        };
+    }
+
+    app.get('/api/city/characters/:characterId/behavior-models', authMiddleware, async (req, res) => {
+        try {
+            ensureCityDb(req.db);
+            const char = req.db.getCharacter(req.params.characterId);
+            if (!char) return res.status(404).json({ error: '角色不存在' });
+            if (!char.api_endpoint || !char.api_key) return res.status(400).json({ error: '绑定角色没有可用的 URL/Key' });
+            const models = await fetchBehaviorModelList(char.api_endpoint, char.api_key);
+            res.json({
+                success: true,
+                models,
+                endpoint: char.api_endpoint || '',
+                model_name: char.model_name || ''
+            });
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    app.post('/api/city/characters/:characterId/behavior-input', authMiddleware, async (req, res) => {
+        try {
+            ensureCityDb(req.db);
+            const char = req.db.getCharacter(req.params.characterId);
+            if (!char) return res.status(404).json({ error: '角色不存在' });
+            const input = await buildBehaviorInputPackage(req.user.id, req.db, char, req.body || {});
+            res.json({ success: true, skeleton: getBehaviorTreeSkeleton(), input });
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    app.post('/api/city/characters/:characterId/behavior-base-branches', authMiddleware, async (req, res) => {
+        try {
+            ensureCityDb(req.db);
+            const char = req.db.getCharacter(req.params.characterId);
+            if (!char) return res.status(404).json({ error: '角色不存在' });
+            const input = await buildBehaviorInputPackage(req.user.id, req.db, char, req.body || {});
+            let generated;
+            try {
+                generated = await createBaseBehaviorBranchesWithModel(char, input, req.body || {});
+            } catch (modelErr) {
+                generated = {
+                    ...sanitizeBaseBehaviorBranchPack(null, char, req.body || {}, modelErr.message || 'model_call_failed', input?.world?.allowed_place_ids || []),
+                    raw_output: '',
+                    fallback: true,
+                    error: modelErr.message
+                };
+            }
+            res.json({
+                success: true,
+                skeleton: getBehaviorTreeSkeleton(),
+                input: {
+                    ...input,
+                    output_contract: getBehaviorBaseOutputContract(input?.world || {})
+                },
+                base_branches: generated.base_branches,
+                base_patches: generated.base_patches,
+                raw_output: generated.raw_output,
+                fallback: !!generated.fallback,
+                error: generated.error || ''
+            });
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    app.post('/api/city/characters/:characterId/behavior-branch', authMiddleware, async (req, res) => {
+        try {
+            ensureCityDb(req.db);
+            const char = req.db.getCharacter(req.params.characterId);
+            if (!char) return res.status(404).json({ error: '角色不存在' });
+            const input = await buildBehaviorInputPackage(req.user.id, req.db, char, req.body || {});
+            let generated;
+            try {
+                generated = await createBehaviorBranchWithModel(char, input, req.body || {});
+            } catch (modelErr) {
+                const branch = buildFallbackBehaviorBranch(char, req.body || {}, modelErr.message || 'model_call_failed');
+                generated = {
+                    branch,
+                    tree_patch: sanitizeBehaviorTreePatch({ node: branch, target_node_id: 'player_interaction' }, char, req.body || {}, modelErr.message || 'model_call_failed', input?.world?.allowed_place_ids || []),
+                    raw_output: '',
+                    fallback: true,
+                    error: modelErr.message
+                };
+            }
+            res.json({
+                success: true,
+                skeleton: getBehaviorTreeSkeleton(),
+                input,
+                tree_patch: generated.tree_patch,
+                branch: generated.branch,
+                raw_output: generated.raw_output,
+                fallback: !!generated.fallback,
+                error: generated.error || ''
+            });
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     registerCoreCityRoutes(app, {
         authMiddleware,
         ensureCityDb,

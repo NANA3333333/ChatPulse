@@ -5737,10 +5737,21 @@ app.get('/api/models', async (req, res) => {
         let baseUrl = endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
         if (baseUrl.endsWith('/chat/completions')) baseUrl = baseUrl.slice(0, -'/chat/completions'.length);
         const modelsUrl = `${baseUrl}/models`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 18000);
 
-        const response = await fetch(modelsUrl, {
-            headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' }
-        });
+        let response;
+        try {
+            response = await fetch(modelsUrl, {
+                headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
+                signal: controller.signal
+            });
+        } catch (fetchError) {
+            if (fetchError?.name === 'AbortError') return res.status(504).json({ error: '请求超时' });
+            throw fetchError;
+        } finally {
+            clearTimeout(timeoutId);
+        }
         if (!response.ok) {
             const text = await response.text();
             return res.status(response.status).json({ error: `API ${response.status}: ${text.slice(0, 200)}` });
