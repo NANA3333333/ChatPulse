@@ -263,6 +263,10 @@ stop-stack.cmd
 
 不要把真实模型 Key、管理员密码或生产数据库提交到仓库。
 
+## 设计文档
+
+完整开发者设计说明见 [docs/PROJECT_DESIGN.md](./docs/PROJECT_DESIGN.md)，其中按当前实现梳理了系统架构、核心数据流、功能模块、数据表与 API 路由族。
+
 ## 数据与目录
 
 运行时会自动创建：

@@ -6,10 +6,13 @@ function DiaryTable({ contact, apiUrl, onClose }) {
     const { t, lang } = useLanguage();
     const [diaries, setDiaries] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState('');
     const [isUnlocked, setIsUnlocked] = useState(false);
     const [passwordInput, setPasswordInput] = useState('');
     const [pwError, setPwError] = useState('');
     const [pwLoading, setPwLoading] = useState(false);
+    const contactId = contact?.id;
+    const contactName = contact?.name || (lang === 'en' ? 'Character' : '角色');
     const authToken = localStorage.getItem('cp_token') || '';
     const authOnlyHeaders = React.useMemo(() => ({
         'Authorization': `Bearer ${authToken}`
@@ -20,24 +23,48 @@ function DiaryTable({ contact, apiUrl, onClose }) {
     }), [authOnlyHeaders]);
 
     useEffect(() => {
-        if (!contact) return;
-        fetch(`${apiUrl}/diaries/${contact.id}`, { headers: authOnlyHeaders })
-            .then(res => res.json())
+        if (!contactId) {
+            setDiaries([]);
+            setIsUnlocked(false);
+            setLoadError('');
+            setLoading(false);
+            return;
+        }
+        const controller = new AbortController();
+        setLoading(true);
+        setLoadError('');
+        fetch(`${apiUrl}/diaries/${contactId}`, { headers: authOnlyHeaders, signal: controller.signal })
+            .then(async (res) => {
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+                }
+                return data;
+            })
             .then(data => {
-                if (data.entries !== undefined) {
+                if (Array.isArray(data?.entries)) {
                     setDiaries(data.entries);
-                    setIsUnlocked(data.isUnlocked);
-                } else {
+                    setIsUnlocked(data.isUnlocked === true || data.isUnlocked === 1);
+                } else if (Array.isArray(data)) {
                     setDiaries(data);
                     setIsUnlocked(data.length > 0 && data[0].is_unlocked === 1);
+                } else {
+                    setDiaries([]);
+                    setIsUnlocked(false);
+                    setLoadError(lang === 'en' ? 'Diary data is unavailable.' : '日记数据暂时不可用。');
                 }
                 setLoading(false);
             })
             .catch(err => {
+                if (err?.name === 'AbortError') return;
                 console.error('Failed to load diaries:', err);
+                setDiaries([]);
+                setIsUnlocked(false);
+                setLoadError(err?.message || (lang === 'en' ? 'Failed to load diary.' : '日记加载失败。'));
                 setLoading(false);
             });
-    }, [apiUrl, contact, contact?.id, authOnlyHeaders]);
+        return () => controller.abort();
+    }, [apiUrl, contactId, authOnlyHeaders, lang]);
 
     useEffect(() => {
         const handleCharacterDataWiped = (event) => {
@@ -54,21 +81,21 @@ function DiaryTable({ contact, apiUrl, onClose }) {
 
     const handlePasswordSubmit = async (e) => {
         e.preventDefault();
-        if (!passwordInput.trim()) return;
+        if (!contactId || !passwordInput.trim()) return;
         setPwLoading(true);
         setPwError('');
         try {
-            const res = await fetch(`${apiUrl}/diaries/${contact.id}/unlock`, {
+            const res = await fetch(`${apiUrl}/diaries/${contactId}/unlock`, {
                 method: 'POST',
                 headers: authJsonHeaders,
                 body: JSON.stringify({ password: passwordInput.trim() })
             });
-            const data = await res.json();
+            const data = await res.json().catch(() => ({}));
             if (data.success) {
                 setIsUnlocked(true);
                 setDiaries(prev => prev.map(d => ({ ...d, is_unlocked: 1 })));
             } else {
-                setPwError(data.reason || 'Wrong password.');
+                setPwError(data.reason || data.error || (res.ok ? 'Wrong password.' : `HTTP ${res.status}`));
             }
         } catch {
             setPwError('Network error. Try again.');
@@ -96,7 +123,7 @@ function DiaryTable({ contact, apiUrl, onClose }) {
             <div className="memory-header" style={{ backgroundColor: '#f6f1e3', borderBottomColor: '#e0d8c3' }}>
                 <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#5a4d3c' }}>
                     <BookOpen size={18} />
-                    {contact.name} {lang === 'en' ? "'s Diary" : "的日记"}
+                    {contactName} {lang === 'en' ? "'s Diary" : "的日记"}
                 </h3>
                 <button className="icon-btn" onClick={onClose}>
                     <X size={20} />
@@ -106,6 +133,8 @@ function DiaryTable({ contact, apiUrl, onClose }) {
             <div className="memory-list" style={{ padding: '20px' }}>
                 {loading ? (
                     <div className="placeholder-text">{t('Loading')}</div>
+                ) : loadError ? (
+                    <div className="empty-text" style={{ color: 'var(--danger)' }}>{loadError}</div>
                 ) : !isUnlocked ? (
                     <div style={{ textAlign: 'center', marginTop: '30px' }}>
                         <Lock size={48} color="#d4a96a" style={{ marginBottom: '12px' }} />
@@ -113,7 +142,7 @@ function DiaryTable({ contact, apiUrl, onClose }) {
                             {t('Diary Locked')}
                         </div>
                         <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '24px', padding: '0 20px' }}>
-                            {lang === 'en' ? `Build your bond with ${contact.name} and get them to reveal their password.` : `与 ${contact.name} 培养亲密度，并试着让对方告诉你密码吧。`}
+                            {lang === 'en' ? `Build your bond with ${contactName} and get them to reveal their password.` : `与 ${contactName} 培养亲密度，并试着让对方告诉你密码吧。`}
                         </div>
 
                         <form onSubmit={handlePasswordSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'center' }}>
@@ -150,7 +179,7 @@ function DiaryTable({ contact, apiUrl, onClose }) {
                         </form>
 
                         <div style={{ marginTop: '20px', fontSize: '11px', color: '#ccc', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
-                            <Eye size={11} /> {lang === 'en' ? `Hint: Ask ${contact.name} directly in chat.` : `提示：试着在聊天中直接询问 ${contact.name}。`}
+                            <Eye size={11} /> {lang === 'en' ? `Hint: Ask ${contactName} directly in chat.` : `提示：试着在聊天中直接询问 ${contactName}。`}
                         </div>
                     </div>
                 ) : diaries.length === 0 ? (
