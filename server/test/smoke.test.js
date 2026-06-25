@@ -2,11 +2,22 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 
 function readRepoFile(...segments) {
     return fs.readFileSync(path.join(repoRoot, ...segments), 'utf8');
+}
+
+function readPixelWorldSources() {
+    const pixelWorldDir = path.join(repoRoot, 'client', 'src', 'plugins', 'pixelWorld');
+    return walkFiles(pixelWorldDir, (filePath) => (
+        filePath.endsWith('.js') || filePath.endsWith('.jsx') || filePath.endsWith('.css')
+    ))
+        .sort()
+        .map((filePath) => fs.readFileSync(filePath, 'utf8'))
+        .join('\n');
 }
 
 function walkFiles(dir, predicate, shouldSkipDir = () => false, results = []) {
@@ -74,8 +85,8 @@ test('social and drawer panels send auth to protected APIs', () => {
     assert.match(momentsFeed, /fetch\(`\$\{apiUrl\}\/moments\/\$\{momentId\}\/comment`,\s*\{[\s\S]*headers: authJsonHeaders/, 'moment comments should send auth and JSON headers');
     assert.doesNotMatch(momentsFeed, /fetch\(`\$\{apiUrl\}\/moments`\)/, 'moments should not use naked protected fetch calls');
 
-    assert.match(diaryTable, /fetch\(`\$\{apiUrl\}\/diaries\/\$\{contact\.id\}`, \{ headers: authOnlyHeaders \}\)/, 'diary reads should send auth');
-    assert.match(diaryTable, /fetch\(`\$\{apiUrl\}\/diaries\/\$\{contact\.id\}\/unlock`,\s*\{[\s\S]*headers: authJsonHeaders/, 'diary unlock should send auth and JSON headers');
+    assert.match(diaryTable, /fetch\(`\$\{apiUrl\}\/diaries\/\$\{contactId\}`,\s*\{\s*headers:\s*authOnlyHeaders,\s*signal:\s*controller\.signal\s*\}\)/, 'diary reads should send auth and allow cancellation');
+    assert.match(diaryTable, /fetch\(`\$\{apiUrl\}\/diaries\/\$\{contactId\}\/unlock`,\s*\{[\s\S]*headers: authJsonHeaders/, 'diary unlock should send auth and JSON headers');
     assert.match(recommendModal, /fetch\(`\$\{apiUrl\}\/characters\/\$\{currentContact\.id\}\/friends`, \{ headers: authOnlyHeaders \}\)/, 'recommend modal friend list should send auth');
 
     assert.match(chatSettingsDrawer, /fetch\(`\$\{apiUrl\}\/characters\/\$\{contact\.id\}\/relationships`, \{ headers: authOnlyHeaders \}\)/, 'relationship drawer reads should send auth');
@@ -95,11 +106,14 @@ test('backup zip import validates entry paths before extraction', () => {
     assert.match(backupPlugin, /path\.posix\.normalize\(rawPath\)/, 'zip path validation should normalize archive paths');
     assert.match(backupPlugin, /normalizedPath\.startsWith\('\.\.\/'\)/, 'zip path validation should reject traversal entries');
     assert.match(backupPlugin, /unzipper\.Open\.file\(zipPath\)/, 'backup imports should inspect entries before writing them');
+    assert.match(backupPlugin, /let uploadedPath = req\.file\?\.path \|\| '';\s*let extractedDir = null;\s*let importCompleted = false;/, 'backup import should track temp paths outside the success-only branch');
+    assert.match(backupPlugin, /catch \(e\) \{[\s\S]*if \(!importCompleted\) cleanupTemp\(uploadedPath, extractedDir\)/, 'backup import failures should clean uploaded temp files and extracted directories');
 });
 
 test('upload references used by backup and admin stats stay inside uploads', () => {
+    const backupPlugin = readRepoFile('server', 'plugins', 'backup', 'index.js');
     const files = [
-        readRepoFile('server', 'plugins', 'backup', 'index.js'),
+        backupPlugin,
         readRepoFile('server', 'plugins', 'adminDashboard', 'index.js')
     ];
 
@@ -110,7 +124,30 @@ test('upload references used by backup and admin stats stay inside uploads', () 
         assert.match(source, /normalizedPath\.startsWith\('uploads\/'\)/, 'upload references should be constrained to the uploads prefix');
         assert.match(source, /(?:function|const)\s+resolveUploadReferencePath/, 'file access should re-resolve upload references before use');
         assert.match(source, /path\.resolve\(/, 'upload reference file access should use resolved absolute paths');
+        assert.match(source, /const marker = '\/api\/media\/uploads\/'/, 'authenticated media URLs should be recognized as upload references');
+        assert.match(source, /path\.join\('uploads', 'users', String\(userId \|\| 'default'\), filename\)/, 'authenticated media URLs should resolve to the current user upload directory');
+        assert.match(source, /filename\.includes\('\/'\) \|\| filename\.includes\('\\\\'\)/, 'authenticated media filenames should reject encoded path separators');
     }
+    assert.match(backupPlugin, /function restoreBackupUploadsForUser\(extractedUploads, targetUserId\)/, 'backup import should restore uploaded media through a user-aware helper');
+    assert.match(backupPlugin, /function restoreScopedUserUploads\(extractedUsersDir, targetUserId\)[\s\S]*path\.join\(uploadsDir, 'users', String\(targetUserId \|\| 'default'\)\)/, 'backup import should remap scoped user uploads onto the importing user');
+    assert.match(backupPlugin, /function removeScopedUserUploads\(userId\)[\s\S]*path\.join\(uploadsDir, 'users', String\(userId \|\| 'default'\)\)[\s\S]*removeDirectoryIfExists\(userUploadDir\)/, 'backup imports should clear stale user-scoped uploads before restoring replacement data');
+    assert.match(backupPlugin, /removeScopedUserUploads\(userId\);\s*if \(isZip && extractedDir\)/, 'backup imports should clear scoped upload residue even when importing a raw DB without media');
+});
+
+test('system wipe clears user-scoped residual files and live DB handles', () => {
+    const backupPlugin = readRepoFile('server', 'plugins', 'backup', 'index.js');
+    const wipeStart = backupPlugin.indexOf("app.delete('/api/system/wipe'");
+    const importStart = backupPlugin.indexOf("app.post('/api/system/import'", wipeStart);
+    assert.notEqual(wipeStart, -1, 'system wipe route should exist');
+    assert.notEqual(importStart, -1, 'system import route should follow wipe route');
+    const wipeRoute = backupPlugin.slice(wipeStart, importStart);
+
+    assert.match(wipeRoute, /closeSchedulerDb\(userId\)/, 'system wipe should close scheduler DB handles before deleting the user DB');
+    assert.match(wipeRoute, /oldEngine[\s\S]*stopAllTimers\(\)/, 'system wipe should stop engine timers before deleting the user DB');
+    assert.match(wipeRoute, /removeFileIfExists\(dbPath\)[\s\S]*removeFileIfExists\(`\$\{dbPath\}-wal`\)[\s\S]*removeFileIfExists\(`\$\{dbPath\}-shm`\)/, 'system wipe should remove SQLite sidecar files');
+    assert.match(wipeRoute, /removeDirectoryIfExists\(path\.join\(uploadsDir, 'users', String\(userId\)\)\)/, 'system wipe should remove scoped uploaded media');
+    assert.match(wipeRoute, /removeDirectoryIfExists\(path\.join\(__dirname, '\.\.', '\.\.', 'data', 'tts', String\(userId\)\)\)/, 'system wipe should remove scoped TTS audio');
+    assert.match(backupPlugin, /function cleanupTemp\(filePath, dirPath\)[\s\S]*removeFileIfExists\(filePath\)[\s\S]*removeDirectoryIfExists\(dirPath\)/, 'backup temp cleanup should use the shared safe file helpers');
 });
 
 test('general upload endpoint only stores verified image files', () => {
@@ -136,6 +173,7 @@ test('tts audio downloads are constrained to the current user audio directory', 
     assert.match(serverIndex, /res\.sendFile\(audioPath\)/, 'TTS audio route should send only the resolved bounded path');
     assert.doesNotMatch(serverIndex, /res\.sendFile\(path\.resolve\(row\.audio_path\)\)/, 'TTS audio route must not send arbitrary DB paths');
     assert.match(serverIndex, /function sanitizeTtsMimeType\(value\)/, 'TTS audio route should sanitize DB-provided MIME types');
+    assert.match(serverIndex, /app\.post\('\/api\/tts\/preview\/:characterId'[\s\S]*res\.status\(e\.statusCode === 400 \? 400 : 500\)\.json\(\{ error: e\.message \}\)/, 'TTS preview should report invalid configured endpoints as 400-level input errors');
 });
 
 test('character and memory export filenames never reuse raw character ids', () => {
@@ -151,8 +189,13 @@ test('character and memory export filenames never reuse raw character ids', () =
     assert.doesNotMatch(serverIndex, /filename="\$\{filenameBase\}_\$\{characterId\}_memories_export\.json"/, 'memory export filename must not include raw route params');
 });
 
-test('models proxy requires auth and does not put provider keys in URLs', () => {
+test('models proxy requires auth and does not put provider keys in URLs', async () => {
     const serverIndex = readRepoFile('server', 'index.js');
+    const llmSource = readRepoFile('server', 'llm.js');
+    const ttsSource = readRepoFile('server', 'tts.js');
+    const cityIndex = readRepoFile('server', 'plugins', 'city', 'index.js');
+    const httpGuardsSource = readRepoFile('server', 'httpGuards.js');
+    const httpGuards = require(path.join(repoRoot, 'server', 'httpGuards.js'));
     const clientSrc = path.join(repoRoot, 'client', 'src');
     const offenders = [];
 
@@ -175,6 +218,42 @@ test('models proxy requires auth and does not put provider keys in URLs', () => 
     }
 
     assert.deepEqual(offenders, [], 'provider API keys must not be sent through /api/models query strings');
+    assert.match(httpGuardsSource, /function normalizeServerFetchUrl\(value, label = 'URL', options = \{\}\)/, 'server-side fetch URL validation should be centralized');
+    assert.match(httpGuardsSource, /async function normalizeServerFetchUrlResolved\(value, label = 'URL', options = \{\}\)/, 'server-side fetch URL validation should verify resolved DNS addresses before keyed requests');
+    assert.match(httpGuardsSource, /dns\.lookup\(hostname, \{ all: true, verbatim: false \}\)/, 'public-mode endpoint guards should inspect resolved addresses to catch DNS-to-private SSRF bypasses');
+    assert.match(httpGuardsSource, /isBlockedPrivateNetworkHost\(parsed\.hostname\)/, 'server-side fetch URL validation should reject local and private hosts when public');
+    assert.match(serverIndex, /await buildOpenAiCompatibleUrlResolved\(endpoint, 'models', \{ label: 'Endpoint' \}\)/, 'models proxy should normalize and boundary-check provider endpoints');
+    assert.match(serverIndex, /redirect: 'manual'/, 'models proxy should not auto-follow redirects with provider keys');
+    assert.match(llmSource, /await buildOpenAiCompatibleUrlResolved\(endpoint, 'chat\/completions', \{ label: 'LLM endpoint' \}\)/, 'LLM calls should normalize and boundary-check configured endpoints');
+    assert.match(llmSource, /redirect: 'manual'/, 'LLM calls should not auto-follow redirects with provider keys');
+    assert.match(llmSource, /function redactEndpointForMessage\(endpoint\)[\s\S]*parsed\.username = '';[\s\S]*parsed\.password = '';[\s\S]*parsed\.search = '';/, 'LLM errors should redact endpoint credentials and query strings');
+    assert.match(llmSource, /const safeEndpoint = redactEndpointForMessage\(endpoint\)[\s\S]*LLM Error[\s\S]*safeEndpoint[\s\S]*API Endpoint \[\$\{safeEndpoint\}\]/, 'LLM error logs and user-facing messages should use the redacted endpoint');
+    assert.match(cityIndex, /await buildOpenAiCompatibleUrlResolved\(apiEndpoint, 'models', \{ label: 'Endpoint' \}\)/, 'city behavior model listing should share server-side endpoint guards');
+    assert.match(ttsSource, /await normalizeServerFetchUrlResolved\(character\.tts_endpoint \|\| 'https:\/\/api\.openai\.com\/v1\/audio\/speech', 'TTS endpoint'\)/, 'OpenAI-compatible TTS should validate configured endpoints');
+    assert.match(ttsSource, /await normalizeServerFetchUrlResolved\(character\.tts_endpoint \|\| '', 'TTS endpoint'\)/, 'custom TTS should validate configured endpoints');
+    assert.throws(
+        () => httpGuards.normalizeServerFetchUrl('http://127.0.0.1:11434/v1', 'Endpoint', { allowPrivateHosts: false }),
+        /Endpoint host is not allowed in public mode/,
+        'public-mode endpoint guards should reject loopback targets'
+    );
+    assert.equal(
+        httpGuards.buildOpenAiCompatibleUrl('https://api.example.com/v1/chat/completions?x=1', 'models', { allowPrivateHosts: false }),
+        'https://api.example.com/v1/models',
+        'OpenAI-compatible endpoint helper should strip query strings and preserve the API base path'
+    );
+
+    const dns = require('dns').promises;
+    const originalLookup = dns.lookup;
+    dns.lookup = async () => [{ address: '10.0.0.2', family: 4 }];
+    try {
+        await assert.rejects(
+            () => httpGuards.normalizeServerFetchUrlResolved('https://provider.example/v1', 'Endpoint', { allowPrivateHosts: false }),
+            /Endpoint resolves to a private network address in public mode/,
+            'public-mode endpoint guards should reject hostnames that resolve to private addresses'
+        );
+    } finally {
+        dns.lookup = originalLookup;
+    }
 });
 
 test('websocket auth does not put JWTs in URLs and checks account state', () => {
@@ -223,7 +302,7 @@ test('admin user mutations report missing targets instead of fake success', () =
     assert.match(authDb, /function setUserStatus\(id, status\)[\s\S]*USER_STATUSES\.has\(nextStatus\)[\s\S]*UPDATE users SET status = \? WHERE id = \?[\s\S]*changes \|\| 0/, 'user status updates should return actual row changes');
     assert.match(authDb, /function setUserRole\(id, role\)[\s\S]*MUTABLE_USER_ROLES\.has\(nextRole\)[\s\S]*UPDATE users SET role = \? WHERE id = \?[\s\S]*changes \|\| 0/, 'user role updates should return actual row changes');
     assert.match(authDb, /function bumpTokenVersion\(id\)[\s\S]*UPDATE users SET token_version = COALESCE\(token_version, 0\) \+ 1 WHERE id = \?[\s\S]*changes \|\| 0/, 'force logout token bumps should return actual row changes');
-    assert.match(authDb, /function resetPassword\(id, newPassword\)[\s\S]*UPDATE users SET password_hash = \?, token_version = COALESCE\(token_version, 0\) \+ 1 WHERE id = \?[\s\S]*changes \|\| 0/, 'password resets should return actual row changes');
+    assert.match(authDb, /function resetPassword\(id, newPassword\)[\s\S]*UPDATE users SET password_hash = \?, token_version = COALESCE\(token_version, 0\) \+ 1, password_updated_at = \? WHERE id = \?[\s\S]*changes \|\| 0/, 'password resets should return actual row changes');
 
     assert.match(adminDashboard, /const sendAdminUserMutationNotFound = \(res\) => \{[\s\S]*res\.status\(404\)\.json\(\{ error: 'User not found' \}\)/, 'admin user mutation routes should share a missing-target response');
     assert.match(adminDashboard, /const deleted = authDb\.deleteUser\(targetId\)[\s\S]*if \(!deleted\)[\s\S]*sendAdminUserMutationNotFound\(res\)/, 'admin user delete should not proceed to storage cleanup when the user row was not deleted');
@@ -231,10 +310,22 @@ test('admin user mutations report missing targets instead of fake success', () =
     assert.match(adminDashboard, /const updated = authDb\.setUserRole\(targetId, nextRole\)[\s\S]*const tokenUpdated = updated \? authDb\.bumpTokenVersion\(targetId\) : 0[\s\S]*if \(!updated \|\| !tokenUpdated\) return sendAdminUserMutationNotFound\(res\)/, 'admin role route should not fake success if role or token update fails');
     assert.match(adminDashboard, /const updated = authDb\.resetPassword\(targetId, newPassword\)[\s\S]*if \(!updated\) return sendAdminUserMutationNotFound\(res\)/, 'admin password reset should not fake success if the DB row was not changed');
     assert.match(adminDashboard, /const updated = authDb\.bumpTokenVersion\(targetId\)[\s\S]*if \(!updated\) return sendAdminUserMutationNotFound\(res\)/, 'admin force logout should not fake success if the token version was not changed');
+    assert.match(adminDashboard, /path\.join\(__dirname, '\.\.', '\.\.', 'public', 'uploads', 'users', String\(userId\)\)[\s\S]*removeDirectoryIfExists\(userUploadDir\)/, 'admin user delete should remove scoped uploaded media for the deleted account');
+    assert.match(adminDashboard, /path\.join\(__dirname, '\.\.', '\.\.', 'data', 'tts', String\(userId\)\)[\s\S]*removeDirectoryIfExists\(userTtsDir\)/, 'admin user delete should remove scoped TTS audio for the deleted account');
 
     assert.doesNotMatch(adminDashboard, /authDb\.deleteUser\(targetId\);\s*try \{[\s\S]*cleanupUserStorage\(targetId\)/, 'admin user delete must not ignore the DB delete result before cleaning storage');
     assert.doesNotMatch(adminDashboard, /authDb\.setUserStatus\(targetId, banned \? 'banned' : 'active'\);\s*authDb\.bumpTokenVersion\(targetId\)/, 'admin ban route must not ignore DB write results');
     assert.doesNotMatch(adminDashboard, /authDb\.setUserRole\(targetId, nextRole\);\s*authDb\.bumpTokenVersion\(targetId\)/, 'admin role route must not ignore DB write results');
+});
+
+test('admin storage stats include current and legacy vector index directories', () => {
+    const adminDashboard = readRepoFile('server', 'plugins', 'adminDashboard', 'index.js');
+
+    assert.match(adminDashboard, /const getUserVectorStorageSize = \(userId\) => \{/, 'admin storage stats should centralize vector directory sizing');
+    assert.match(adminDashboard, /candidateDirs\.add\(path\.join\(vectorsRoot, String\(userId\)\)\)/, 'admin storage stats should count legacy vector directories');
+    assert.match(adminDashboard, /candidateDirs\.add\(path\.join\(vectorsRoot, entry\.name, String\(userId\)\)\)/, 'admin storage stats should count tagged vector index directories');
+    assert.match(adminDashboard, /stats\.vector_size_bytes = getUserVectorStorageSize\(user\.id\)/, 'admin storage stats should use the vector directory helper');
+    assert.doesNotMatch(adminDashboard, /const vectorDir = path\.join\(__dirname, '\.\.', '\.\.', 'data', 'vectors', String\(user\.id\)\)/, 'admin storage stats must not only inspect the legacy vector path');
 });
 
 test('admin invite creation is a POST-only state change', () => {
@@ -282,14 +373,151 @@ test('admin invite update and delete report missing codes instead of fake succes
     const adminDashboard = readRepoFile('server', 'plugins', 'adminDashboard', 'index.js');
 
     assert.match(authDb, /function getInviteCode\(code\)[\s\S]*WHERE code = \?/, 'auth db should expose a single invite lookup by code');
-    assert.match(authDb, /function deleteInviteCode\(code\)[\s\S]*const cleanCode = String\(code \|\| ''\)\.trim\(\)[\s\S]*DELETE FROM invite_codes WHERE code = \?[\s\S]*changes \|\| 0/, 'invite deletes should return actual row changes');
-    assert.match(authDb, /function updateInviteCode\(code, data = \{\}\)[\s\S]*const cleanCode = String\(code \|\| ''\)\.trim\(\)[\s\S]*if \(!fields\.length\) return getInviteCode\(cleanCode\) \? 1 : 0[\s\S]*UPDATE invite_codes SET/, 'invite updates should validate code existence even for no-op updates');
+    assert.match(authDb, /function deleteInviteCode\(code\)[\s\S]*const cleanCode = cleanInviteCode\(code\)[\s\S]*DELETE FROM invite_codes WHERE code = \?[\s\S]*changes \|\| 0/, 'invite deletes should return actual row changes');
+    assert.match(authDb, /function updateInviteCode\(code, data = \{\}\)[\s\S]*const cleanCode = cleanInviteCode\(code\)[\s\S]*if \(!fields\.length\) return getInviteCode\(cleanCode\) \? 1 : 0[\s\S]*UPDATE invite_codes SET/, 'invite updates should validate code existence even for no-op updates');
     assert.match(authDb, /return db\.prepare\(`UPDATE invite_codes SET \$\{fields\.join\(', '\)\} WHERE code = \?`\)\.run\(\.\.\.values\)\.changes \|\| 0/, 'invite updates should return actual row changes');
 
     assert.match(adminDashboard, /const deleted = authDb\.deleteInviteCode\(req\.params\.code\)[\s\S]*return res\.status\(404\)\.json\(\{ error: 'Invite code not found' \}\)/, 'invite delete route should return 404 for missing codes');
     assert.match(adminDashboard, /const updated = authDb\.updateInviteCode\(req\.params\.code,[\s\S]*if \(!updated\) return res\.status\(404\)\.json\(\{ error: 'Invite code not found' \}\)/, 'invite update route should return 404 for missing codes');
     assert.doesNotMatch(adminDashboard, /authDb\.deleteInviteCode\(req\.params\.code\);\s*res\.json\(\{ success: true \}\)/, 'invite delete route must not fake success');
     assert.doesNotMatch(adminDashboard, /(?<!const updated = )authDb\.updateInviteCode\(req\.params\.code,/, 'invite update route must not ignore the DB update result');
+});
+
+test('public multi-user auth uses invite expiry, revocable sessions, and lockout fields', () => {
+    const authDb = readRepoFile('server', 'authDb.js');
+    const serverIndex = readRepoFile('server', 'index.js');
+    const adminDashboard = readRepoFile('server', 'plugins', 'adminDashboard', 'index.js');
+    const authContext = readRepoFile('client', 'src', 'AuthContext.jsx');
+    const app = readRepoFile('client', 'src', 'App.jsx');
+
+    assert.match(authDb, /const INVITE_DEFAULT_TTL_MS = 30 \* 24 \* 60 \* 60 \* 1000/, 'invite default TTL should be 30 days');
+    assert.match(authDb, /CREATE TABLE IF NOT EXISTS user_sessions/, 'auth DB should store revocable sessions');
+    assert.match(authDb, /CREATE TABLE IF NOT EXISTS auth_events/, 'auth DB should record auth events');
+    assert.match(authDb, /ALTER TABLE users ADD COLUMN username_norm TEXT DEFAULT ''/, 'users should store normalized usernames');
+    assert.match(authDb, /ALTER TABLE users ADD COLUMN failed_login_count INTEGER NOT NULL DEFAULT 0/, 'users should track failed login count');
+    assert.match(authDb, /ALTER TABLE users ADD COLUMN locked_until INTEGER NOT NULL DEFAULT 0/, 'users should support temporary login locks');
+    assert.match(authDb, /ALTER TABLE users ADD COLUMN password_updated_at INTEGER NOT NULL DEFAULT 0/, 'users should record password update time');
+    assert.match(authDb, /const defaultExpiresAt = createdAt \+ INVITE_DEFAULT_TTL_MS[\s\S]*normalizeInviteExpiresAt\(options\.expiresAt, defaultExpiresAt\)/, 'invite creation should default to 30 days');
+    assert.match(authDb, /function renewInviteCode\(code\)[\s\S]*use_count[\s\S]*>= [\s\S]*max_uses[\s\S]*reached its usage limit/, 'used-up invites should not renew');
+    assert.match(authDb, /const base = Number\(invite\.expires_at \|\| 0\) > Date\.now\(\) \? Number\(invite\.expires_at \|\| 0\) : Date\.now\(\)/, 'invite renewals should extend from expiry when still valid and now when expired');
+    assert.match(authDb, /const nextExpiresAt = base \+ INVITE_DEFAULT_TTL_MS/, 'invite renewals should add 30 days');
+    assert.match(authDb, /function createSession\(userId, meta = \{\}\)/, 'auth DB should create sessions');
+    assert.match(authDb, /function verifySession\(userId, sessionId, tokenId\)/, 'auth DB should verify sessions');
+    assert.match(authDb, /function revokeUserSessions\(userId\)/, 'auth DB should support force-revoking sessions');
+    assert.match(authDb, /const lockedUntil = failedCount >= MAX_FAILED_LOGINS \? now \+ LOGIN_LOCK_MS : 0/, 'login failures should lock after the configured threshold');
+
+    assert.match(serverIndex, /const AUTH_TOKEN_TTL = String\(process\.env\.CP_AUTH_TOKEN_TTL \|\| '7d'\)/, 'JWT TTL should be configurable and default to 7d');
+    assert.match(serverIndex, /function issueAuthToken\(user, req\)[\s\S]*authDb\.createSession\(user\.id, getRequestAuthMeta\(req\)\)[\s\S]*sessionId: session\.sessionId[\s\S]*jti: session\.tokenId/, 'JWTs should be bound to auth DB sessions');
+    assert.match(serverIndex, /authDb\.verifySession\(authUser\.id, decoded\.sessionId, decoded\.jti\)/, 'shared auth should reject revoked or expired sessions');
+    assert.match(serverIndex, /app\.post\('\/api\/auth\/logout', authMiddleware/, 'logout route should revoke the current session');
+    assert.match(serverIndex, /app\.get\('\/api\/auth\/sessions', authMiddleware/, 'users should be able to list their sessions');
+    assert.match(serverIndex, /app\.delete\('\/api\/auth\/sessions\/:id', authMiddleware/, 'users should be able to revoke their own sessions');
+    assert.match(serverIndex, /authDb\.verifyUser\(username, password, getRequestAuthMeta\(req\)\)/, 'login should pass request metadata for auth events');
+    assert.match(serverIndex, /authDb\.revokeUserSessions\(req\.user\.id\)[\s\S]*issueAuthToken\(result\.user, req\)/, 'account updates should revoke old sessions and issue a new one');
+    assert.match(authContext, /function buildAuthUrl\(apiUrl, path\)/, 'frontend logout should build logout URLs from the configured API base');
+    assert.match(authContext, /const logout = async \(apiUrl\)/, 'frontend logout should wait for session revoke before clearing local state');
+    assert.match(authContext, /await fetch\(buildAuthUrl\(apiUrl, '\/auth\/logout'\),\s*\{[\s\S]*keepalive:\s*true/, 'frontend logout should use keepalive when revoking the session');
+    assert.match(app, /onClick=\{\(\) => logout\(API_URL\)\}/, 'sidebar logout should pass the real API base to the auth provider');
+
+    assert.match(adminDashboard, /app\.post\('\/api\/admin\/invites\/:code\/renew'/, 'admin dashboard should expose invite renewal');
+    assert.match(adminDashboard, /authDb\.revokeUserSessions\(targetId\)[\s\S]*disconnectUserSessions\(targetId\)/, 'admin user mutations should revoke DB sessions as well as WS clients');
+});
+
+test('public mode CORS, rate limits, uploads, and queue stats are scoped for hosted use', () => {
+    const serverIndex = readRepoFile('server', 'index.js');
+    const backgroundQueue = readRepoFile('server', 'backgroundQueue.js');
+    const avatarUtil = readRepoFile('client', 'src', 'utils', 'avatar.js');
+    const authenticatedImage = readRepoFile('client', 'src', 'components', 'AuthenticatedImage.jsx');
+
+    assert.match(serverIndex, /const PUBLIC_MODE = \/\^\(1\|true\|yes\|on\)\$\/i\.test/, 'public mode env flag should be parsed');
+    assert.match(serverIndex, /const ALLOWED_ORIGINS = String\(process\.env\.CP_ALLOWED_ORIGINS \|\| ''\)/, 'allowed origins should come from env');
+    assert.match(serverIndex, /if \(TRUST_PROXY\) \{\s*app\.set\('trust proxy', 1\);/, 'trust proxy should be enabled by env');
+    assert.match(serverIndex, /app\.use\(cors\(\{[\s\S]*ALLOWED_ORIGINS\.includes\(origin\)/, 'CORS should use an allowlist in public mode');
+    assert.match(serverIndex, /function isLocalRequest\(req\) \{\s*if \(PUBLIC_MODE\) return false;/, 'public mode should disable local rate-limit bypass');
+    assert.match(serverIndex, /path\.join\(__dirname, 'public\/uploads\/users', String\(req\.user\?\.id \|\| 'default'\)\)/, 'new uploads should be written under the user upload scope');
+    assert.match(serverIndex, /function resolveUserUploadPath\(userId, filename\)/, 'authenticated media reads should resolve through a user boundary helper');
+    assert.match(serverIndex, /app\.get\('\/api\/media\/uploads\/:filename', authMiddleware/, 'authenticated media read route should exist');
+    assert.match(serverIndex, /app\.use\('\/uploads'[\s\S]*req\.path === '\/users' \|\| req\.path\.startsWith\('\/users\/'\)/, 'scoped user uploads should not remain publicly exposed by the static route');
+    assert.match(serverIndex, /const authUrl = `\/api\/media\/uploads\/\$\{encodeURIComponent\(file\.filename\)\}`/, 'new uploads should return the authenticated media URL');
+    assert.match(serverIndex, /res\.json\(\{ success: true, url: authUrl, mediaUrl: authUrl, legacyUrl \}\)/, 'upload responses should keep legacy paths separate from the canonical URL');
+    assert.match(avatarUtil, /function isLocalUploadUrl\(raw, parsedUrl, apiOrigin\)[\s\S]*raw\.startsWith\('\/'\)[\s\S]*parsedUrl\.origin === apiOrigin/, 'avatar upload URL migration should only coerce local or configured API upload paths');
+    assert.match(avatarUtil, /pathPart\.startsWith\('\/uploads\/users\/'\)[\s\S]*\/api\/media\/uploads\/\$\{filename\}/, 'legacy scoped upload URLs should be coerced to the authenticated media route');
+    assert.doesNotMatch(avatarUtil, /raw\.includes\('\/uploads\/users\/'\)|raw\.includes\('\/api\/media\/uploads\/'\)/, 'external URLs containing upload-looking path text should not be rewritten as local uploads');
+    assert.match(authenticatedImage, /const CONFIGURED_API_URL = import\.meta\.env\.VITE_API_URL/, 'authenticated media image fetches should use the configured API boundary');
+    assert.match(authenticatedImage, /new URL\(raw, window\.location\.origin\)/, 'authenticated media image URLs should be parsed before token-bearing fetches');
+    assert.match(authenticatedImage, /imageUrl\.origin === apiUrl\.origin && imageUrl\.pathname\.startsWith\(mediaPath\)/, 'authenticated media images should only send bearer tokens to the configured API origin and path');
+    assert.match(authenticatedImage, /fetch\(imageSrc, \{ headers: \{ Authorization: `Bearer \$\{token\}` \} \}\)/, 'authenticated media images should be fetched with the current bearer token after boundary checks');
+
+    assert.match(backgroundQueue, /function getBackgroundQueueStats\(options = \{\}\)/, 'background queue stats should accept scoping options');
+    assert.match(backgroundQueue, /String\(key \|\| ''\)[\s\S]*\.split\(':'\)[\s\S]*\.some\(part => part === cleanUserId\)/, 'background queue filtering should match user ids as exact key segments');
+    assert.match(backgroundQueue, /keyMatchesUser\(task\?\.key, userId\)/, 'recent queue tasks should be filtered by user');
+    assert.match(serverIndex, /getBackgroundQueueStats\(includeAll \? \{\} : \{ userId: req\.user\.id \}\)/, 'ordinary users should only see their own background queues');
+});
+
+test('default user and character APIs redact user-owned API keys without wiping saved secrets', () => {
+    const serverIndex = readRepoFile('server', 'index.js');
+    const settingsPanel = readRepoFile('client', 'src', 'components', 'SettingsPanel.jsx');
+    const themePlugin = readRepoFile('server', 'plugins', 'theme', 'index.js');
+    const memoryMaintenanceService = readRepoFile('server', 'memoryMaintenanceService.js');
+
+    assert.match(serverIndex, /const CHARACTER_SECRET_FIELDS = \['api_key', 'memory_api_key', 'tts_api_key'\]/, 'character list should define redacted secret fields');
+    assert.match(serverIndex, /const PROFILE_SECRET_FIELDS = \['serper_api_key', 'web_search_keys_json', 'memory_maintenance_api_key'\]/, 'user profile should define redacted secret fields');
+    assert.match(serverIndex, /function redactSecretFields\(record, fields\)[\s\S]*safe\[`\$\{field\}_configured`\][\s\S]*safe\[`\$\{field\}_last4`\][\s\S]*safe\[field\] = ''/, 'default reads should return only configured flags and last4');
+    assert.match(serverIndex, /const clearFlag = `\$\{field\}_clear`[\s\S]*next\[field\] = field === 'web_search_keys_json' \? '\{\}' : ''/, 'explicit clear flags should allow users to remove saved secrets');
+    assert.match(serverIndex, /function preserveExistingSecretFields\(patch, existing, fields\)[\s\S]*delete next\[field\]/, 'blank redacted fields should preserve existing saved secrets');
+    assert.match(serverIndex, /res\.json\(redactSecretFields\(\{ \.\.\.\(profile \|\| \{ name: req\.user\.username \}\)/, 'GET /api/user should redact profile secrets');
+    assert.match(serverIndex, /db\.updateUserProfile\(preserveExistingSecretFields\(req\.body, currentProfile, PROFILE_SECRET_FIELDS\)\)/, 'profile saves should not wipe hidden secrets');
+    assert.match(serverIndex, /return redactSecretFields\(\{[\s\S]*\.\.\.c,[\s\S]*emotion_color: emotion\.color[\s\S]*\}, CHARACTER_SECRET_FIELDS\)/, 'GET /api/characters should redact character secrets');
+    assert.match(serverIndex, /const characterPatch = preserveExistingSecretFields\(data, prevCharacter, CHARACTER_SECRET_FIELDS\)/, 'character saves should preserve hidden secrets');
+    assert.match(serverIndex, /app\.post\('\/api\/characters\/:id\/models'[\s\S]*scope === 'memory' \? character\.memory_api_key : character\.api_key[\s\S]*handleModelListProxy\(req, res, \{ endpoint, key \}\)/, 'character model fetching should reuse stored secrets without exposing them to the browser');
+    assert.match(serverIndex, /const pickTtsOverride[\s\S]*typeof value === 'string' && !value\.trim\(\)[\s\S]*return character\[field\]/, 'TTS preview should not let a blank redacted field mask the stored key');
+    assert.match(settingsPanel, /const getSecretPlaceholder[\s\S]*已保存：\$\{last4\}[\s\S]*留空保留，输入新 Key 替换/, 'settings editor should show saved-key state instead of a blank secret field');
+    assert.match(settingsPanel, /const renderSecretStatus[\s\S]*markEditingSecretClear\(field\)/, 'settings editor should expose an explicit clear action for saved keys');
+    assert.match(settingsPanel, /\/characters\/\$\{encodeURIComponent\(options\.characterId\)\}\/models/, 'settings editor should fetch models through the saved-character-key route when available');
+    assert.match(settingsPanel, /if \(!endpoint \|\| \(!key && !characterId\) \|\| !model\)/, 'theme generation should allow saved character keys without front-end plaintext');
+    assert.match(settingsPanel, /character_id: characterId/, 'theme generation should pass the selected character id for saved-key lookup');
+    assert.match(themePlugin, /const \{ query, character_id \} = req\.body[\s\S]*req\.db\.getCharacter\(character_id\)[\s\S]*api_key = api_key \|\| character\?\.api_key/, 'theme generation should resolve saved character keys server-side');
+    assert.match(memoryMaintenanceService, /function redactMemoryMaintenanceSettings\(settings = \{\}\)[\s\S]*api_key: apiKey \? `••••\$\{apiKey\.slice\(-4\)\}` : ''/, 'memory maintenance settings should return a masked key');
+    assert.match(memoryMaintenanceService, /isMaskedSecretInput\(safeBody\.api_key\)[\s\S]*delete safeBody\.api_key/, 'saving masked memory maintenance keys should preserve the stored value');
+});
+
+test('plugin API key surfaces do not leak secrets or use global web-search env fallback', () => {
+    const mcpLab = readRepoFile('server', 'plugins', 'mcpLab', 'index.js');
+    const socialHousing = readRepoFile('server', 'plugins', 'socialHousing', 'index.js');
+
+    assert.match(mcpLab, /const profileKey = String\(storedKeys\[item\.id\] \|\| ''\)\.trim\(\)/, 'web search providers should read user profile keys');
+    assert.match(mcpLab, /source: profileKey \? 'user_profile' : 'none'/, 'web search provider status should not expose env as an active key source');
+    assert.match(mcpLab, /const key = String\(config\.keys\[id\] \|\| ''\)\.trim\(\)/, 'web search resolution should use only the current user profile key');
+    assert.doesNotMatch(mcpLab, /process\.env\[item\.env\]/, 'web search config must not fall back to global env keys for ordinary users');
+    assert.doesNotMatch(mcpLab, /process\.env\[provider\?\.env\]/, 'web search provider resolution must not fall back to global env keys');
+
+    assert.match(socialHousing, /function redactSocialHousingCharacterSecrets\(characters = \[\]\)[\s\S]*api_key: ''[\s\S]*api_key_configured[\s\S]*api_key_last4/, 'social housing character lists should redact character API keys');
+    assert.match(socialHousing, /function redactAgencyConfig\(config = \{\}\)[\s\S]*delete safe\.llm_key/, 'social housing agency config should not return stored legacy LLM keys');
+    assert.match(socialHousing, /function preserveAgencySecretPatch\(payload = \{\}, current = \{\}\)[\s\S]*delete next\.llm_key/, 'masked or blank agency key saves should preserve the stored value');
+    assert.match(socialHousing, /characters: redactSocialHousingCharacterSecrets\(socialHousingDb\.getCharactersWithBindings/, 'social housing bootstrap and mutations should return redacted characters');
+    assert.match(socialHousing, /agency: redactAgencyConfig\(socialHousingDb\.getAgencyConfig\(\)\)/, 'social housing responses should return redacted agency config');
+});
+
+test('private and group reply scheduling is isolated per user and discards stale outputs', () => {
+    const engineSource = readRepoFile('server', 'engine.js');
+    const groupChat = readRepoFile('server', 'plugins', 'groupChat', 'index.js');
+
+    assert.match(engineSource, /const latestUserReplyRequests = new Map\(\)/, 'engine should track the latest pending private reply per character');
+    assert.match(engineSource, /function isPrivateReplyStale\(characterId, generationOptions = \{\}\)/, 'engine should detect stale private replies');
+    assert.match(engineSource, /getLatestUserMessageId\(characterId\) > targetUserMessageId/, 'stale detection should compare against the latest user message id');
+    assert.match(engineSource, /function scheduleQueuedUserReply\(characterId, wsClients, options = \{\}\)/, 'private replies should go through a queued scheduler');
+    assert.match(engineSource, /queueEngineTask\(\s*`char:\$\{characterId\}`,[\s\S]*dedupeKey: `private-reply:\$\{characterId\}`/, 'private replies should serialize on the per-character engine queue');
+    assert.match(engineSource, /targetUserMessageId: Number\(generationRequest\?\.targetUserMessageId \|\| 0\) \|\| getLatestUserMessageId\(characterId\)/, 'queued private replies should bind to the target user message id');
+    assert.match(engineSource, /function mergePrivateUserReplyCleanup\(previousRequest = \{\}, nextRequest = \{\}\)[\s\S]*hadPendingCityReply: true[\s\S]*cityIgnoreStreak: Math\.max/, 'replacement private replies should inherit city cleanup metadata from superseded requests');
+    assert.match(engineSource, /const previousRequest = latestUserReplyRequests\.get\(characterId\);[\s\S]*const nextRequest = mergePrivateUserReplyCleanup\(previousRequest, request\);[\s\S]*latestUserReplyRequests\.set\(characterId, nextRequest\)/, 'latest private reply requests should preserve cleanup state when overwritten');
+    assert.match(engineSource, /return abortStalePrivateReply\(charCheck, wsClients, generationOptions, 'before_visible_save'\)/, 'engine should drop stale output immediately before visible saves');
+    assert.doesNotMatch(engineSource, /setTimeout\(\(\) => \{[\s\S]*triggerMessage\(freshChar, wsClients, true/, 'private user messages should not launch direct parallel reply timers');
+
+    assert.match(groupChat, /function getGroupRuntimeKey\(userId, groupId\)[\s\S]*`\$\{cleanUserId\}:\$\{cleanGroupId\}`/, 'group runtime keys should include user id and group id');
+    assert.match(groupChat, /const runtimeKey = getGroupRuntimeKey\(req\.user\.id, groupId\)/, 'group user-message debounce should use user-scoped runtime keys');
+    assert.match(groupChat, /const runtimeKey = getGroupRuntimeKey\(userId, groupId\)/, 'group AI chain locks should use user-scoped runtime keys');
+    assert.doesNotMatch(groupChat, /groupReplyLock\[groupId\]/, 'group reply locks must not be keyed only by group id');
+    assert.doesNotMatch(groupChat, /groupPendingMentions\[groupId\]/, 'group pending mentions must not be keyed only by group id');
 });
 
 test('transfer card calls authenticated transfer APIs', () => {
@@ -375,6 +603,8 @@ test('generated emotion state tags fail instead of clamping malformed values', (
     assert.ok(affinityPreflightPos < timerSideEffectPos, 'generated affinity validation should run before timer or state side effects');
     assert.match(engineSource, /function normalizeGeneratedIntegerInRange\(value, min, max\)[\s\S]*\/\^\[\+-\]\?\\d\+\$\/\.test\(text\)[\s\S]*parsed >= min && parsed <= max/, 'generated numeric tags should require whole integer strings within range');
     assert.match(engineSource, /function parseGeneratedBoundedTag\(text, tagName, min, max, errorMessage\)[\s\S]*throw new Error\(errorMessage\)/, 'invalid generated bounded tags should fail visibly for retry');
+    assert.match(engineSource, /Use concrete digits only; never output N placeholders/, 'hidden tag prompt should not invite literal +N or -N delta placeholders');
+    assert.doesNotMatch(engineSource, /\[PRESSURE_DELTA:\+N\/-N\]|\[MOOD_DELTA:\+N\/-N\]/, 'pressure and mood delta examples should use concrete numeric values');
     assert.match(engineSource, /function parseGeneratedAffinityDelta\(text\)[\s\S]*parseGeneratedBoundedTag\(text, 'AFFINITY', -100, 100, 'AI returned invalid affinity delta\. Please retry\.'\)/, 'generated affinity deltas should reject malformed and out-of-range values');
     assert.match(engineSource, /function normalizeGeneratedPressureLevel\(value\)[\s\S]*return normalizeGeneratedIntegerInRange\(value, 0, 4\)/, 'generated pressure tags should only accept integer levels 0..4');
     assert.match(engineSource, /if \(generatedPressureMatch && generatedPressureLevel == null\) \{\s*throw new Error\('AI returned invalid pressure level\. Please retry\.'\);/, 'invalid generated pressure tags should fail visibly for retry');
@@ -388,7 +618,7 @@ test('generated emotion state tags fail instead of clamping malformed values', (
     assert.doesNotMatch(engineSource, /Math\.min\(100, Math\.max\(0, parseInt\(jealousyMatch\[1\], 10\)\)\)/, 'generated jealousy tags must not clamp out-of-range values into success');
 });
 
-test('generated city action tags fail visibly instead of repaired city writes', () => {
+test('generated city action tags tolerate narrow empty-field JSON glitches', () => {
     const engineSource = readRepoFile('server', 'engine.js');
     const cityActionStart = engineSource.indexOf('const cityActionRegex = /\\[CITY_ACTION:');
     const cityIntentStart = engineSource.indexOf('const cityIntentRegex = /\\[CITY_INTENT:', cityActionStart);
@@ -401,15 +631,17 @@ test('generated city action tags fail visibly instead of repaired city writes', 
     const cityActionBlock = engineSource.slice(cityActionStart, cityIntentStart);
     const cityIntentBlock = engineSource.slice(cityIntentStart, ttsIntentStart);
 
-    assert.match(cityActionBlock, /const parsedCityAction = JSON\.parse\(rawCityAction\)/, 'city action tags should parse the exact JSON payload');
-    assert.match(cityActionBlock, /Array\.isArray\(parsedCityAction\)[\s\S]*CITY_ACTION payload must be a JSON object/, 'city action tags should require an object payload');
+    assert.match(engineSource, /function parseGeneratedCityActionPayload\(rawCityAction\)[\s\S]*JSON\.parse\(rawText\)/, 'city action tags should still prefer strict JSON parsing');
+    assert.match(engineSource, /function parseLooseGeneratedCityActionPayload\(rawCityAction\)[\s\S]*hasDistrictSignal[\s\S]*return hasDistrictSignal \? parsed : null/, 'loose city action parsing should require a district signal before accepting repaired fields');
+    assert.match(engineSource, /function normalizeLooseGeneratedCityActionValue\(value\)[\s\S]*\/\^\[,，"'\\s\}\]\+\$\/\.test\(text\) \? '' : text/, 'loose city action parsing should treat punctuation-only broken fields as empty strings');
+    assert.match(cityActionBlock, /const parsedCityAction = parseGeneratedCityActionPayload\(rawCityAction\)/, 'city action tags should use the strict-then-loose parser');
     assert.match(cityActionBlock, /const cityActionResult = await cityReplyActionCallback\(userId, character\.id, parsedCityAction, generatedText\)/, 'city action callbacks should return a result before being treated as handled');
     assert.match(cityActionBlock, /if \(cityActionResult\?\.canRetry\) \{[\s\S]*throw new Error\(cityActionResult\.reason \|\| 'city action retry required'\)/, 'retryable city action failures should abort the generated reply');
     assert.ok(
         cityActionBlock.includes('throw new Error(`AI returned invalid city action. Please retry. ${cityActionErr.message}`);'),
-        'invalid city action tags should surface a retryable generation error'
+        'unrepairable city action tags should surface a retryable generation error'
     );
-    assert.doesNotMatch(cityActionBlock, /repaired|parsedCityAction = JSON\.parse\(repaired\)|replace\(\/,\\s\*\(\[\\\]\}\]\)|\/\/\.\*\$\/gm|console\.warn\(`\[Engine\] City reply action sync failed/, 'city action tags should not repair malformed JSON or hide callback failures');
+    assert.doesNotMatch(cityActionBlock, /console\.warn\(`\[Engine\] City reply action sync failed/, 'city action callback failures should not be hidden as normal chat success');
 
     assert.match(cityIntentBlock, /const cityIntentResult = await cityReplyIntentCallback\(userId, character\.id, cityIntentMatch\[1\]\.trim\(\), generatedText\)/, 'city intent callbacks should return a result before being treated as handled');
     assert.match(cityIntentBlock, /if \(cityIntentResult\?\.canRetry\) \{[\s\S]*throw new Error\(cityIntentResult\.reason \|\| 'city intent retry required'\)/, 'retryable city intent failures should abort the generated reply');
@@ -613,13 +845,14 @@ test('user profile numeric settings are bounded before persistence', () => {
 
 test('manual memory inputs reject invalid ids and maintenance settings', () => {
     const serverIndex = readRepoFile('server', 'index.js');
+    const memoryMaintenanceService = readRepoFile('server', 'memoryMaintenanceService.js');
     const memoryGuardsSource = readRepoFile('server', 'memoryInputGuards.js');
     const guards = require(path.join(repoRoot, 'server', 'memoryInputGuards.js'));
-    const smallModelParserStart = serverIndex.indexOf('function extractJsonObjectFromText');
-    const smallModelParserEnd = serverIndex.indexOf('function hasCjkText', smallModelParserStart);
+    const smallModelParserStart = memoryMaintenanceService.indexOf('function extractJsonObjectFromText');
+    const smallModelParserEnd = memoryMaintenanceService.indexOf('function hasCjkText', smallModelParserStart);
     assert.notEqual(smallModelParserStart, -1, 'server should keep a small-model JSON parser');
     assert.notEqual(smallModelParserEnd, -1, 'small-model JSON parser should have a stable end marker');
-    const smallModelParser = serverIndex.slice(smallModelParserStart, smallModelParserEnd);
+    const smallModelParser = memoryMaintenanceService.slice(smallModelParserStart, smallModelParserEnd);
 
     assert.match(memoryGuardsSource, /const MEMORY_BULK_MAX_IDS = 10000/, 'manual memory bulk operations should keep an explicit id cap');
     assert.match(memoryGuardsSource, /class MemoryInputValidationError extends Error/, 'memory input validation should expose typed bad requests');
@@ -633,7 +866,7 @@ test('manual memory inputs reject invalid ids and maintenance settings', () => {
     assert.match(memoryGuardsSource, /batch_size[\s\S]*MEMORY_MAINTENANCE_BATCH_MIN[\s\S]*MEMORY_MAINTENANCE_BATCH_MAX/, 'memory maintenance batch size should be range checked');
     assert.match(memoryGuardsSource, /max_output_tokens[\s\S]*MEMORY_MAINTENANCE_TOKENS_MIN[\s\S]*MEMORY_MAINTENANCE_TOKENS_MAX/, 'memory maintenance token budget should be range checked');
 
-    assert.match(serverIndex, /normalizeMemoryMaintenanceSettingsPatch\(body\)/, 'settings route should use the shared memory settings guard');
+    assert.match(memoryMaintenanceService, /normalizeMemoryMaintenanceSettingsPatch\(safeBody\)/, 'settings route should use the shared memory settings guard');
     assert.match(serverIndex, /normalizeMemoryMaintenanceBatchOptions\(req\.query \|\| \{\}, \{ limitFallback: 30 \}\)/, 'memory maintenance batch route should validate query limits and offsets');
     assert.match(serverIndex, /normalizeMemoryMaintenanceBatchOptions\(req\.query \|\| \{\}, \{ limitFallback: 40 \}\)/, 'memory temporal-binding batch route should validate query limits and offsets');
     assert.match(serverIndex, /normalizeOptionalMemoryId\(req\.body\?\.continue_import_id \|\| req\.body\?\.import_id, 'import_id'\)/, 'external import auto-run should validate continuation import ids');
@@ -718,6 +951,147 @@ test('manual memory inputs reject invalid ids and maintenance settings', () => {
         12,
         'memory library limits should normalize valid numeric strings'
     );
+});
+
+test('memory maintenance library stats can run from the service module', () => {
+    const Database = require('better-sqlite3');
+    const {
+        getMemoryMaintenanceOverview,
+        getMemoryMaintenanceLibrary,
+        getExpiredForgettingMemoryRows
+    } = require(path.join(repoRoot, 'server', 'memoryMaintenanceService.js'));
+    const db = new Database(':memory:');
+    try {
+        db.exec(`
+            CREATE TABLE characters (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                avatar TEXT DEFAULT ''
+            );
+            CREATE TABLE memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                character_id TEXT NOT NULL,
+                time TEXT,
+                location TEXT,
+                people TEXT,
+                event TEXT NOT NULL,
+                relationships TEXT,
+                items TEXT,
+                importance INTEGER DEFAULT 5,
+                embedding BLOB,
+                created_at INTEGER NOT NULL,
+                last_retrieved_at INTEGER,
+                retrieval_count INTEGER DEFAULT 0,
+                group_id TEXT DEFAULT NULL,
+                memory_type TEXT DEFAULT 'event',
+                summary TEXT DEFAULT '',
+                content TEXT DEFAULT '',
+                people_json TEXT DEFAULT '[]',
+                items_json TEXT DEFAULT '[]',
+                relationship_json TEXT DEFAULT '[]',
+                emotion TEXT DEFAULT '',
+                source_message_ids_json TEXT DEFAULT '[]',
+                dedupe_key TEXT DEFAULT '',
+                updated_at INTEGER DEFAULT 0,
+                is_archived INTEGER DEFAULT 0,
+                source_started_at INTEGER DEFAULT 0,
+                source_ended_at INTEGER DEFAULT 0,
+                source_time_text TEXT DEFAULT '',
+                source_message_count INTEGER DEFAULT 0,
+                memory_tier TEXT DEFAULT 'ambient',
+                memory_focus TEXT DEFAULT 'general',
+                maintenance_status TEXT DEFAULT 'pending',
+                classification_source TEXT DEFAULT '',
+                classified_at INTEGER DEFAULT 0,
+                retention_score REAL DEFAULT 1,
+                retention_action TEXT DEFAULT '',
+                retention_reason TEXT DEFAULT '',
+                retention_checked_at INTEGER DEFAULT 0,
+                consolidation_key TEXT DEFAULT '',
+                consolidation_summary TEXT DEFAULT '',
+                consolidated_into_memory_id INTEGER DEFAULT 0,
+                archive_reason TEXT DEFAULT '',
+                forgetting_grace_started_at INTEGER DEFAULT 0,
+                forgetting_grace_expires_at INTEGER DEFAULT 0,
+                source_context TEXT DEFAULT '',
+                scene_tag TEXT DEFAULT '',
+                source_app TEXT DEFAULT '',
+                temporal_label TEXT DEFAULT '',
+                temporal_scope TEXT DEFAULT '',
+                temporal_anchor TEXT DEFAULT '',
+                temporal_confidence REAL DEFAULT 0,
+                temporal_reason TEXT DEFAULT '',
+                temporal_checked_at INTEGER DEFAULT 0
+            );
+        `);
+        const now = Date.now();
+        const old = now - 120 * 24 * 60 * 60 * 1000;
+        db.prepare('INSERT INTO characters (id, name, avatar) VALUES (?, ?, ?)').run('char-a', '测试角色', '');
+        db.prepare(`
+            INSERT INTO memories (
+                character_id, event, summary, content, importance, created_at, updated_at,
+                memory_type, memory_focus, memory_tier, maintenance_status,
+                consolidation_key, consolidation_summary, temporal_label, temporal_confidence,
+                source_started_at, source_ended_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            'char-a',
+            'memory_event',
+            '测试摘要',
+            '测试内容',
+            6,
+            old,
+            old,
+            'event',
+            'general',
+            'ambient',
+            'classified',
+            'test-key',
+            '测试正式记忆',
+            'single_event_state',
+            0.9,
+            old,
+            old
+        );
+        db.prepare(`
+            UPDATE memories
+            SET forgetting_grace_started_at = ?,
+                forgetting_grace_expires_at = ?
+            WHERE id = 1
+        `).run(now - 2 * 24 * 60 * 60 * 1000, now - 24 * 60 * 60 * 1000);
+
+        const overview = getMemoryMaintenanceOverview(db);
+        const library = getMemoryMaintenanceLibrary(db, {
+            source: 'new',
+            timeline_filter: 'all',
+            timeline_all: '1'
+        });
+        const expiredRows = getExpiredForgettingMemoryRows(db, { now, limit: 10 });
+
+        assert.equal(overview.totals.legacy_total, 1);
+        assert.equal(overview.totals.migrated_card_total, 1);
+        assert.equal(overview.totals.formal_total, 1);
+        assert.equal(library.new_library.total, 1);
+        assert.equal(library.new_library.source_total, 1);
+        assert.equal(library.timeline.count, 1);
+        assert.equal(expiredRows.length, 1);
+        assert.equal(expiredRows[0].id, 1);
+    } finally {
+        db.close();
+    }
+});
+
+test('expired forgetting buffers are auto-purged by memory routes and scheduler', () => {
+    const serverIndex = readRepoFile('server', 'index.js');
+    const memorySource = readRepoFile('server', 'memory.js');
+    const schedulerSource = readRepoFile('server', 'plugins', 'scheduler', 'index.js');
+
+    assert.match(memorySource, /async function purgeExpiredForgettingMemories\(options = \{\}\)[\s\S]*getExpiredForgettingMemoryRows/, 'memory module should expose an automatic expired forgetting purge');
+    assert.match(memorySource, /deleteMemoryIndexEntries\(characterId, memoryIds\)[\s\S]*db\.deleteMemory\(row\.id\)[\s\S]*refreshMemoryIndexEntries\(characterId, memoryIds/, 'auto-forget should delete vector entries, remove DB rows, then refresh grouped index cards');
+    assert.match(serverIndex, /async function purgeExpiredForgettingMemoriesForRequest\(req, source = 'memory-maintenance'\)/, 'memory maintenance reads should run expired forgetting cleanup first');
+    assert.match(serverIndex, /app\.get\('\/api\/memory-maintenance\/overview'[\s\S]*await purgeExpiredForgettingMemoriesForRequest\(req, 'memory-maintenance-overview'\)/, 'overview should trigger expired forgetting cleanup');
+    assert.match(serverIndex, /app\.get\('\/api\/memory-maintenance\/library'[\s\S]*await purgeExpiredForgettingMemoriesForRequest\(req, 'memory-maintenance-library'\)/, 'library should trigger expired forgetting cleanup');
+    assert.match(schedulerSource, /memory\.purgeExpiredForgettingMemories\(\{[\s\S]*minIntervalMs: 10 \* 60 \* 1000/, 'scheduler should periodically purge expired forgetting buffers with a cooldown');
 });
 
 test('memory db updates only write whitelisted memory columns', () => {
@@ -831,6 +1205,7 @@ test('character deletion clears plugin and diagnostic rows tied to the character
     assert.match(dbSource, /function deleteCharacterAttachedRows\(characterId\)[\s\S]*DELETE FROM scheduled_tasks WHERE character_id = \?[\s\S]*DELETE FROM city_character_courses WHERE character_id = \?/, 'character deletion should remove scheduler tasks and city growth progress for the deleted character');
     assert.match(dbSource, /function deleteCharacterAttachedRows\(characterId\)[\s\S]*DELETE FROM city_logs WHERE character_id = \?[\s\S]*DELETE FROM city_inventory WHERE character_id = \?[\s\S]*DELETE FROM city_quest_progress_reviews WHERE character_id = \?[\s\S]*DELETE FROM city_quest_claims WHERE character_id = \?/, 'character deletion should remove city runtime, inventory, and quest rows for the deleted character');
     assert.match(dbSource, /function deleteCharacterAttachedRows\(characterId\)[\s\S]*DELETE FROM social_housing_bindings WHERE character_id = \?/, 'character deletion should remove social housing bindings for the deleted character');
+    assert.match(dbSource, /function deleteCharacterAttachedRows\(characterId\)[\s\S]*DELETE FROM social_housing_rental_chain_events WHERE chain_id IN \(SELECT id FROM social_housing_rental_chains WHERE character_id = \?\)[\s\S]*DELETE FROM social_housing_rental_chains WHERE character_id = \?/, 'character deletion should remove social housing rental chains and their events for the deleted character');
     assert.match(dbSource, /function deleteCharacter\(id\) \{[\s\S]*deleteCharacterAttachedRows\(id\);[\s\S]*DELETE FROM messages WHERE character_id = \?/, 'character deletion should run attached-row cleanup before deleting message rows');
 });
 
@@ -917,16 +1292,19 @@ test('group state changes reject missing and duplicate targets before side effec
 
     assert.match(deleteGroupRoute, /const group = db\.getGroup\(req\.params\.id\);[\s\S]*if \(!group\) return res\.status\(404\)\.json\(\{ error: 'Group not found' \}\)[\s\S]*db\.deleteGroup\(group\.id\)/, 'group deletion should reject missing groups before reporting success');
     assert.match(deleteGroupRoute, /engine\.stopGroupProactiveTimer\(group\.id\)[\s\S]*db\.deleteGroup\(group\.id\)/, 'group deletion should stop engine-owned proactive timers before deleting the group');
-    assert.match(deleteGroupRoute, /clearGroupRuntimeState\(group\.id\)/, 'group deletion should clear transient pause/debounce/no-chain state');
+    assert.match(deleteGroupRoute, /clearGroupRuntimeState\(req\.user\.id, group\.id\)/, 'group deletion should clear transient pause/debounce/no-chain state');
     assert.match(clearGroupRoute, /const group = db\.getGroup\(req\.params\.id\);[\s\S]*if \(!group\) return res\.status\(404\)\.json\(\{ error: 'Group not found' \}\)[\s\S]*db\.clearGroupMessages\(group\.id\)/, 'group message clearing should reject missing groups before reporting success');
     assert.match(batchDeleteRoute, /const group = db\.getGroup\(req\.params\.id\);[\s\S]*if \(!group\) return res\.status\(404\)\.json\(\{ error: 'Group not found' \}\)[\s\S]*db\.deleteGroupMessages\(group\.id, messageIds\)/, 'group message batch deletion should reject missing groups before reporting success');
 
-    assert.match(runtimeStateSection, /function clearGroupRuntimeState\(groupId\)[\s\S]*pausedGroups\.delete\(id\)[\s\S]*noChainGroups\.delete\(id\)[\s\S]*delete groupPendingMentions\[id\]/, 'group runtime state cleanup should cover pause, no-chain, debounce, locks, and pending mentions');
-    assert.match(aiPausePostRoute, /const group = db\.getGroup\(req\.params\.id\);[\s\S]*if \(!group\) return res\.status\(404\)\.json\(\{ error: 'Group not found' \}\)[\s\S]*const id = group\.id/, 'AI pause writes should reject missing groups and use normalized group ids');
+    assert.match(runtimeStateSection, /function clearGroupRuntimeState\(userId, groupId\)[\s\S]*const id = getGroupRuntimeKey\(userId, groupId\)[\s\S]*pausedGroups\.delete\(id\)[\s\S]*noChainGroups\.delete\(id\)[\s\S]*delete groupPendingMentions\[id\]/, 'group runtime state cleanup should cover pause, no-chain, debounce, locks, and pending mentions');
+    assert.match(aiPausePostRoute, /const group = db\.getGroup\(req\.params\.id\);[\s\S]*if \(!group\) return res\.status\(404\)\.json\(\{ error: 'Group not found' \}\)[\s\S]*const id = getGroupRuntimeKey\(req\.user\.id, group\.id\)/, 'AI pause writes should reject missing groups and use user-scoped runtime ids');
     assert.match(aiPausePostRoute, /String\(requestedPause\)\.toLowerCase\(\) === 'true'/, 'AI pause writes should parse explicit string booleans instead of treating every non-empty string as paused');
-    assert.match(aiPauseGetRoute, /const group = db\.getGroup\(req\.params\.id\);[\s\S]*if \(!group\) return res\.status\(404\)\.json\(\{ error: 'Group not found' \}\)[\s\S]*pausedGroups\.has\(group\.id\)/, 'AI pause reads should reject missing groups');
-    assert.match(noChainPostRoute, /const group = db\.getGroup\(req\.params\.id\);[\s\S]*if \(!group\) return res\.status\(404\)\.json\(\{ error: 'Group not found' \}\)[\s\S]*const id = group\.id/, 'no-chain writes should reject missing groups and use normalized group ids');
-    assert.match(noChainGetRoute, /const group = db\.getGroup\(req\.params\.id\);[\s\S]*if \(!group\) return res\.status\(404\)\.json\(\{ error: 'Group not found' \}\)[\s\S]*noChainGroups\.has\(group\.id\)/, 'no-chain reads should reject missing groups');
+    assert.match(aiPausePostRoute, /engine\.scheduleGroupProactive\(group\.id, wsClients\)/, 'unpausing group AI should restart the engine timer with the raw group id');
+    assert.match(aiPausePostRoute, /engine\.stopGroupProactiveTimer\(group\.id\)/, 'pausing group AI should stop the engine timer with the raw group id');
+    assert.doesNotMatch(aiPausePostRoute, /engine\.(?:scheduleGroupProactive|stopGroupProactiveTimer)\(id\b/, 'engine proactive timers must not receive user-scoped runtime keys');
+    assert.match(aiPauseGetRoute, /const group = db\.getGroup\(req\.params\.id\);[\s\S]*if \(!group\) return res\.status\(404\)\.json\(\{ error: 'Group not found' \}\)[\s\S]*pausedGroups\.has\(getGroupRuntimeKey\(req\.user\.id, group\.id\)\)/, 'AI pause reads should reject missing groups');
+    assert.match(noChainPostRoute, /const group = db\.getGroup\(req\.params\.id\);[\s\S]*if \(!group\) return res\.status\(404\)\.json\(\{ error: 'Group not found' \}\)[\s\S]*const id = getGroupRuntimeKey\(req\.user\.id, group\.id\)/, 'no-chain writes should reject missing groups and use user-scoped runtime ids');
+    assert.match(noChainGetRoute, /const group = db\.getGroup\(req\.params\.id\);[\s\S]*if \(!group\) return res\.status\(404\)\.json\(\{ error: 'Group not found' \}\)[\s\S]*noChainGroups\.has\(getGroupRuntimeKey\(req\.user\.id, group\.id\)\)/, 'no-chain reads should reject missing groups');
 });
 
 test('group proactive timer handles do not survive deletion or firing', () => {
@@ -1042,6 +1420,37 @@ test('scheduler tasks validate time, action, character, and batch fields before 
     );
 });
 
+test('background automation pauses for users who have not logged in recently', () => {
+    const automationSource = readRepoFile('server', 'automationActivity.js');
+    const schedulerSource = readRepoFile('server', 'plugins', 'scheduler', 'index.js');
+    const citySource = readRepoFile('server', 'plugins', 'city', 'index.js');
+    const socialHousingSource = readRepoFile('server', 'plugins', 'socialHousing', 'index.js');
+    const automation = require(path.join(repoRoot, 'server', 'automationActivity.js'));
+    const now = Date.now();
+    const graceMs = automation.getAutomationIdleLoginGraceMs();
+
+    assert.match(automationSource, /CP_AUTOMATION_IDLE_LOGIN_GRACE_DAYS/, 'automation idle grace should be configurable');
+    assert.match(automationSource, /last_login_at/, 'automation eligibility should be based on explicit login time');
+    assert.match(automationSource, /last_active_at/, 'automation eligibility should consider live user activity');
+    assert.match(automationSource, /Math\.max\(lastLoginAt, lastActiveAt\)/, 'automation should use the newest login or activity timestamp');
+    assert.equal(
+        automation.isUserAutomationEligible({ id: 'u1', status: 'active', last_login_at: now - graceMs - 1, last_active_at: now - 1000 }, now),
+        true,
+        'active sessions should keep background automation eligible even after the original login ages out'
+    );
+    assert.equal(
+        automation.isUserAutomationEligible({ id: 'u2', status: 'active', last_login_at: now - graceMs - 1, last_active_at: now - graceMs - 1 }, now),
+        false,
+        'background automation should still pause when both login and activity are stale'
+    );
+    assert.match(schedulerSource, /filterAutomationUsers\(authDb\.getAllUsers\(\), now\.getTime\(\)\)/, 'scheduler automation should skip stale-login users');
+    assert.match(citySource, /filterAutomationUsers\(authDb\.getAllUsers\(\), Date\.now\(\)\)/, 'city automation should skip stale-login users');
+    assert.ok(
+        (socialHousingSource.match(/filterAutomationUsers\(authDb\.getAllUsers\(\), Date\.now\(\)\)/g) || []).length >= 2,
+        'social housing automation loops should skip stale-login users'
+    );
+});
+
 test('mcp lab validates task, fetch, and knowledge inputs before persistence', () => {
     const mcpLabIndex = readRepoFile('server', 'plugins', 'mcpLab', 'index.js');
     const mcpLabDb = readRepoFile('server', 'plugins', 'mcpLab', 'db.js');
@@ -1057,6 +1466,9 @@ test('mcp lab validates task, fetch, and knowledge inputs before persistence', (
     assert.match(inputGuards, /function normalizeMcpKnowledgeListOptions\(payload = \{\}\)/, 'MCP Lab knowledge list validation should be centralized');
     assert.match(inputGuards, /new URL\(String\(value \|\| ''\)\.trim\(\)\)/, 'MCP Lab URL validation should parse URLs before fetch/task persistence');
     assert.match(inputGuards, /!\['http:', 'https:'\]\.includes\(parsed\.protocol\)/, 'MCP Lab URL validation should reject non-http protocols');
+    assert.match(inputGuards, /function isBlockedMcpFetchHost\(hostname\)/, 'MCP Lab URL validation should block local and private fetch targets');
+    assert.match(inputGuards, /clean === 'localhost'[\s\S]*net\.isIP\(clean\)/, 'MCP Lab URL validation should inspect hostnames and IP literals before server-side fetches');
+    assert.match(mcpLabIndex, /redirect: 'manual'/, 'MCP Lab server-side fetches should not auto-follow redirects to unvalidated targets');
     assert.match(inputGuards, /!Number\.isSafeInteger\(parsed\) \|\| parsed < min \|\| parsed > max/, 'MCP Lab numeric values should reject NaN, Infinity, decimals, and out-of-range values');
 
     assert.match(mcpLabIndex, /const payload = normalizeMcpSearchPayload\(req\.body \|\| \{\}\)/, 'MCP Lab direct search should validate query and provider before saving a task');
@@ -1087,6 +1499,16 @@ test('mcp lab validates task, fetch, and knowledge inputs before persistence', (
         () => guards.normalizeMcpTaskPayload({ kind: 'fetch_url', input: { url: 'file:///etc/passwd' } }),
         /URL must be http or https/,
         'non-http fetch URLs should be rejected'
+    );
+    assert.throws(
+        () => guards.normalizeMcpTaskPayload({ kind: 'fetch_url', input: { url: 'http://127.0.0.1:8000/api/auth/me' } }),
+        /URL host is not allowed/,
+        'loopback fetch URLs should be rejected'
+    );
+    assert.throws(
+        () => guards.normalizeMcpKnowledgePayload({ content: 'x', source_url: 'http://169.254.169.254/latest/meta-data' }),
+        /Source URL host is not allowed/,
+        'metadata-service source URLs should be rejected'
     );
     assert.throws(
         () => guards.normalizeMcpSearchPayload({ query: 'x', provider: 'made_up' }),
@@ -1153,6 +1575,16 @@ test('group member APIs reject ghost members before DB writes', () => {
     assert.match(dbSource, /SELECT 1 FROM group_chats WHERE id = \? LIMIT 1/, 'DB addGroupMember should reject missing groups before writing');
     assert.match(dbSource, /SELECT 1 FROM characters WHERE id = \? LIMIT 1/, 'DB addGroupMember should reject ghost characters before writing');
     assert.match(dbSource, /run\(cleanGroupId, cleanMemberId, role, Date\.now\(\)\)/, 'DB addGroupMember should write normalized ids');
+});
+
+test('group mentions resolve exact character names without prefix collisions', () => {
+    const groupChatPlugin = readRepoFile('server', 'plugins', 'groupChat', 'index.js');
+
+    assert.match(groupChatPlugin, /function resolveMentionedGroupCharacterIds\(db, members = \[\], text = '', options = \{\}\)/, 'group chat should centralize @ mention target resolution');
+    assert.match(groupChatPlugin, /function isAsciiMentionContinuation\(char = ''\)/, 'mention matching should distinguish Claude from Claude4 style names');
+    assert.match(groupChatPlugin, /resolveMentionedGroupCharacterIds\(db, group\.members, cleanReply, \{ selfId: char\.id \}\)/, 'AI-to-AI secondary chains should use strict mention resolution');
+    assert.match(groupChatPlugin, /const mentionedIds = resolveMentionedGroupCharacterIds\(db, charMembers, content\)/, 'user group messages should use the same strict mention resolution');
+    assert.doesNotMatch(groupChatPlugin, /cName\.includes\(n\) \|\| cNameNoSpace\.includes\(noSpace\) \|\| noSpace\.includes\(cNameNoSpace\)/, 'short character names must not match longer @mentions such as @Claude4.6opus');
 });
 
 test('relationship friend recommendations validate both characters before writes', () => {
@@ -1283,7 +1715,30 @@ test('private message retry and batch delete are scoped to message ownership', (
     assert.match(dbSource, /function deleteMessage\(messageId, characterId = null\)/, 'DB deleteMessage should accept an optional character scope');
     assert.match(dbSource, /DELETE FROM messages WHERE id = \? AND character_id = \?/, 'DB deleteMessage should support scoped message deletion');
     assert.match(dbSource, /DELETE FROM message_tts WHERE message_id = \?/, 'DB deleteMessage should remove orphaned TTS rows after deleting a message');
-    assert.match(chatWindow, /body: JSON\.stringify\(\{ characterId: contactRef\.current\?\.id, messageIds: \[\.\.\.selectedIds\] \}\)/, 'private chat batch delete should send the current character scope');
+    assert.match(chatWindow, /const deletingContactId = contactRef\.current\?\.id[\s\S]*body: JSON\.stringify\(\{ characterId: deletingContactId, messageIds: \[\.\.\.selectedIds\] \}\)/, 'private chat batch delete should send the captured current character scope');
+});
+
+test('chat windows do not replay accumulated websocket queues', () => {
+    const chatWindow = readRepoFile('client', 'src', 'components', 'ChatWindow.jsx');
+    const groupChatWindow = readRepoFile('client', 'src', 'components', 'GroupChatWindow.jsx');
+
+    assert.match(chatWindow, /const processedIncomingMessageIdsRef = useRef\(new Set\(\)\)/, 'private chat should track consumed websocket message ids');
+    assert.match(chatWindow, /const deletedMessageIdsRef = useRef\(new Set\(\)\)/, 'private chat should track locally deleted message ids');
+    assert.match(chatWindow, /const messageId = `\$\{contact\.id\}:\$\{m\.id\}`/, 'private chat consumed ids should be scoped by contact');
+    assert.match(chatWindow, /deletedMessageIdsRef\.current\.has\(messageId\)/, 'private chat should ignore websocket messages deleted locally');
+    assert.match(chatWindow, /processedIncomingMessageIdsRef\.current\.has\(messageId\)/, 'private chat should skip already-consumed websocket messages');
+    assert.match(chatWindow, /processedIncomingMessageIdsRef\.current\.add\(messageId\)/, 'private chat should mark websocket messages as consumed');
+    assert.match(chatWindow, /deletedMessageIdsRef\.current\.add\(`\$\{deletingContactId\}:\$\{id\}`\)/, 'private chat should remember ids after successful deletes');
+    assert.doesNotMatch(chatWindow, /incomingMessageQueue\.filter\(m => m\.character_id === contact\.id\)/, 'private chat must not replay the full accumulated queue on each new message');
+
+    assert.match(groupChatWindow, /const processedIncomingGroupMessageIdsRef = useRef\(new Set\(\)\)/, 'group chat should track consumed websocket message ids');
+    assert.match(groupChatWindow, /const deletedGroupMessageIdsRef = useRef\(new Set\(\)\)/, 'group chat should track locally deleted message ids');
+    assert.match(groupChatWindow, /const messageId = `\$\{group\.id\}:\$\{m\.id\}`/, 'group chat consumed ids should be scoped by group');
+    assert.match(groupChatWindow, /deletedGroupMessageIdsRef\.current\.has\(messageId\)/, 'group chat should ignore websocket messages deleted locally');
+    assert.match(groupChatWindow, /processedIncomingGroupMessageIdsRef\.current\.has\(messageId\)/, 'group chat should skip already-consumed websocket messages');
+    assert.match(groupChatWindow, /processedIncomingGroupMessageIdsRef\.current\.add\(messageId\)/, 'group chat should mark websocket messages as consumed');
+    assert.match(groupChatWindow, /deletedGroupMessageIdsRef\.current\.add\(`\$\{group\.id\}:\$\{id\}`\)/, 'group chat should remember ids after successful deletes');
+    assert.doesNotMatch(groupChatWindow, /incomingGroupMessageQueue\.filter\(m => m\.group_id === group\.id\)/, 'group chat must not replay the full accumulated queue on each new message');
 });
 
 test('private message routes reject missing characters before writing', () => {
@@ -1406,8 +1861,11 @@ test('message TTS records are tied to real message ownership', () => {
 test('settings upload and memo drawer avoid debug logs and use explicit auth', () => {
     const settingsPanel = readRepoFile('client', 'src', 'components', 'SettingsPanel.jsx');
     const memoTable = readRepoFile('client', 'src', 'components', 'MemoTable.jsx');
+    const app = readRepoFile('client', 'src', 'App.jsx');
 
     assert.doesNotMatch(settingsPanel, /DEBUG:|DEBUG Upload/, 'avatar upload should not leave production debug logs');
+    assert.doesNotMatch(app, /styleTag\.innerHTML/, 'custom CSS should not be injected through HTML parsing');
+    assert.match(app, /styleTag\.textContent = userProfile\.custom_css/, 'custom CSS should be assigned as style text content');
     assert.doesNotMatch(memoTable, /MemoTable rendering|Real-time memory update/, 'memo drawer should not log on every render/update');
     assert.match(memoTable, /function buildAuthHeaders/, 'memo drawer should centralize auth headers');
     assert.match(memoTable, /fetch\(`\$\{apiUrl\}\/memories\/\$\{contact\.id\}`,\s*\{ headers: buildAuthHeaders\(\) \}\)/, 'memo load should send auth headers explicitly');
@@ -1434,11 +1892,16 @@ test('relationships plugin does not persist or log raw LLM responses', () => {
 test('LLM generation routes do not log raw generated content', () => {
     const serverIndex = readRepoFile('server', 'index.js');
     const themePlugin = readRepoFile('server', 'plugins', 'theme', 'index.js');
+    const engineSource = readRepoFile('server', 'engine.js');
+    const cityPlugin = readRepoFile('server', 'plugins', 'city', 'index.js');
+    const citySocialService = readRepoFile('server', 'plugins', 'city', 'services', 'socialService.js');
 
     assert.doesNotMatch(serverIndex, /Generator Raw Output/, 'character generator must not log raw model output');
     assert.doesNotMatch(serverIndex, /JSON\.parse failed on this string/, 'character generator must not log failed raw JSON');
     assert.doesNotMatch(serverIndex, /Failed to find JSON brackets in cleanText:\s*,\s*cleanText/, 'character generator must not log raw non-JSON responses');
+    assert.doesNotMatch(serverIndex, /console\.warn[^\n]*clipMemoryDisplayText\(rawText/, 'external memory import logs must not include raw model output snippets');
     assert.match(serverIndex, /\[Character Generator\] LLM returned \$\{String\(generatedText \|\| ''\)\.length\} chars\./, 'character generator should retain non-content diagnostics');
+    assert.match(serverIndex, /rawChars=\$\{String\(rawText \|\| ''\)\.length\}/, 'external memory import logs should keep only non-content response diagnostics');
     assert.match(serverIndex, /function parseGeneratedCharacterReply\(replyText\)[\s\S]*return parsed;/, 'character generator should parse and return only a full JSON object');
     assert.match(serverIndex, /function normalizeGeneratedCharacterPayload\(parsed\)[\s\S]*requireGeneratedCharacterInteger\(parsed\.affinity, 'affinity', 0, 100\)[\s\S]*requireGeneratedCharacterInteger\(parsed\.sys_pressure, 'sys_pressure', 0, 1\)/, 'character generator should validate generated numeric fields before success');
     assert.match(serverIndex, /parsed = normalizeGeneratedCharacterPayload\(parseGeneratedCharacterReply\(generatedText\)\)/, 'character generator should validate model JSON before adding local integration fields');
@@ -1453,6 +1916,16 @@ test('LLM generation routes do not log raw generated content', () => {
     assert.match(themePlugin, /function validateGeneratedThemeConfig\(value\)[\s\S]*if \(!HEX_COLOR_RE\.test\(color\)\)/, 'theme generator should validate generated colors as strict hex values');
     assert.match(themePlugin, /for \(const key of THEME_COLOR_KEYS\)[\s\S]*throw new Error\(`Generated theme has invalid color for \$\{key\}\.`\)/, 'theme generator should reject missing or invalid generated theme keys');
     assert.doesNotMatch(themePlugin, /cleanText\.indexOf\('\{'\)|cleanText\.lastIndexOf\('\}'\)|cleanText\.slice\(startIdx, endIdx \+ 1\)/, 'theme generator must not slice JSON out of malformed model output');
+
+    assert.doesNotMatch(engineSource, /LLM raw output|JSON\.stringify\(generatedText\)|generatedText\.substring|console\.(?:log|warn|error)[^\n]*(?:Query: "\$\{retrievalLabel\}"|matches for "\$\{retrievalLabel\}"|temporalHint\}"|: "\$\{clean\}"|\$\{taskPrompt\})/, 'runtime engine logs must not include raw generated text, retrieval queries, or proactive prompt content');
+    assert.match(engineSource, /LLM output received for \$\{charCheck\.name\}\. chars=\$\{String\(generatedText \|\| ''\)\.length\}/, 'runtime engine should keep only non-content output diagnostics');
+    assert.match(engineSource, /Dynamic RAG triggered for \$\{character\.name\}\. queryChars=\$\{String\(retrievalLabel \|\| ''\)\.length\}/, 'runtime engine RAG logs should not include retrieval query text');
+    assert.match(engineSource, /Proactive task triggered for \$\{character\.name\}\. promptChars=\$\{String\(taskPrompt \|\| ''\)\.length\}/, 'runtime engine proactive logs should not include prompt text');
+    assert.doesNotMatch(cityPlugin, /console\.log[^\n]*(?:chatContent|explicitMoment)\.substring/, 'city-to-chat logs must not include generated chat or moment snippets');
+    assert.match(cityPlugin, /发私聊 chars=\$\{String\(chatContent \|\| ''\)\.length\}/, 'city-to-chat private logs should keep only content length');
+    assert.match(cityPlugin, /发朋友圈 chars=\$\{String\(explicitMoment \|\| ''\)\.length\}/, 'city-to-chat moment logs should keep only content length');
+    assert.doesNotMatch(citySocialService, /console\.error[^\n]*clean\.substring/, 'city social parser logs must not include raw model output snippets');
+    assert.match(citySocialService, /尝试解析的文本长度:', clean \? String\(clean\)\.length : 0/, 'city social parser logs should keep only raw output length');
 });
 
 test('private reply generation does not fabricate fallback text for empty visible output', () => {
@@ -1467,6 +1940,42 @@ test('private reply generation does not fabricate fallback text for empty visibl
     assert.doesNotMatch(engineSource, /Use a randomized fallback/, 'engine must not document empty-output fallback text');
     assert.doesNotMatch(engineSource, /const pick = \(arr\) => arr\[Math\.floor\(Math\.random\(\) \* arr\.length\)\]/, 'engine must not keep randomized fallback reply selection');
     assert.doesNotMatch(engineSource, /generatedText = pick\(\["嗯。", "嗯哼", "好的"/, 'engine must not turn empty model output into canned user-reply text');
+});
+
+test('private chat anti-repeat uses typed context instead of legacy compact previews', () => {
+    const engineSource = readRepoFile('server', 'engine.js');
+    const promptStart = engineSource.indexOf('async function buildPrompt');
+    const promptEnd = engineSource.indexOf('async function runStructuredRagPipeline', promptStart);
+    assert.notEqual(promptStart, -1, 'private chat prompt builder should exist');
+    assert.notEqual(promptEnd, -1, 'private chat prompt builder should have a stable end marker');
+    const promptBlock = engineSource.slice(promptStart, promptEnd);
+
+    assert.match(promptBlock, /formatTypedAntiRepeatBlock\(universalResult\.antiRepeatHints/, 'private chat prompt should use typed anti-repeat hints from the universal context');
+    assert.match(promptBlock, /include: \['private_character_replies', 'city_private_outreach', 'city_self_logs', 'group_character_replies'\]/, 'private chat typed anti-repeat should include ordinary private replies');
+    assert.match(promptBlock, /antiRepeat: typedAntiRepeat/, 'private chat debug stats should report the active typed anti-repeat block');
+    assert.doesNotMatch(engineSource, /function buildCompactAntiRepeat|function compactPreview|Recent older topics|buildCompactAntiRepeat\(/, 'private chat should not keep the legacy compact anti-repeat preview helper');
+    assert.doesNotMatch(promptBlock, /antiRepeatMessages|protectedTailCount|\[Anti-Repeat\]/, 'private chat prompt should not use the old compact anti-repeat path');
+});
+
+test('private chat prompts treat similar turns as a linear timeline, not parallel repeats', () => {
+    const engineSource = readRepoFile('server', 'engine.js');
+    const promptStart = engineSource.indexOf('async function buildPrompt');
+    const promptEnd = engineSource.indexOf('async function runStructuredRagPipeline', promptStart);
+    const ragStart = engineSource.indexOf('async function runStructuredRagPipeline');
+    const ragEnd = engineSource.indexOf('async function triggerMessage', ragStart);
+    assert.notEqual(promptStart, -1, 'private chat prompt builder should exist');
+    assert.notEqual(promptEnd, -1, 'private chat prompt builder should have a stable end marker');
+    assert.notEqual(ragStart, -1, 'RAG pipeline should exist');
+    assert.notEqual(ragEnd, -1, 'RAG pipeline should have a stable end marker');
+    const promptBlock = engineSource.slice(promptStart, promptEnd);
+    const ragBlock = engineSource.slice(ragStart, ragEnd);
+
+    assert.match(promptBlock, /Chat history is a linear timeline: later rows are newer states/, 'private prompt should teach the model that chat is a linear timeline');
+    assert.match(promptBlock, /earlier similar turns as already-answered past context/, 'private prompt should not let similar old turns become parallel current questions');
+    assert.match(promptBlock, /do not re-list the same old proof every turn/, 'private prompt should prevent repeated proof dumps for repeated motifs');
+    assert.match(promptBlock, /Similar earlier turns are past timeline steps you may have already answered/, 'topic gate block should preserve linear continuation semantics');
+    assert.match(ragBlock, /The \[Newest user message\] below is the current turn at the end of a linear chat timeline/, 'RAG injection should keep newest-user wording as the current linear turn');
+    assert.match(ragBlock, /Use recalled facts to disambiguate, not to re-list the same proof every turn/, 'RAG injection should not invite repeated old proof dumps');
 });
 
 test('login screen does not expose default Nana credentials', () => {
@@ -1497,6 +2006,7 @@ test('fresh installs do not fall back to a hardcoded root password', () => {
 
 test('client code uses cp_token instead of legacy token storage', () => {
     const clientSrc = path.join(repoRoot, 'client', 'src');
+    const main = readRepoFile('client', 'src', 'main.jsx');
     const offenders = [];
 
     function scan(dir) {
@@ -1516,6 +2026,10 @@ test('client code uses cp_token instead of legacy token storage', () => {
 
     scan(clientSrc);
     assert.deepEqual(offenders, [], 'legacy localStorage token key should not be used');
+    assert.match(main, /function isChatPulseApiRequest\(resource\)/, 'global auth fetch hook should identify first-party API requests through a helper');
+    assert.match(main, /requestUrl\.origin === apiUrl\.origin[\s\S]*requestUrl\.pathname\.startsWith\(`\$\{apiPath\}\/`\)/, 'global auth fetch hook should not match arbitrary external /api/ URLs');
+    assert.match(main, /const headers = new Headers\(config\.headers \|\| \(resource instanceof Request \? resource\.headers : undefined\)\)/, 'global auth fetch hook should preserve existing Headers objects');
+    assert.match(main, /function isBootstrapUserRequest\(resource\)[\s\S]*requestUrl\.pathname === `\$\{getConfiguredApiPath\(\)\}\/user`/, 'automatic logout should only key off the bootstrap user endpoint');
 });
 
 test('chat side drawers do not blank the conversation while lazy loading', () => {
@@ -1523,7 +2037,7 @@ test('chat side drawers do not blank the conversation while lazy loading', () =>
     const chatWindow = readRepoFile('client', 'src', 'components', 'ChatWindow.jsx');
     const css = readRepoFile('client', 'src', 'App.css');
 
-    assert.match(app, /function lazyWithPreload\(factory\)[\s\S]*Component\.preload = factory/, 'lazy chat drawer chunks should be pre-loadable');
+    assert.match(app, /function lazyWithPreload\(factory\)[\s\S]*const Component = lazy\(load\)[\s\S]*Component\.preload = \(\) => load\(\)\.catch/, 'lazy chat drawer chunks should be pre-loadable');
     assert.match(app, /function DrawerFallback\(\{ type = 'settings', contact, lang = 'zh', onClose \}\)[\s\S]*className="drawer-container memory-drawer memory-table-drawer drawer-loading-fallback"[\s\S]*加载记忆中/, 'memo drawer fallback should immediately render the real loading shell instead of a skeleton transition');
     assert.match(app, /activeDrawer === 'memo'[\s\S]*<Suspense fallback=\{<DrawerFallback type="memo" contact=\{activeChatContact\} lang=\{lang\} onClose=\{\(\) => setActiveDrawer\(null\)\} \/>\}>[\s\S]*<MemoTable/, 'memo drawer lazy loading should be caught by an inner drawer boundary');
     assert.match(app, /activeDrawer === 'diary'[\s\S]*<Suspense fallback=\{<DrawerFallback type="diary" contact=\{activeChatContact\} lang=\{lang\} onClose=\{\(\) => setActiveDrawer\(null\)\} \/>\}>[\s\S]*<DiaryTable/, 'diary drawer lazy loading should be caught by an inner drawer boundary');
@@ -1534,6 +2048,20 @@ test('chat side drawers do not blank the conversation while lazy loading', () =>
     assert.match(chatWindow, /onPointerEnter=\{onPreloadSettings\} onFocus=\{onPreloadSettings\} onClick=\{onToggleSettings\}/, 'settings button should preload before opening');
     assert.match(css, /\.drawer-fallback-action\[aria-disabled="true"\][\s\S]*pointer-events: none/, 'drawer fallback should keep visible controls inert while chunks load');
     assert.doesNotMatch(app, /drawer-loading-card|drawer-loading-line/, 'drawer fallback should not add a skeleton transition before the drawer loading text');
+});
+
+test('private chat thinking state is shown by the contact breathing light only', () => {
+    const chatWindow = readRepoFile('client', 'src', 'components', 'ChatWindow.jsx');
+    const contactList = readRepoFile('client', 'src', 'components', 'ContactList.jsx');
+
+    assert.doesNotMatch(chatWindow, /t\('Thinking'\)/, 'private chat should not render a typing/thinking text bubble before the input area');
+    assert.doesNotMatch(chatWindow, /isGeneratingReply/, 'private chat should not use a generated reply flag to render text-only status UI');
+
+    assert.match(contactList, /const isWorking = !!\(state\?\.isThinking \|\| state\?\.webSearchActive\)/, 'contact list should treat live model calls as working');
+    assert.match(contactList, /autopulse-status-dot \$\{isWorking \? 'thinking' : 'connected'\}/, 'contact list should turn the breathing light yellow while the character is thinking');
+    assert.match(contactList, /const statusText = countdown \? `\$\{countdown\}s` : contact\.time/, 'contact list should not replace the time with thinking text');
+    assert.doesNotMatch(contactList, /思考中/, 'private chat list should not show thinking as text');
+    assert.doesNotMatch(contactList, /color: isWorking \|\| countdown \?/, 'working state should not turn the timestamp into a text indicator');
 });
 
 test('doctor opens sqlite native module instead of only checking installation', () => {
@@ -1652,14 +2180,92 @@ test('city suggested actions require strict generated logs before writes', () =>
     assert.doesNotMatch(suggestBlock, /jsonMatch|cleaned\.match\(\/\\\{\[\\s\\S\]\*\\\}\/\)|建议行动文案生成失败|buildCollapsedCityLog\(char, '建议行动文案生成失败'|districts\.find\(d => d\.id === decision\.district_id\) \|\| candidates/, 'suggested action generation failures should not be sliced, fallback logged, or broadened beyond candidates');
 });
 
+test('city actions force exhausted characters to rest before task or schedule actions', () => {
+    const cityIndex = readRepoFile('server', 'plugins', 'city', 'index.js');
+
+    assert.match(cityIndex, /function getExhaustionRestOverride/, 'city actions should have an exhaustion override helper');
+    assert.match(cityIndex, /state\.sleep_debt >= 90/, 'severe sleep debt should trigger exhaustion protection');
+    assert.match(cityIndex, /const restOverride = getExhaustionRestOverride\(char, currentCals, districts, targetDistrict\)/, 'scheduled or quest targets should be checked before prompt generation');
+    assert.match(cityIndex, /【强制休整】/, 'the action prompt should explicitly describe forced rest');
+    assert.match(cityIndex, /本轮不要带 quest_intent/, 'forced rest should suppress quest progression tags');
+    assert.match(cityIndex, /const postChoiceRestOverride = getExhaustionRestOverride\(char, currentCals, districts, district\)/, 'model-selected actions should get a post-parse exhaustion guard');
+    assert.match(cityIndex, /applyDecision\(postChoiceRestOverride, char, db, userId, currentCals, config, activeEvents, restNarrations/, 'post-parse exhaustion guard should execute the rest action');
+});
+
+test('autonomous city action parser tolerates quoted narration text', () => {
+    const cityIndex = readRepoFile('server', 'plugins', 'city', 'index.js');
+    const serverIndex = readRepoFile('server', 'index.js');
+    const { parseCityActionNarrations, sanitizeCityNarrationText } = require(path.join(repoRoot, 'server', 'plugins', 'city', 'utils', 'actionNarrationParser'));
+
+    assert.match(cityIndex, /parseCityActionNarrations\(reply\)/, 'autonomous city actions should use the narration parser');
+    assert.match(cityIndex, /const explicitDiary = sanitizeCityNarrationText\(richNarrations\?\.diary\)/, 'city diary bridge should clean internal structured fields before saving');
+    assert.match(serverIndex, /content: sanitizeCityNarrationText\(diary\.content\)/, 'diary reads should hide old internal structured fields from the UI');
+    assert.match(cityIndex, /正文内如需引用话语，优先使用中文引号/, 'city action prompt should discourage raw JSON-breaking quotes');
+
+    const valid = parseCityActionNarrations('```json\n{"action":"[HOME]","log":"休息。","chat":"","moment":"","diary":""}\n```');
+    assert.equal(valid.action, '[HOME]');
+    assert.equal(valid.log, '休息。');
+
+    const loose = parseCityActionNarrations(`\`\`\`json
+{
+  "action": "[HOME]",
+  "log": "她说"只需要产品需求"，我记下了。
+
+然后靠回沙发休息。",
+  "chat": "那句"要么我也成为黑客"我听见了。",
+  "moment": "",
+  "diary": "明天再拆。"
+}
+\`\`\``);
+    assert.equal(loose.action, '[HOME]');
+    assert.match(loose.log, /只需要产品需求/);
+    assert.match(loose.chat, /要么我也成为黑客/);
+    assert.equal(loose.diary, '明天再拆。');
+
+    const looseWithNull = parseCityActionNarrations(`\`\`\`json
+{
+  "action": "[RESTAURANT]",
+  "log": "她说"渠道没渗水"，我听懂了。",
+  "chat": "你那句"渠道没渗水"是什么意思，嫌我中间抽了一下风？",
+  "moment": null,
+  "diary": "面很烫，蛋很好。"
+}
+\`\`\``);
+    assert.equal(looseWithNull.action, '[RESTAURANT]');
+    assert.match(looseWithNull.log, /渠道没渗水/);
+    assert.match(looseWithNull.chat, /中间抽了一下风/);
+    assert.equal(looseWithNull.moment, '');
+    assert.equal(looseWithNull.diary, '面很烫，蛋很好。');
+
+    const leakedQuestIntent = parseCityActionNarrations(`\`\`\`json
+{
+  "action": "[SCHOOL]",
+  "log": "她把公告纸叠起来。",
+  "chat": "",
+  "moment": "",
+  "diary": "她确实想知道那个卖身契设定背后到底是什么。";
+  "quest_intent": {"quest_id": 180, "stage": "claim"}
+}
+\`\`\``);
+    assert.equal(leakedQuestIntent.diary, '她确实想知道那个卖身契设定背后到底是什么。');
+    assert.deepEqual(leakedQuestIntent.quest_intent, { quest_id: 180, stage: 'claim' });
+    assert.equal(
+        sanitizeCityNarrationText('她确实想知道那个卖身契设定背后到底是什么。";\n"quest_intent": {"quest_id": 180, "stage": "claim"}'),
+        '她确实想知道那个卖身契设定背后到底是什么。'
+    );
+});
+
 test('city behavior generation returns retryable errors instead of fallback patches', () => {
     const cityIndex = readRepoFile('server', 'plugins', 'city', 'index.js');
-    const pixelWorldPanel = readRepoFile('client', 'src', 'plugins', 'pixelWorld', 'PixelWorldPanel.jsx');
-    const parserStart = cityIndex.indexOf('function parseJsonObjectFromLlmText');
+    const pixelWorldPanel = readPixelWorldSources();
+    const parserStart = cityIndex.indexOf('function repairUnescapedJsonStringQuotes');
     const parserEnd = cityIndex.indexOf('async function fetchBehaviorModelList', parserStart);
     assert.notEqual(parserStart, -1, 'behavior JSON parser should exist');
     assert.notEqual(parserEnd, -1, 'behavior JSON parser should end before model-list fetcher');
     const parserBlock = cityIndex.slice(parserStart, parserEnd);
+    const repairedBehaviorJson = vm.runInNewContext(`${parserBlock}
+parseJsonObjectFromLlmText(${JSON.stringify('{"reason":"玩家在预设互动末尾选了"叫他换地方"，指定云朵梦幻床。","node":{"steps":[]}}')})`);
+    assert.equal(repairedBehaviorJson.reason, '玩家在预设互动末尾选了"叫他换地方"，指定云朵梦幻床。', 'behavior parser should repair unescaped quote characters inside JSON string values');
 
     assert.match(cityIndex, /function createCityError\(message, status = 500, canRetry = false\)/, 'city plugin should use explicit HTTP errors for behavior generation failures');
     assert.match(cityIndex, /throw createCityError\('行为树生成缺少模型 URL\/Key\/模型名，请补全后重试。', 400, true\)/, 'behavior branch generation should reject missing model config');
@@ -1668,25 +2274,115 @@ test('city behavior generation returns retryable errors instead of fallback patc
     assert.match(cityIndex, /throw createCityError\('基础枝丫生成缺少模型 URL\/Key\/模型名，请补全后重试。', 400, true\)/, 'base branch generation should reject missing model config');
     assert.match(cityIndex, /throw createCityError\(`基础枝丫生成返回的 JSON 无法解析，请重试：/, 'base branch generation should fail invalid model JSON');
     assert.match(cityIndex, /if \(!sanitized\.base_patches\.length\) \{\s*throw createCityError\('基础枝丫生成结果没有可用的行为步骤，请重试。', 502, true\)/, 'base branch generation should fail empty sanitized output');
+    assert.match(cityIndex, /schema: \{[\s\S]*base_branches:[\s\S]*interaction_branches:/, 'behavior tree branch pack contract should include generated interaction starter branches');
+    assert.match(cityIndex, /function sanitizeBehaviorInteractionStarterPack\(rawValue, char, payload = \{\}, fallbackReason = 'starter_pack_invalid', allowedPlaceIds = \[\]\)/, 'behavior generation should sanitize interaction starter branches into player_interaction patches');
+    assert.match(cityIndex, /interaction_branches: generated\.interaction_branches \|\| \[\],[\s\S]*interaction_patches: generated\.interaction_patches \|\| \[\]/, 'behavior base route should return generated interaction starter branches');
+    assert.match(cityIndex, /活跃度规则：每条特殊枝丫在 offer_choices 前要有 3-5 个可见步骤，至少 1 个身体动作或移动步骤，至少 2 个 say\/emote/, 'special behavior branches should prompt for visible movement and more short speech');
+    assert.match(cityIndex, /活跃度规则：除 movement_recovery 外，每条 base_branch 要有 4-7 个步骤，至少 2 个身体动作\/移动\/地点停留步骤，至少 1 个 say/, 'base behavior branches should prompt for livelier movement and speech');
+    assert.match(cityIndex, /interaction_branches 每条 4-6 个步骤[\s\S]*前面至少 2 个 say\/emote 和 1 个身体动作或移动步骤/, 'interaction starter branches should also require movement and speech before choices');
+    const behaviorModelFallbackMatches = cityIndex.match(/const payloadModelName = limitText\(payload\.model_name \|\| payload\.model \|\| '', 200\);\s*const modelName = usePayloadCredentials\s*\?\s*limitText\(payloadModelName \|\| char\?\.model_name \|\| '', 200\)\s*:\s*limitText\(char\?\.model_name \|\| '', 200\);/g) || [];
+    assert.equal(behaviorModelFallbackMatches.length, 2, 'behavior generation should only use panel model overrides when panel URL and Key are both provided');
     assert.match(cityIndex, /res\.status\(e\.status \|\| 500\)\.json\(\{\s*error: e\.message,[\s\S]*canRetry/, 'behavior routes should return retryable error metadata');
-    assert.match(parserBlock, /function parseJsonObjectFromLlmText\(text\)[\s\S]*return JSON\.parse\(cleaned\)/, 'behavior generation should require the full cleaned model reply to be JSON');
+    assert.match(parserBlock, /function repairUnescapedJsonStringQuotes\(text = ''\)[\s\S]*nextChar === ':'[\s\S]*nextChar === ','[\s\S]*repaired \+= char[\s\S]*repaired \+=/, 'behavior JSON parser should narrowly repair unescaped quote characters inside strings');
+    assert.match(parserBlock, /function parseJsonObjectFromLlmText\(text\)[\s\S]*try \{[\s\S]*return JSON\.parse\(cleaned\)[\s\S]*const repaired = repairUnescapedJsonStringQuotes\(cleaned\)[\s\S]*return JSON\.parse\(repaired\)/, 'behavior generation should parse full JSON and only retry with narrow string-quote repair');
+    assert.match(cityIndex, /JSON 字符串内部不要使用未转义英文双引号/, 'behavior prompts should warn models not to emit bare quote characters inside JSON strings');
+    assert.match(cityIndex, /choice\.trigger 为 suggest_destination[\s\S]*必须填写 choice\.place_id[\s\S]*allowed_place_ids/, 'behavior prompts should require destination choices to carry an allowed place_id');
+    assert.doesNotMatch(cityIndex, /if \(trigger === 'suggest_destination' && !choicePlaceId\) return null/, 'behavior sanitizer should not silently drop suggest_destination choices without an allowed place_id');
+    assert.match(cityIndex, /const userDisplayName = limitText\(userProfile\.name \|\| payload\.user\?\.name \|\| payload\.userName \|\| '', 80\) \|\| '用户'/, 'behavior input should use the configured user display name');
+    assert.match(cityIndex, /function personalizeBehaviorPromptText\(text = '', userDisplayName = ''\)[\s\S]*source\.replace\(\/玩家\|用户\/g, displayName\)/, 'behavior input should replace generic user/player wording with the configured name before the model sees it');
+    assert.match(cityIndex, /return personalizeBehaviorPromptValue\(inputPackage, userDisplayName\)/, 'behavior input packages should be personalized before being returned or logged');
+    assert.match(cityIndex, /const personalizePrompt = \(text\) => personalizeBehaviorPromptText\(text, promptUserDisplayName\)/, 'behavior prompt text should be personalized before LLM calls');
+    assert.doesNotMatch(cityIndex, /不要把“玩家”当成用户姓名|naming_rule:/, 'behavior prompts should not carry a separate naming rule for the model');
+    assert.match(pixelWorldPanel, /function getBehaviorUserDisplayName\(\) \{[\s\S]*userProfile\?\.name[\s\S]*\|\| '用户'/, 'PixelWorld behavior payloads should read the configured user display name');
+    assert.match(pixelWorldPanel, /actor_name: getBehaviorUserDisplayName\(\)/, 'PixelWorld behavior events should include the configured user display name');
+    assert.match(pixelWorldPanel, /label: isUserActor \? displayName : label/, 'PixelWorld user actor labels should use the configured display name directly');
+    assert.equal((pixelWorldPanel.match(/function resolveBehaviorChoicePlaceIdFromPlaces\(choice = \{\}, triggerAction = '', behaviorPlaces = \[\], fallbackPlaceOptions = \[\]\)/g) || []).length, 1, 'behavior choice destination text resolution should live in the shared behavior tree core');
+    assert.equal((pixelWorldPanel.match(/resolveBehaviorChoicePlaceIdFromPlaces\(\s*choice,\s*triggerAction,\s*behaviorOrderedPlaces,\s*behaviorPlaceOptions\s*\)/g) || []).length, 2, 'commercial and room behavior choices should both use the shared destination place resolver');
+    assert.equal((pixelWorldPanel.match(/triggerAction === 'suggest_destination' && !nextPlaceId/g) || []).length, 2, 'suggest_destination choices without a resolved place should not fall back to the currently selected place');
     assert.match(cityIndex, /const behaviorPlayerInteractionActionSet = new Set\(behaviorPlayerInteractionActions\)/, 'behavior choice triggers should share the player interaction action whitelist');
     assert.match(cityIndex, /function normalizeBehaviorChoiceTrigger\(choice = \{\}\) \{[\s\S]*choice\?\.nextAction[\s\S]*choice\?\.id[\s\S]*behaviorPlayerInteractionActionSet\.has\(value\)/, 'behavior choice sanitizer should recover valid trigger actions from model choice aliases');
     assert.match(cityIndex, /const normalizedChoices = step\.choices\.slice\(0, 4\)\.map[\s\S]*choice\.place_id \|\| choice\.placeId \|\| choice\.to_place_id \|\| choice\.toPlaceId[\s\S]*if \(action === 'offer_choices' && !normalizedChoices\.length\) return null/, 'offer_choices steps should drop dead choices instead of displaying non-generating buttons');
+    assert.match(cityIndex, /const hasStepLimit = Number\.isFinite\(Number\(maxSteps\)\) && Number\(maxSteps\) > 0[\s\S]*if \(!hasStepLimit \|\| sanitizedSteps\.length <= stepLimit\) return sanitizedSteps/, 'behavior step sanitizer should support unlimited cleaned steps');
+    assert.match(cityIndex, /const firstChoiceStepIndex = sanitizedSteps\.findIndex[\s\S]*firstChoiceStepIndex >= stepLimit[\s\S]*sanitizedSteps\.slice\(0, Math\.max\(0, stepLimit - 1\)\)[\s\S]*sanitizedSteps\[firstChoiceStepIndex\]/, 'limited behavior step truncation should preserve a valid trailing offer_choices step');
+    assert.match(cityIndex, /const steps = sanitizeBehaviorSteps\(rawBranch\.steps, allowedPlaceIds, null, \{ allowChoices: true \}\)/, 'special interaction branches should not impose a hard step-count limit');
+    assert.match(cityIndex, /function behaviorBranchHasOfferChoices\(branch = \{\}\)[\s\S]*step\?\.action === 'offer_choices'[\s\S]*step\.choices\.length > 0/, 'special interaction branches should be checked for real follow-up choices');
+    assert.match(cityIndex, /if \(targetNodeId === 'player_interaction' && !behaviorBranchHasOfferChoices\(branch\)\) return null/, 'player_interaction patches should not accept one-shot branches without choices');
+    assert.match(cityIndex, /特殊枝丫最后一步必须是 offer_choices，给 2-4 个玩家回应选项/, 'special branch prompt should require follow-up player choices');
     assert.match(pixelWorldPanel, /function resolveBehaviorChoiceTrigger\(choice = \{\}\) \{[\s\S]*choice\?\.nextAction[\s\S]*choice\?\.id[\s\S]*commercialV2BehaviorActionIds\.has\(value\)/, 'PixelWorld should resolve branch choice triggers from all accepted aliases');
-    assert.match(pixelWorldPanel, /return label && trigger \? \{ id: trigger, label, trigger \} : null[\s\S]*if \(!trigger\) return null[\s\S]*const triggerAction = resolveBehaviorChoiceTrigger\(choice\)/, 'PixelWorld should avoid presenting choices that cannot generate a follow-up branch');
+    assert.match(pixelWorldPanel, /function normalizeBehaviorDialogChoices\(choices\)[\s\S]*return label && trigger \? \{ id: trigger, label, trigger \} : null[\s\S]*if \(!trigger\) return null/, 'PixelWorld should avoid presenting choices that cannot generate a follow-up branch');
+    assert.equal((pixelWorldPanel.match(/const triggerAction = resolveBehaviorChoiceTrigger\(choice\)/g) || []).length, 2, 'commercial and room follow-up choices should both use the shared trigger resolver');
     assert.match(pixelWorldPanel, /function formatBehaviorRequestError\(error, fallback = '请求失败，请重试。'\)[\s\S]*AbortError[\s\S]*请求超时，请重试。/, 'PixelWorld should surface behavior generation timeouts as retryable user-visible errors');
-    assert.match(pixelWorldPanel, /fetchBehaviorJsonWithTimeout\(`\$\{apiUrl\}\/city\/characters\/\$\{encodeURIComponent\(behaviorCharacterId\)\}\/behavior-branch`[\s\S]*45000\)/, 'special branch generation should use a visible timeout instead of silently hanging');
+    assert.match(pixelWorldPanel, /const commercialV2BehaviorGenerationTimeoutMs = 0/, 'behavior generation should allow the frontend to wait without a local timeout');
+    assert.match(pixelWorldPanel, /fetchBehaviorJsonWithTimeout\(`\$\{apiUrl\}\/city\/characters\/\$\{encodeURIComponent\(behaviorCharacterId\)\}\/behavior-branch`[\s\S]*commercialV2BehaviorGenerationTimeoutMs\)/, 'special branch generation should use the shared no-timeout behavior request setting');
     assert.match(pixelWorldPanel, /return \{ ok: false, error: message \}/, 'special branch generation should report failure to the choice dialog instead of hiding it in a folded panel');
     assert.match(pixelWorldPanel, /const branchResult = await generateBehaviorBranch\(\{ actionId: triggerAction, placeId: nextPlaceId \|\| behaviorPlaceId \}\)[\s\S]*后续枝丫生成失败：\$\{branchResult\?\.error \|\| '请重试。'\}[\s\S]*choices: previousDialog\?\.choices\?\.length \? previousDialog\.choices : \[choice\]/, 'PixelWorld should keep branch choices visible when follow-up generation fails');
     assert.match(pixelWorldPanel, /function buildBehaviorPendingInput\(options = \{\}, note = '当前前端请求；服务端会重新补齐 large_input。'\)[\s\S]*debug_source: 'client_pending_behavior_request'/, 'PixelWorld debug input should show the current pending request instead of stale server input');
     assert.match(pixelWorldPanel, /const requestPayload = buildBehaviorPayload\(\{ actionId, placeId \}\);[\s\S]*setBehaviorInput\(buildBehaviorPendingInput\([\s\S]*当前点击选项产生的请求[\s\S]*setBehaviorOutput\(null\)[\s\S]*\.\.\.requestPayload/, 'special branch generation should refresh debug input/output before calling the server');
-    assert.match(pixelWorldPanel, /setBehaviorInput\(buildBehaviorPendingInput\([\s\S]*\{ actionId, placeId: selectedPlaceId \}[\s\S]*当前预制互动请求/, 'preset player interactions should replace stale debug input with the current action snapshot');
+    assert.match(pixelWorldPanel, /function pickGeneratedInteractionStarterBranch\(treeState, actionId, placeId = '', allowedPlaceIds = \[\], ownerCharacterId = ''\)[\s\S]*ai-interaction-starter/, 'PixelWorld should find generated starter branches from player_interaction before using local fallback presets');
+    assert.match(pixelWorldPanel, /const generatedStarterBranch = pickGeneratedInteractionStarterBranch[\s\S]*executeBehaviorBranch\(presetBranch, generatedStarterBranch\?\.source \|\| 'preset'\)/, 'player interactions should execute generated behavior-tree starter branches before falling back to local presets');
+    assert.match(pixelWorldPanel, /const commercialV2BehaviorInteractionSessionIdleMs = 180000/, 'PixelWorld should keep an interaction session lock long enough for multi-turn player choices');
+    assert.match(pixelWorldPanel, /function keepBehaviorInteractionSessionActive\(\)[\s\S]*expiresAt: Date\.now\(\) \+ commercialV2BehaviorInteractionSessionIdleMs[\s\S]*autonomousBehaviorCooldownRef\.current = Date\.now\(\) \+ commercialV2BehaviorInteractionSessionIdleMs/, 'player interactions should extend the autonomous behavior cooldown while the dialogue is active');
+    assert.match(pixelWorldPanel, /function isBehaviorInteractionSessionActive\(\)[\s\S]*behaviorInteractionSessionRef\.current = \{ active: false, expiresAt: 0 \}[\s\S]*return true/, 'expired interaction locks should self-clear before autonomous behavior resumes');
+    assert.match(pixelWorldPanel, /if \(isBehaviorInteractionSessionActive\(\)\) return/, 'autonomous behavior should pause while a player interaction session is alive');
+    assert.equal((pixelWorldPanel.match(/if \(!behaviorCharacterId \|\| !behaviorOrderedPlaces\.length\) return;/g) || []).length, 2, 'commercial and room autonomous behavior should stay bound to the selected AI character');
+    assert.match(pixelWorldPanel, /function buildCommercialBehaviorSourceOwnerMeta\(source = '', characterId = '', character = null\)[\s\S]*isCommercialBehaviorAiSource\(source\)[\s\S]*buildCommercialBehaviorOwnerMeta\(characterId, character\)/, 'AI behavior patches should derive an owner from the selected character');
+    assert.match(pixelWorldPanel, /owner_character_id: ownerCharacterId[\s\S]*owner_character_name: ownerCharacterName/, 'AI behavior patch nodes should persist owner metadata');
+    assert.match(pixelWorldPanel, /function mergeCommercialBehaviorTreePatchesForRuntime\(currentTree, rawPatches = \[\], source = 'manual', characterId = '', character = null\)[\s\S]*const ownerMeta = buildCommercialBehaviorSourceOwnerMeta\(patchSource, characterId, character\)/, 'merged AI behavior patch packs should bind to the selected AI character');
+    assert.match(pixelWorldPanel, /commercialBehaviorBranchMatchesOwner\(branch, behaviorCharacterId\)/, 'autonomous behavior candidates should be filtered by owner character');
+    assert.match(pixelWorldPanel, /const commercialV2BehaviorAutonomousCooldownMs = 6200;[\s\S]*const commercialV2BehaviorNearbyCooldownMs = 3000;/, 'autonomous behavior should run often enough to feel alive without interrupting interactions');
+    assert.match(pixelWorldPanel, /function sortCommercialBehaviorBranchesByLiveliness\(branches = \[\]\)[\s\S]*getCommercialBehaviorBranchLivelinessScore/, 'autonomous behavior should score livelier branches first');
+    assert.equal((pixelWorldPanel.match(/sortCommercialBehaviorBranchesByLiveliness\(freshCandidates\.length \? freshCandidates : candidates\)/g) || []).length, 2, 'commercial and room autonomous behavior should both prefer livelier generated branches');
+    assert.match(pixelWorldPanel, /pickGeneratedInteractionStarterBranch\([\s\S]*behaviorOrderedPlaces\.map\(\(place\) => place\.placeId\),\s*\n\s*behaviorCharacterId/, 'generated interaction starter branches should be selected for the current AI character only');
+    assert.match(pixelWorldPanel, /const commercialV2BehaviorTravelFailureTrigger = 'runtime_state\.travel_failed'[\s\S]*'movement_recovery'[\s\S]*base_travel_blocked_recover/, 'behavior trees should include a base movement recovery branch for travel failures');
+    assert.match(pixelWorldPanel, /function pickCommercialBehaviorBaseBranchByTrigger\(treeState, triggerId = '', allowedPlaceIds = \[\], ownerCharacterId = ''\)[\s\S]*commercialBehaviorBranchHasTrigger\(branch, triggerId\)/, 'runtime events should select base behavior branches by trigger');
+    assert.equal((pixelWorldPanel.match(/!commercialBehaviorBranchIsTravelRecovery\(branch\)/g) || []).length, 2, 'movement recovery branches should not enter ordinary commercial or room autonomous polling');
+    assert.equal((pixelWorldPanel.match(/function activateBehaviorTravelFailureBranch\(details = \{\}\)/g) || []).length, 2, 'commercial and room runtimes should both trigger the movement recovery base branch');
+    assert.equal((pixelWorldPanel.match(/reason: 'travel_start_failed'/g) || []).length, 2, 'failed movement step starts should trigger movement recovery in both runtimes');
+    assert.equal((pixelWorldPanel.match(/reason: 'travel_blocked'/g) || []).length, 2, 'blocked behavior travel should trigger movement recovery in both runtimes');
+    assert.match(cityIndex, /const behaviorBasePatchTargetIds = new Set\(\[[\s\S]*'movement_recovery'[\s\S]*'idle_micro'[\s\S]*\]\)/, 'backend base branch targets should allow movement recovery');
+    assert.match(cityIndex, /movement_recovery 是运行时移动失败专用基础枝丫[\s\S]*runtime_state\.travel_failed/, 'base-branch prompts should describe movement recovery as a travel-failure-only branch');
+    assert.match(pixelWorldPanel, /setInteractionMenuOpen\(false\);\s*keepBehaviorInteractionSessionActive\(\);[\s\S]*executeBehaviorBranch\(presetBranch, generatedStarterBranch\?\.source \|\| 'preset'\)/, 'starting a player interaction should lock out autonomous behavior before executing the starter branch');
+    assert.match(pixelWorldPanel, /behaviorChoicePendingRef\.current = true;\s*keepBehaviorInteractionSessionActive\(\);[\s\S]*await generateBehaviorBranch\(\{ actionId: triggerAction, placeId: nextPlaceId \|\| behaviorPlaceId \}\)/, 'choosing a follow-up option should keep the interaction session active while the model generates the next branch');
+    assert.equal((pixelWorldPanel.match(/function exitBehaviorDialog\(\)/g) || []).length, 2, 'commercial and room behavior dialogs should both expose an exit handler');
+    assert.match(pixelWorldPanel, /function exitBehaviorDialog\(\) \{[\s\S]*behaviorInteractionSessionRef\.current = \{ active: false, expiresAt: 0 \}[\s\S]*clearBehaviorRuntime\('已退出互动对话。'\)/, 'exiting a behavior dialog should clear the runtime and interaction lock');
+    assert.equal((pixelWorldPanel.match(/className="pixel-world-behavior-dialog-exit"/g) || []).length, 4, 'behavior choice dialogs should render exit buttons in side panels and stage bubbles');
+    assert.match(pixelWorldPanel, /\.pixel-world-behavior-dialog-choices \.pixel-world-behavior-dialog-exit,[\s\S]*\.pixel-world-behavior-runtime-choice-grid \.pixel-world-behavior-dialog-exit[\s\S]*grid-column: 1 \/ -1/, 'behavior dialog exit buttons should be styled as a full-width choice action');
+    assert.match(pixelWorldPanel, /if \(!isBaseBranch\) keepBehaviorInteractionSessionActive\(\);[\s\S]*const branchKindLabel = isBaseBranch \? '日常行为' : '互动回应'/, 'activating an interaction branch should refresh the interaction session lock');
+    assert.match(pixelWorldPanel, /keepBehaviorInteractionSessionActive\(\);\s*runtime\.waitingForChoice = true/, 'offer_choices should keep the interaction session alive until the player picks the next option');
+    assert.match(pixelWorldPanel, /当前行为树互动开场枝丫[\s\S]*当前本地兜底互动请求/, 'player interaction debug input should distinguish generated starters from local fallback presets');
+    assert.match(pixelWorldPanel, /interaction_patches \|\| \[\]\)\.map[\s\S]*ai-interaction-starter[\s\S]*merged_patches: patchResult\?\.patches \|\| \[\]/, 'base generation should merge interaction starter patches into the behavior tree');
     assert.match(pixelWorldPanel, /setBehaviorOutput\(\{[\s\S]*branch: null,[\s\S]*tree_patch: null,[\s\S]*fallback: false,[\s\S]*error: message/, 'failed branch generation should make the error visible in the output panel without creating fallback success');
-    assert.match(pixelWorldPanel, /const prioritizedNodeIds = \[[\s\S]*behaviorTreeState\?\.active_node_id[\s\S]*nodes\.player_interaction\?\.children_ids[\s\S]*patchHistory\.slice\(0, 12\)[\s\S]*orderedEntries\.slice\(0, 60\)/, 'PixelWorld should always include recent special interaction nodes in the behavior payload');
+    assert.match(pixelWorldPanel, /const contextConfig = buildCommercialBehaviorContextConfig\(behaviorConfig\)[\s\S]*const iterationRecords = buildCommercialBehaviorIterationRecords\(behaviorTreeState\)[\s\S]*patch_history: patchHistory\.slice\(0, contextConfig\.q_raw_limit\)[\s\S]*iteration_context: \{[\s\S]*records: iterationRecords/, 'PixelWorld should send q-limited behavior raw context plus iteration records for backend compression');
+    assert.match(pixelWorldPanel, /'枝丫上下文'[\s\S]*q 原文窗口[\s\S]*context_q_limit[\s\S]*p 摘要阈值[\s\S]*context_summary_threshold/, 'PixelWorld behavior panel should expose q/p sliders for branch iteration context');
+    assert.match(pixelWorldPanel, /function buildCommercialBehaviorContextStats\(treeState, behaviorConfig = \{\}\)[\s\S]*pending_summary_count: pendingRecords\.length[\s\S]*active_summary_count: summaries\.slice\(-config\.max_summary_rounds\)\.length/, 'PixelWorld should compute behavior summary progress from the same q/p and cursor model as the backend');
+    assert.match(pixelWorldPanel, /stats: contextStats,[\s\S]*records: iterationRecords/, 'behavior debug payloads should include branch context progress stats');
+    assert.equal((pixelWorldPanel.match(/摘要积攒：/g) || []).length, 2, 'commercial and room behavior panels should show pending summary progress counts');
+    assert.equal((pixelWorldPanel.match(/behaviorContextStats\.pending_summary_count/g) || []).length, 2, 'commercial and room behavior panels should read the pending summary counter');
+    assert.equal((pixelWorldPanel.match(/原文 \{behaviorContextStats\.raw_readable_count\} \/ \{behaviorContextStats\.q_raw_limit\} 条/g) || []).length, 2, 'commercial and room behavior panels should show the live raw branch window usage');
+    assert.match(pixelWorldPanel, /function createCommercialBehaviorTreeRebuildState\(currentTree = null, defaultTreeId = 'street_runtime_single_character'\)[\s\S]*memory: \{\},[\s\S]*patch_history: \[\]/, 'behavior full rebuilds should start from a clean branch context');
+    assert.equal((pixelWorldPanel.match(/function summarizeBehaviorTreeForPayload\(treeState = behaviorTreeState\)/g) || []).length, 2, 'commercial and room behavior payload summaries should accept an explicit tree snapshot');
+    assert.equal((pixelWorldPanel.match(/behavior_tree: summarizeBehaviorTreeForPayload\(options\.behaviorTreeState \|\| behaviorTreeState\)/g) || []).length, 2, 'commercial and room full rebuild requests should be able to send the clean tree snapshot');
+    assert.match(pixelWorldPanel, /const rebuildTree = createCommercialBehaviorTreeRebuildState\([\s\S]*'street_runtime_single_character'[\s\S]*const requestPayload = buildBehaviorPayload\(\{ behaviorTreeState: rebuildTree \}\)[\s\S]*mergeBehaviorTreePatches\(combinedPatches, 'ai-tree', rebuildTree\)/, 'commercial full behavior regeneration should clear old branch context before request and merge');
+    assert.match(pixelWorldPanel, /const rebuildTree = adaptRoomBehaviorTreeStateForPlaces\([\s\S]*createCommercialBehaviorTreeRebuildState\([\s\S]*'room_runtime_single_character'[\s\S]*behaviorOrderedPlaces[\s\S]*const requestPayload = buildBehaviorPayload\(\{ behaviorTreeState: rebuildTree \}\)[\s\S]*mergeBehaviorTreePatches\(combinedPatches, 'ai-tree', rebuildTree\)/, 'room full behavior regeneration should clear old branch context before request and merge');
+    assert.match(cityIndex, /function buildBehaviorBaseRebuildPayload\(payload = \{\}\)[\s\S]*nodes: \{\},[\s\S]*memory: \{\},[\s\S]*patch_history: \[\],[\s\S]*summaries: \[\],[\s\S]*records: \[\]/, 'backend full base regeneration should hard-reset old behavior tree context even if the frontend sends stale state');
+    assert.match(cityIndex, /const rebuildPayload = buildBehaviorBaseRebuildPayload\(req\.body \|\| \{\}\);[\s\S]*buildBehaviorInputPackage\(req\.user\.id, req\.db, char, rebuildPayload\)[\s\S]*createBaseBehaviorBranchesWithModel\(char, input, rebuildPayload, req\.db\)/, 'base behavior regeneration route should use the backend clean rebuild payload');
+    assert.match(pixelWorldPanel, /const nextBehaviorIterationSequence = previousIterationSequence \+ 1[\s\S]*sequence: nextBehaviorIterationSequence[\s\S]*behavior_iteration_sequence: nextBehaviorIterationSequence/, 'behavior patch history should persist stable iteration sequence numbers');
+    assert.match(cityIndex, /async function buildCompressedBehaviorTreeForInput\(db, char, payload = \{\}\)[\s\S]*while \(pendingRecords\.length >= config\.p_summary_threshold\)[\s\S]*summarizeBehaviorIterationBatch\(db, char, batch, config\)[\s\S]*const promptSummaries = summaries\.slice\(-BEHAVIOR_CONTEXT_MAX_SUMMARIES\)/, 'behavior input should summarize overflow iteration records before model generation and keep only the latest summaries');
+    assert.match(cityIndex, /function resolveBehaviorIterationSummaryCursor\(records = \[\], summaries = \[\], incomingContext = \{\}\)[\s\S]*records\.findIndex\(\(record\) => record\.record_id === recordId\)/, 'behavior summary cursor should resolve by stable record ids');
+    assert.match(cityIndex, /let pendingRecords = cursor\.found[\s\S]*overflowRecords\.slice\(cursor\.index \+ 1\)[\s\S]*: overflowRecords\.slice\(\)/, 'behavior summary pending records should use cursor position instead of drifting sequence numbers');
+    assert.doesNotMatch(cityIndex, /pendingRecords = overflowRecords\.filter\(\(record\) => Number\(record\.sequence/, 'behavior summary pending records must not depend on re-numbered sequence comparisons');
     assert.match(cityIndex, /const behaviorRepeatTextActions = new Set\(\['say', 'emote', 'offer_choices', 'create_memory', 'relationship_delta'\]\)/, 'behavior anti-repeat should inspect spoken special interaction text');
     assert.match(cityIndex, /function summarizeRecentBehaviorSpecialInteractions\(behaviorTree = \{\}\)[\s\S]*collectRecentBehaviorSpecialNodes\(behaviorTree\)[\s\S]*texts: collectBehaviorNodeRepeatTexts\(node\)/, 'behavior input should expose recent special interaction text to the model');
-    assert.match(cityIndex, /recent_special_interactions: summarizeRecentBehaviorSpecialInteractions\(payload\.behavior_tree \|\| \{\}\)/, 'behavior input package should include recent special interactions');
+    assert.match(cityIndex, /const behaviorTree = await buildCompressedBehaviorTreeForInput\(db, char, payload\)[\s\S]*recent_special_interactions: summarizeRecentBehaviorSpecialInteractions\(behaviorTree \|\| \{\}\)/, 'behavior input package should include recent special interactions from the compressed behavior tree');
+    assert.match(cityIndex, /function inferBehaviorScene\(payload = \{\}, rawWorld = \{\}\)[\s\S]*input_kind: 'room_behavior_input_v1'[\s\S]*movement_model: 'room_semantic_v1'/, 'behavior input should infer room runtime from room payloads');
+    assert.match(cityIndex, /const hasRoomPlaceId = candidatePlaceIds\.some[\s\S]*room-anchor:[\s\S]*room-point:[\s\S]*const isRoom = sceneType === 'room' \|\| movementModel\.includes\('room'\) \|\| hasRoomPlaceId \|\| hasRoomLayout/, 'room anchor ids should make behavior input use room scene context even when scene.type is missing');
+    assert.match(cityIndex, /function summarizeBehaviorRoomLayout\(rawLayout = \{\}\)[\s\S]*current_ascii[\s\S]*furniture: furniture\.slice\(0, 60\)/, 'room behavior input should expose current room ASCII and furniture context');
+    assert.match(cityIndex, /\.\.\.\(roomLayout \? \{ room_layout: roomLayout \} : \{\}\)/, 'behavior input package should include room_layout only for room scenes');
+    assert.match(pixelWorldPanel, /scene:\s*\{[\s\S]*type: 'room'[\s\S]*room_layout:\s*\{[\s\S]*current_ascii: aiLayout\.currentAscii[\s\S]*furniture: aiLayout\.furniture\.map/, 'room behavior payload should tell the backend it is in a room and include furniture layout context');
+    assert.match(pixelWorldPanel, /function createRoomDefaultBehaviorSeedNodes\(roomPlaces = \[\]\)[\s\S]*room_base_needs_rest/, 'room behavior tree state should seed reusable base branches from current room anchors');
+    assert.match(pixelWorldPanel, /function adaptRoomBehaviorTreeStateForPlaces\(treeState, roomPlaces = \[\]\)[\s\S]*room_anchor_signature/, 'room behavior tree state should remember the current room anchor signature');
+    assert.match(pixelWorldPanel, /function createCommercialV2PresetInteractionBranch\(actionId, placeId = 'restaurant', placeLabel = '街区', options = \{\}\)[\s\S]*const isRoomScene[\s\S]*预设互动：房间闲聊[\s\S]*往\$\{targetPlaceLabel\}那边看了一眼/, 'room preset small-talk should use room wording instead of street-side wording');
+    assert.match(pixelWorldPanel, /selectedPlaceLabel,\s*\n\s*\{ sceneType: 'room' \}/, 'room preset interactions should pass room scene context to the shared preset branch builder');
     assert.match(cityIndex, /function findDuplicateBehaviorInteraction\(treePatch, inputPackage = \{\}\)[\s\S]*getBehaviorRepeatSimilarity\(generated\.normalized, entry\.normalized\) >= 0\.82/, 'behavior branch generation should detect repeated special interaction text');
     assert.match(cityIndex, /const duplicate = findDuplicateBehaviorInteraction\(treePatch, inputPackage\);[\s\S]*throw createCityError\('特殊枝丫生成疑似重复上一轮内容，请重试。', 502, true\)/, 'duplicate special interactions should fail visibly and remain retryable');
 
@@ -1721,9 +2417,10 @@ test('city social encounter generation does not fabricate fallback relationship 
     assert.doesNotMatch(cityIndex, /buildCollapsedCityLog,\s*\n\s*logEmotionTransition,[\s\S]*createSocialService/, 'city plugin should not pass collapsed-log fallback helpers into social generation');
 });
 
-test('city automatic actions do not salvage malformed model output into writes', () => {
+test('city automatic actions only accept parsed narrations before writes', () => {
     const cityIndex = readRepoFile('server', 'plugins', 'city', 'index.js');
     const actionService = readRepoFile('server', 'plugins', 'city', 'services', 'actionService.js');
+    const { parseCityActionNarrations } = require(path.join(repoRoot, 'server', 'plugins', 'city', 'utils', 'actionNarrationParser'));
     const missingModelStart = cityIndex.indexOf('// Missing model config -> skip autonomous actions');
     const missingModelEnd = cityIndex.indexOf('// Schedule is now generated at the cron loop level', missingModelStart);
     const simulateStart = cityIndex.indexOf('// LLM decision with inventory awareness');
@@ -1743,8 +2440,12 @@ test('city automatic actions do not salvage malformed model output into writes',
     assert.match(missingModelBlock, /if \(!char\.api_endpoint \|\| !char\.api_key \|\| !char\.model_name\) \{\s*return;\s*\}/, 'characters without model config should skip autonomous city actions');
     assert.doesNotMatch(missingModelBlock, /applyDecision|selectRandomDistrict|logAction/, 'missing model config must not become a rule-based city write');
 
-    assert.match(actionDecision, /if \(!cleaned\) throw new Error\('商业街行动生成失败：模型没有返回 JSON 对象，请重试。'\)/, 'city action generation should fail when the model returns no JSON');
-    assert.match(actionDecision, /const richNarrations = JSON\.parse\(cleaned\)/, 'city action generation should parse the full model JSON directly');
+    assert.throws(
+        () => parseCityActionNarrations('模型决定先回家休息。'),
+        /商业街行动生成失败：模型没有返回 JSON 对象|Unexpected token/,
+        'city action generation should fail when the model returns no JSON-shaped narration'
+    );
+    assert.match(actionDecision, /const richNarrations = parseCityActionNarrations\(reply\)/, 'city action generation should parse the model narration before writes');
     assert.match(actionDecision, /Array\.isArray\(richNarrations\)/, 'city action generation should reject JSON arrays');
     assert.ok(actionDecision.includes('match(/^\\[([A-Z_]+)\\]$/)'), 'city action tags should require the entire action string to be bracketed');
     assert.match(actionDecision, /if \(!codeMatch\) \{[\s\S]*throw new Error\('商业街行动生成失败：缺少有效 action 标签，请重试。'\)/, 'city action generation should fail missing action labels');
@@ -1754,11 +2455,40 @@ test('city automatic actions do not salvage malformed model output into writes',
     assert.match(actionDecision, /const district = districts\.find\(d => d\.id === codeMatch\);\s*if \(!district\) \{[\s\S]*throw new Error\(`商业街行动生成失败：action 不在可选地点中/, 'invalid district actions should fail instead of picking a random district');
     assert.match(webCallBlock, /baseLog: getLogText\(normalLog, \{ forceDefault: false \}\)/, 'city web activity should receive the generated action log as context');
 
-    assert.doesNotMatch(actionDecision, /非 JSON 回复抢救成功|坏格式回复中抢救 quest_intent|salvageQuestIntentFromReply/, 'city action generation should not keep malformed-output salvage paths');
-    assert.doesNotMatch(actionDecision, /jsonMatch|jsonStr = jsonStr\.replace|extractField|safeReply = safeReply|if \(!codeMatch\) codeMatch = reply\.match/, 'city action generation should not repair or slice malformed JSON');
+    assert.doesNotMatch(actionDecision, /非 JSON 回复抢救成功|坏格式回复中抢救 quest_intent|salvageQuestIntentFromReply/, 'city action generation should not keep broad malformed-output salvage paths');
+    assert.doesNotMatch(actionDecision, /jsonMatch|if \(!codeMatch\) codeMatch = reply\.match/, 'city action generation should not slice arbitrary JSON or recover action labels from raw text');
     assert.doesNotMatch(actionDecision, /const district = districts\.find\(d => d\.id === codeMatch\) \|\| selectRandomDistrict\(districts, char\)/, 'invalid model actions should not become random city actions');
     assert.doesNotMatch(actionDecision, /背包进食文案生成失败|API连接失败，本轮商业街行动已取消|db\.city\.logAction\([\s\S]*'ERROR'/, 'city action generation failures should not write fallback error or EAT_ITEM logs');
     assert.doesNotMatch(webCallBlock, /buildCollapsedCityLog\(char, '行动文案生成失败'/, 'city web activity context must not be a fake failure log');
+});
+
+test('city action chat prompts read the latest private-chat tail without hard duplicate blocking', () => {
+    const cityIndex = readRepoFile('server', 'plugins', 'city', 'index.js');
+    const freshTailStart = cityIndex.indexOf('function buildFreshPrivateChatTailBlock');
+    const freshTailEnd = cityIndex.indexOf('async function regenerateActionNarrations', freshTailStart);
+    const survivalPromptStart = cityIndex.indexOf('function buildSurvivalPrompt');
+    const survivalPromptEnd = cityIndex.indexOf('function buildSchedulePrompt', survivalPromptStart);
+    const bridgeStart = cityIndex.indexOf('function broadcastCityToChat');
+    const bridgeEnd = cityIndex.indexOf('function parseTimeSkipBackfillReply', bridgeStart);
+    assert.notEqual(freshTailStart, -1, 'city prompt should have a fresh private-chat tail helper');
+    assert.notEqual(freshTailEnd, -1, 'fresh private-chat tail helper should have a stable end marker');
+    assert.notEqual(survivalPromptStart, -1, 'city survival prompt should exist');
+    assert.notEqual(survivalPromptEnd, -1, 'city survival prompt should have a stable end marker');
+    assert.notEqual(bridgeStart, -1, 'city-to-chat bridge should exist');
+    assert.notEqual(bridgeEnd, -1, 'city-to-chat bridge should have a stable end marker');
+    const freshTailBlock = cityIndex.slice(freshTailStart, freshTailEnd);
+    const survivalPromptBlock = cityIndex.slice(survivalPromptStart, survivalPromptEnd);
+    const bridgeBlock = cityIndex.slice(bridgeStart, bridgeEnd);
+
+    assert.match(freshTailBlock, /db\.getVisibleMessages\(char\.id, limit\)/, 'fresh private-chat tail should read directly from the current message table');
+    assert.match(freshTailBlock, /生成前实时读取的最新私聊/, 'fresh private-chat tail should label itself as generation-time live context');
+    assert.match(freshTailBlock, /如果最新用户消息比你上一条回复更新，chat 必须承接最新用户消息/, 'city chat prompt should tell the model to follow the latest user input');
+    assert.match(freshTailBlock, /防重复只靠语义自觉/, 'city chat anti-repeat should be a prompt instruction, not a hard write filter');
+    assert.match(survivalPromptBlock, /const freshPrivateChatTailBlock = buildFreshPrivateChatTailBlock\(promptHistoryDb, char\)/, 'city action prompt should inject the fresh private-chat tail');
+    assert.match(survivalPromptBlock, /\$\{freshPrivateChatTailBlock \? freshPrivateChatTailBlock : ''\}/, 'fresh private-chat tail should be included in the city action prompt text');
+
+    assert.doesNotMatch(bridgeBlock, /findDuplicateCityOutreachChat|跳过重复商业街私聊|getCityOutreachRepeatSimilarity/, 'city-to-chat bridge should not hard-block duplicate-looking chat text');
+    assert.doesNotMatch(bridgeBlock, /findNewerUserMessageAfterCityInput|_city_chat_input_started_at|跳过陈旧商业街私聊/, 'city-to-chat bridge should not silently drop generated chat through a stale-input hard gate');
 });
 
 test('city web search activity rejects malformed intent and query planning before writes', () => {
@@ -1827,6 +2557,8 @@ test('city action narration regeneration failures stop before shopping writes', 
     const stockPos = shoppingBlock.indexOf('db.city.decreaseItemStock', regenPos);
     assert.ok(regenPos !== -1 && stockPos !== -1 && regenPos < stockPos, 'shopping inventory writes should happen only after successful regeneration');
     assert.match(rerollBlock, /catch \(e\) \{ res\.status\(e\.status \|\| 500\)\.json\(\{ error: e\.message, canRetry: !!e\.canRetry \}\); \}/, 'reroll regeneration failures should expose retry metadata');
+    assert.match(rerollBlock, /const messageId = normalizeCityRowId\(req\.body\?\.messageId \|\| 0\)/, 'reroll route should accept a strict chat message id for updating folded chat bubbles');
+    assert.match(rerollBlock, /UPDATE messages[\s\S]*WHERE id = \?[\s\S]*AND character_id = \?[\s\S]*AND role = 'character'[\s\S]*content LIKE '【商业街输出折叠】%/, 'reroll route should update the matching folded private chat bubble after regenerating the city log');
 });
 
 test('city generated schedules reject malformed JSON and invalid actions before saving', () => {
@@ -1866,7 +2598,7 @@ test('city private reply directed actions fail instead of fallback writes', () =
     const parserBlock = cityIndex.slice(parserStart, parserEnd);
     const directedBlock = cityIndex.slice(directedStart, directedEnd);
 
-    assert.match(parserBlock, /const parsed = JSON\.parse\(cleaned\);[\s\S]*!Array\.isArray\(parsed\) \? parsed : null/, 'private reply city action parser should parse the full JSON object directly');
+    assert.match(parserBlock, /const parsed = parseCityActionNarrations\(reply\);[\s\S]*!Array\.isArray\(parsed\) \? parsed : null/, 'private reply city action parser should use the shared strict-then-loose narration parser');
     assert.match(directedBlock, /return \{ triggered: false, districtId: district\.id, reason: 'missing_model_config', canRetry: true \}/, 'missing model config should not execute a fallback city action');
     assert.match(directedBlock, /const expectedAction = `\[\$\{String\(district\.id \|\| ''\)\.toUpperCase\(\)\}\]`/, 'directed city actions should compute the exact expected action label');
     assert.match(directedBlock, /if \(action !== expectedAction\) \{[\s\S]*throw new Error\(`私聊定向商业街行动 action 无效：/, 'directed city actions should reject mismatched model actions');
@@ -1875,7 +2607,7 @@ test('city private reply directed actions fail instead of fallback writes', () =
 
     assert.doesNotMatch(cityIndex, /function buildReplyIntentNarrationsFallback|async function buildReplyIntentNarrations|async function buildPrivateReplyCitySelfPrompt/, 'private reply directed city action should not keep local fallback narration helpers');
     assert.doesNotMatch(directedBlock, /fallback_no_api|directed_fallback|buildReplyIntentNarrations\(|applyDecision\([^;]+fallbackNarrations/, 'directed city action failures must not be converted into fallback writes');
-    assert.doesNotMatch(parserBlock, /replace\(\/,\\s\*\(\[\\\]\}\]\)|\/\/\.\*\$\/gm|jsonMatch = cleaned\.match/, 'private reply city action parser should not repair malformed JSON');
+    assert.doesNotMatch(parserBlock, /replace\(\/,\\s\*\(\[\\\]\}\]\)|\/\/\.\*\$\/gm|jsonMatch = cleaned\.match/, 'private reply city action parser should not use broad arbitrary JSON slicing');
 });
 
 test('city gambling outcome narration failures do not become fallback casino writes', () => {
@@ -2397,6 +3129,94 @@ test('small plugin db migrations avoid silent alter-table catches', () => {
     assert.doesNotMatch(socialHousingDbSource, /try \{ db\.exec\("ALTER TABLE/, 'socialHousing should not silently catch ALTER TABLE migrations');
 });
 
+test('social housing rental chain is wired from storage through prompts and UI controls', () => {
+    const socialHousingIndex = readRepoFile('server', 'plugins', 'socialHousing', 'index.js');
+    const socialHousingDbSource = readRepoFile('server', 'plugins', 'socialHousing', 'db.js');
+    const rentalChainService = readRepoFile('server', 'plugins', 'socialHousing', 'rentalChainService.js');
+    const housingEffects = readRepoFile('server', 'plugins', 'socialHousing', 'housingEffects.js');
+    const contextBuilder = readRepoFile('server', 'contextBuilder.js');
+    const cityIndex = readRepoFile('server', 'plugins', 'city', 'index.js');
+    const cityActionService = readRepoFile('server', 'plugins', 'city', 'services', 'actionService.js');
+    const housingPanel = readRepoFile('client', 'src', 'plugins', 'socialHousing', 'HousingSocialPanel.jsx');
+
+    assert.match(socialHousingDbSource, /addColumnIfMissing\('social_housing_ads', 'home_id'/, 'agency ads should persist the home they advertise');
+    assert.match(socialHousingDbSource, /INSERT INTO social_housing_ads \(home_id, title, content, trigger_type, office_district, created_at\)/, 'agency ad writes should include home_id');
+    assert.match(socialHousingDbSource, /CREATE TABLE IF NOT EXISTS social_housing_rental_chains/, 'rental chains should have durable storage');
+    assert.match(socialHousingDbSource, /CREATE TABLE IF NOT EXISTS social_housing_rental_chain_events/, 'rental chain events should have durable storage');
+    assert.match(socialHousingDbSource, /addColumnIfMissing\('social_housing_bindings', 'housing_started_at'/, 'housing bindings should remember when the character obtained the home');
+    assert.match(socialHousingDbSource, /UPDATE social_housing_bindings[\s\S]*SET housing_started_at = CASE[\s\S]*WHERE COALESCE\(housing_id, ''\) != ''[\s\S]*COALESCE\(housing_started_at, 0\) <= 0/, 'legacy housed bindings should backfill the housing start date');
+    assert.match(socialHousingDbSource, /const legacyDueRows = db\.prepare\(`[\s\S]*COALESCE\(rent_due_at, 0\) > 0[\s\S]*if \(isRentCollectionDay\(row\.rent_due_at\)\) continue[\s\S]*getNextRentCollectionAt\(row\.rent_due_at, \{ includeCurrentDay: true \}\)/, 'legacy rent due dates should be migrated onto Friday collection days');
+    assert.match(socialHousingDbSource, /const housingStartedAt = hasHousing[\s\S]*housingChanged \? Date\.now\(\) : current\?\.housing_started_at[\s\S]*housing_started_at=excluded\.housing_started_at/, 'housing binding writes should persist a stable housing start date');
+    assert.match(socialHousingDbSource, /function createRentalChain\(payload = \{\}\)[\s\S]*if \(!getHousingById\(homeId\)\) throw new SocialHousingValidationError\('房源不存在'\)/, 'rental chains should reject ghost homes');
+    assert.match(socialHousingDbSource, /function appendRentalChainEvent\(chainId, eventType, payload = \{\}\)[\s\S]*JSON\.stringify\(payload \|\| \{\}\)/, 'rental chain events should persist structured payloads');
+    assert.match(socialHousingDbSource, /function markRentalChainFailed\(id, errorMessage = ''\)[\s\S]*status: 'failed'[\s\S]*retry_count: Number\(chain\.retry_count \|\| 0\) \+ 1/, 'failed rental chains should be marked retryable');
+    assert.match(socialHousingDbSource, /const RENT_COLLECTION_WEEKDAY = 5[\s\S]*function getNextRentCollectionAt/, 'rent collection should be anchored to Fridays');
+    assert.match(socialHousingDbSource, /function normalizeRentDueAt[\s\S]*if \(!String\(payload\.housing_id \|\| ''\)\.trim\(\)\) return 0[\s\S]*return getNextRentCollectionAt\(Date\.now\(\)\)/, 'new or changed housing bindings should default to the next Friday collection date and cleared housing should have no due date');
+    assert.match(socialHousingDbSource, /const hasHousing = !!normalized\.housing_id[\s\S]*const rentWeekly = hasHousing \? normalized\.rent_weekly : 0[\s\S]*const housingStatus = hasHousing[\s\S]*: 'homeless'/, 'cleared housing bindings should not keep stale rent or stable-housing state');
+    assert.match(socialHousingDbSource, /function markRentPaid[\s\S]*const dueDays = Math\.max\(1[\s\S]*getNextRentCollectionAt\(paidAt \+ dueDays \* DAY_MS, \{ includeCurrentDay: true \}\)/, 'paid rent should roll to the first Friday after the paid rent period');
+    assert.match(socialHousingDbSource, /function getDueRentBindings\(now = Date\.now\(\)\) \{[\s\S]*if \(!isRentCollectionDay\(now\)\) return \[\]/, 'automatic due-rent scans should only return due bindings on Friday');
+
+    assert.match(socialHousingIndex, /function getRentalChainEventMap\(socialHousingDb, chains = \[\]\)[\s\S]*socialHousingDb\.getRentalChainEvents\(id\)/, 'bootstrap and mutations should collect recent rental chain events');
+    assert.match(socialHousingIndex, /const rentalChains = socialHousingDb\.getRentalChains \? socialHousingDb\.getRentalChains\(20\) : \[\][\s\S]*rental_chains: rentalChains[\s\S]*rental_chain_events: getRentalChainEventMap\(socialHousingDb, rentalChains\)/, 'bootstrap and mutations should return recent rental chains with events');
+    assert.match(socialHousingIndex, /app\.post\('\/api\/social-housing\/characters\/:id\/recommend-home'[\s\S]*rentalChainService\.recommendHomeToCharacter[\s\S]*runFullChain: req\.body\?\.run_full_chain !== false/, 'recommend-home route should enter the full rental chain by default');
+    assert.match(socialHousingIndex, /app\.post\('\/api\/social-housing\/characters\/:id\/assign-home'[\s\S]*rentalChainService\.assignHomeToCharacter/, 'assign-home route should support direct user-granted housing');
+    assert.match(socialHousingIndex, /app\.post\('\/api\/social-housing\/characters\/:id\/recommend-home'[\s\S]*can_retry: e\.canRetry !== false[\s\S]*rental_chains/, 'rental chain failures should report retryability and current chain state');
+    assert.match(socialHousingIndex, /function buildFridayAgencyRentLog[\s\S]*周五中介收费日/, 'weekly rent collection should create a special Friday agency city activity');
+    assert.match(socialHousingIndex, /function buildFridayRentPrivateMessage[\s\S]*今天周五，中介来收[\s\S]*他们把我赶出来了/, 'weekly rent collection should create a private chat message and mention eviction on failed payment');
+    assert.match(socialHousingIndex, /source: 'social_housing_friday_rent_collection'[\s\S]*evicted: !!extra\.evicted[\s\S]*db\.addMessage\(character\.id, 'character'[\s\S]*engine\?\.broadcastNewMessage/, 'weekly rent collection should write and broadcast a character private message');
+    assert.match(socialHousingIndex, /weeklyAgencyCollection \? 'AGENCY_RENT_COLLECTION' : 'RENT'[\s\S]*weeklyAgencyCollection \? 'AGENCY_RENT_EVICTION' : 'RENT_OVERDUE'/, 'weekly rent collection should use special city action types');
+    assert.match(socialHousingIndex, /if \(weeklyAgencyCollection\) \{[\s\S]*socialHousingDb\.saveBinding\(character\.id, \{[\s\S]*housing_id: ''[\s\S]*housing_status: 'homeless'[\s\S]*note: `周五中介收费失败：/, 'failed Friday collection should clear the housing binding and make the character homeless');
+    assert.match(socialHousingIndex, /source: 'weekly_friday_agency'[\s\S]*notifyPrivate: true[\s\S]*userId: options\.userId/, 'automatic rent settlement should run through the Friday agency collection path');
+    assert.match(socialHousingIndex, /settleDueRentsForDb\(db, \{ userId: user\.id \}\)/, 'automatic rent settlement should pass the current user id for private-chat broadcasts');
+
+    assert.match(rentalChainService, /function parseJsonObject[\s\S]*JSON\.parse\(raw\)[\s\S]*不是合法 JSON/, 'chain LLM calls should fail fast on malformed JSON');
+    assert.match(rentalChainService, /const VIEWING_MORE_INFO_TAG = 'MORE_INFO'/, 'viewing should use a structured character-controlled continuation tag');
+    assert.match(rentalChainService, /async function runViewingStage[\s\S]*while \(true\)[\s\S]*need_more_info_tag[\s\S]*social_housing_viewing_agent_answer_\$\{turn\}[\s\S]*appendChainEvent\(socialHousingDb, currentChain\.id, 'view_round', payload\)/, 'viewing should continue agent-character Q&A while the character keeps the MORE_INFO tag');
+    assert.match(rentalChainService, /dialogue_turns: turn/, 'viewing should persist the dynamic dialogue turn count');
+    assert.match(rentalChainService, /async function runConsiderStage[\s\S]*没有继续带 \$\{VIEWING_MORE_INFO_TAG\} 标签[\s\S]*不能再把“等待中介回答\/还需要补充信息”当成悬置理由[\s\S]*不要被系统强行限定地点或心理状态/, 'consideration should not force location or reopen agent Q&A after the tag is removed');
+    assert.match(rentalChainService, /async function runDecisionStage[\s\S]*没有继续带 \$\{VIEWING_MORE_INFO_TAG\} 标签[\s\S]*必须基于已知事实做最终决定[\s\S]*不能再输出“等中介回答、还要再了解、之后再说”/, 'decision should be mandatory once the viewing continuation tag is removed');
+    assert.match(rentalChainService, /async function runDecisionStage[\s\S]*wants_to_rent[\s\S]*HOUSING_REJECTED[\s\S]*ready_to_sign/, 'decision should allow decline, insufficient-funds rejection, or signing');
+    assert.match(rentalChainService, /async function runSigningStage[\s\S]*HOUSING_SIGNED[\s\S]*status: 'completed'/, 'successful signing should bind housing and complete the chain');
+    assert.match(rentalChainService, /function assertHomeIsAvailable\(home\)[\s\S]*已停用[\s\S]*不能推荐或指派/, 'rental entry points should reject disabled homes before starting a chain');
+    assert.match(rentalChainService, /function assertCharacterHasNoHousing\(socialHousingDb, character[\s\S]*已经住在[\s\S]*不能再\$\{actionLabel\}/, 'rental entry points should reject characters who already have housing');
+    assert.match(rentalChainService, /assertCharacterHasNoHousing\(socialHousingDb, character, '推荐住房'\)/, 'recommend-home should not start for already housed characters');
+    assert.match(rentalChainService, /assertCharacterHasNoHousing\(socialHousingDb, character, '直接指派住房'\)/, 'assign-home should not overwrite an existing home through the shortcut action');
+    assert.match(rentalChainService, /function sendFinalPrivateFeedback[\s\S]*source: 'social_housing_final_feedback'[\s\S]*db\.addMessage\(character\.id, 'character'[\s\S]*appendChainEvent\(socialHousingDb, chain\.id, 'final_private_feedback'/, 'terminal rental outcomes should write a private character feedback message');
+    assert.match(rentalChainService, /if \(!wantsToRent\) \{[\s\S]*sendFinalPrivateFeedback\([\s\S]*outcome: 'declined'[\s\S]*requireTextField\(result, 'private_feedback'/, 'declined rental decisions should still send final private feedback');
+    assert.match(rentalChainService, /social_housing_insufficient_funds_private_feedback[\s\S]*sendFinalPrivateFeedback\([\s\S]*outcome: 'rejected_insufficient_funds'/, 'insufficient-funds rejections should send final private feedback');
+    assert.match(rentalChainService, /private_feedback 必须写成发给推荐你房源的用户的一条私聊反馈[\s\S]*sendFinalPrivateFeedback\([\s\S]*outcome: 'signed'/, 'successful signing should send final private feedback');
+    assert.match(rentalChainService, /const nextRentDueAt = typeof socialHousingDb\.getNextRentCollectionAt === 'function'[\s\S]*paidAt \+ 7 \* 24 \* 60 \* 60 \* 1000[\s\S]*rent_due_at: nextRentDueAt/, 'signed rental-chain bindings should charge on the first Friday after the prepaid first week');
+    assert.match(rentalChainService, /async function triggerRecommendationPrivateReply[\s\S]*db\.addMessage\(character\.id, 'system'[\s\S]*await engine\.triggerImmediateUserReply/, 'recommendations should notify private chat and trigger a character reply');
+    assert.match(rentalChainService, /这套房源是 \$\{userName\} 推荐给你（\$\{character\.name\}）看的[\s\S]*不是给 \$\{userName\} 自己租的房/, 'recommendation replies should pin the home ownership to the character, not the user');
+    assert.match(rentalChainService, /私聊前文和记忆只能作为关系背景[\s\S]*以本次系统事件为准[\s\S]*不要把用户写成看房对象/, 'recommendation replies should not let private-chat context override the event target');
+    assert.match(rentalChainService, /不要输出 \[CITY_ACTION:\.\.\.\] 或 \[CITY_INTENT:\.\.\.\][\s\S]*eventUserDirective:[\s\S]*extraDirectiveRole: 'system'[\s\S]*skipTopicSwitchGate: true/, 'recommendation replies should stay a private acknowledgement and skip the topic switch gate');
+    assert.match(rentalChainService, /buildUniversalContext\(\{[\s\S]*forceCityDetail: true/, 'character rental-chain calls should read the default large context library');
+
+    assert.match(contextBuilder, /function buildHousingContextBlock\(db, character\)[\s\S]*const socialClassLine[\s\S]*return `\\n\[住房与阶层\]\\n\$\{socialClassLine\}\$\{buildHousingPromptBlock\(db, character\)\}\\n`;/, 'private chat housing context should use the canonical housing prompt block for both housed and unhoused characters');
+    assert.match(contextBuilder, /function getHousingContextSourceParts\(db, character\)[\s\S]*status: 'homeless'[\s\S]*has_housing: 0/, 'prompt cache source parts should distinguish default homelessness');
+    assert.match(contextBuilder, /template_version: 4,[\s\S]*housing_context: housingSourceParts/, 'runtime state prompt cache should invalidate when housing prompt semantics change');
+    assert.match(housingEffects, /const rawStatus = hasHousing \? String\(binding\.housing_status \|\| 'stable'\)[\s\S]*const status = hasHousing \? rawStatus : 'homeless'/, 'runtime housing state should default to homeless without a valid binding');
+    assert.match(housingEffects, /function buildHomeBasicInfo\(home = \{\}, rent = 0\)[\s\S]*description[\s\S]*周租 \$\{rent\} 金币[\s\S]*押金 \$\{deposit\} 金币/, 'housed character prompts should include basic room facts from the home record');
+    assert.match(housingEffects, /function formatHousingDate\(timestamp\)[\s\S]*签订租房协议，现在住在[\s\S]*当前住房事实：\$\{housingFact\}[\s\S]*房间基本信息：\$\{homeBasicInfo\}[\s\S]*归属边界：这是你这个角色自己的当前住所/, 'housed character prompts should state the signed date, current home, basic room info, and ownership boundary');
+    assert.match(housingEffects, /function getHousingPassiveMinutePatch[\s\S]*if \(!ctx\?\.hasHousing\)[\s\S]*patch\.stress \+= 1[\s\S]*patch\.social_need \+= 1[\s\S]*patch\.sleep_debt \+= 1[\s\S]*patch\.energy -= 1/, 'homeless state should change passive city recovery numerically');
+    assert.match(cityIndex, /function applyPassiveSurvivalTick\(char, currentCals, currentMinute[\s\S]*dbForHousing = null\)[\s\S]*getHousingRuntimeContext[\s\S]*getHousingPassiveMinutePatch/, 'city passive ticks should include housing effects');
+    assert.match(cityIndex, /const housingPromptBlock = buildHousingPromptBlock\(promptHistoryDb, char\)/, 'city action prompts should include housing constraints');
+    assert.match(cityActionService, /if \(typeof applyHousingDistrictEffects === 'function'\)[\s\S]*stateEffects = applyHousingDistrictEffects\(db, char, district, stateEffects\)/, 'city action effects should include housing modifiers');
+
+    assert.match(housingPanel, /const \[rentalChains, setRentalChains\] = useState\(\[\]\)/, 'UI should track recent rental chains');
+    assert.match(housingPanel, /const \[rentalChainEvents, setRentalChainEvents\] = useState\(\{\}\)/, 'UI should track recent rental chain events');
+    assert.match(housingPanel, /function buildViewingDialogue\(events = \[\]\)[\s\S]*Array\.isArray\(payload\.dialogue\)[\s\S]*payload\.agent_intro[\s\S]*payload\.char_reply_2/, 'UI should reconstruct both dynamic and legacy first-stage viewing dialogue');
+    assert.match(housingPanel, /text\.viewDialogue[\s\S]*dialogueLines\.map/, 'UI should render the agent-character viewing dialogue');
+    assert.match(housingPanel, /const recommendableCharacters = useMemo\(\(\) => \([\s\S]*characters\.filter\(\(item\) => !item\.binding\?\.housing_id\)/, 'recommendation and assignment controls should only target currently unhoused characters');
+    assert.match(housingPanel, /const housedCharacters = useMemo\(\(\) => \([\s\S]*characters\.filter\(\(item\) => item\.binding\?\.housing_id\)/, 'existing housing display should have a separate housed-character source');
+    assert.match(housingPanel, /<Section title=\{text\.roleBinding\}[\s\S]*\{housedCharacters\.map\(\(character\) =>/, 'existing housing display should render only housed characters');
+    assert.doesNotMatch(housingPanel, /selectedRecommendationCurrentHome/, 'recommendation controls should not display existing-home state');
+    assert.match(housingPanel, /const availableHousingTiers = useMemo\(\(\) => \([\s\S]*Number\(item\.is_enabled \?\? 1\) === 1/, 'recommendation and assignment controls should only offer enabled homes');
+    assert.match(housingPanel, /\/api\/social-housing\/characters\/\$\{selectedRecommendationCharacter\.id\}\/recommend-home/, 'UI should expose the recommendation chain button for the selected eligible character');
+    assert.match(housingPanel, /\/api\/social-housing\/characters\/\$\{selectedRecommendationCharacter\.id\}\/assign-home/, 'UI should expose the direct assignment button for the selected eligible character');
+    assert.match(housingPanel, /const housedCount = characters\.filter\(\(c\) => c\.binding\?\.housing_id\)\.length;[\s\S]*const homelessCount = characters\.length - housedCount;[\s\S]*<StatCard label=\{text\.homeless\} value=\{homelessCount\}/, 'UI should count default homeless characters');
+});
+
 test('social housing money and rent fields reject invalid values before persistence', () => {
     const socialHousingIndex = readRepoFile('server', 'plugins', 'socialHousing', 'index.js');
     const socialHousingDbSource = readRepoFile('server', 'plugins', 'socialHousing', 'db.js');
@@ -2493,6 +3313,35 @@ test('social housing delete routes report missing targets instead of fake succes
     assert.doesNotMatch(socialHousingIndex, /removeAgencyArtifacts\(cityDb, ad\.title, ad\.content\);\s*socialHousingDb\.deleteAgencyAd/, 'agency artifacts must not be deleted before the ad row delete succeeds');
 });
 
+test('social housing room assembly generation waits for uncapped model output', () => {
+    const socialHousingIndex = readRepoFile('server', 'plugins', 'socialHousing', 'index.js');
+    const housingPanel = readRepoFile('client', 'src', 'plugins', 'socialHousing', 'HousingSocialPanel.jsx');
+    const pixelWorldPanel = readPixelWorldSources();
+
+    assert.doesNotMatch(housingPanel, /roomAssemblyAiRequestTimeoutMs|请求超时，已改用规则模板/, 'room assembly should not use a frontend timeout fallback');
+    assert.doesNotMatch(housingPanel, /\/api\/social-housing\/agency\/room-assembly'[\s\S]{0,260}timeoutMs:/, 'room assembly endpoint should wait for the backend response');
+
+    assert.doesNotMatch(socialHousingIndex, /ROOM_ASSEMBLY_LLM_TIMEOUT_MS|requestTimeoutMs: ROOM_ASSEMBLY_LLM_TIMEOUT_MS/, 'room assembly backend LLM call should not set a request timeout');
+    assert.match(socialHousingIndex, /maxTokens: null[\s\S]*maxAttempts: 1/, 'room assembly LLM call should avoid output token limits');
+    assert.match(readRepoFile('server', 'llm.js'), /if \(maxTokens != null\) body\.max_tokens = maxTokens/, 'LLM requests should omit max_tokens when a caller explicitly disables the output cap');
+    assert.match(socialHousingIndex, /const constrainPlacement = purchase\.item === 'wallArt'[\s\S]*\{ clamp: constrainPlacement \}/, 'room assembly backend should only clamp wall art coordinates');
+    assert.match(socialHousingIndex, /return options\.clamp === false \? num : clampNumber\(rounded, 1, 14\)/, 'room assembly backend should preserve fractional AI coordinates for non-wall-art furniture');
+    assert.match(socialHousingIndex, /普通家具渲染时地线会按背景向上校准半格/, 'room assembly prompt should explain the raised visual floor line');
+    assert.match(housingPanel, /const roomAssemblySingleInstanceKinds = new Set\(\['wallArt'\]\)/, 'room assembly should only keep wall art as a single-instance constrained kind');
+    assert.match(housingPanel, /const roomAssemblyVisualFloorLineOffsetCells = 0\.5/, 'room assembly frontend should raise the visual floor line by half a cell');
+    assert.match(housingPanel, /const shouldConstrainGrid = kind === 'wallArt'/, 'room assembly frontend should only constrain wall art grid positions');
+    assert.match(housingPanel, /function getRoomAssemblyRawGridCoordinate\(value, fallback = roomAssemblyWallBufferCells\) \{[\s\S]*const num = toNum\(value, fallback\)[\s\S]*return Number\.isFinite\(num\) \? num : fallback/, 'room assembly frontend should preserve fractional AI coordinates for non-wall-art furniture');
+    assert.match(housingPanel, /const visualGridY = shouldConstrainGrid \? gridY : gridY - roomAssemblyVisualFloorLineOffsetCells/, 'room assembly frontend should apply the raised floor line to non-wall-art furniture');
+    assert.match(housingPanel, /if \(baseItem\.assemblyKind !== 'wallArt'\) \{[\s\S]*items\.push\(baseItem\)[\s\S]*return;[\s\S]*\}/, 'room assembly frontend should accept raw AI placement for non-wall-art furniture');
+    assert.doesNotMatch(housingPanel, /\.sort\(\(a, b\) => \(a\.occurrence - b\.occurrence\)/, 'room assembly frontend should preserve AI placement order');
+
+    assert.match(pixelWorldPanel, /const roomEditorCalibratedSizeProfile = \{[\s\S]*desk: \{ w: 430, h: 337[\s\S]*bookshelf: \{ w: 291, h: 444[\s\S]*sofa: \{ w: 526, h: 362/, 'manual room editor should share calibrated default furniture sizes');
+    assert.match(pixelWorldPanel, /const calibratedBox = applyRoomEditorCalibratedSizeProfile\(displayBox, realWorldKind\)[\s\S]*box: calibratedBox/, 'manual room editor catalog should use calibrated boxes as defaults');
+    assert.match(pixelWorldPanel, /const derivedProfile = \{ \.\.\.baseProfile, \.\.\.roomEditorCalibratedSizeProfile \}/, 'room editor size profile application should prefer calibrated defaults');
+    assert.match(pixelWorldPanel, /const size = roomEditorCalibratedSizeProfile\[kind\] \|\| liveProfile\[kind\] \|\| storedProfile\[kind\]/, 'manual room editor add should not let stale stored sizes override calibrated defaults');
+    assert.match(pixelWorldPanel, /mappedSideW[\s\S]*calibratedSize[\s\S]*mappedSideW \/ legacyW[\s\S]*calibratedSize\.w[\s\S]*mappedSideH[\s\S]*calibratedSize[\s\S]*mappedSideH \/ legacyH[\s\S]*calibratedSize\.h/, 'directional room assets should derive side sizes from calibrated front-size ratios');
+});
+
 test('social housing agency schedule rejects invalid intervals and timestamps', () => {
     const socialHousingIndex = readRepoFile('server', 'plugins', 'socialHousing', 'index.js');
     const socialHousingDbSource = readRepoFile('server', 'plugins', 'socialHousing', 'db.js');
@@ -2505,7 +3354,7 @@ test('social housing agency schedule rejects invalid intervals and timestamps', 
     assert.match(inputGuardsSource, /function normalizeStoredAgencyDecisionIntervalHours\(value, fallback = DEFAULT_SOCIAL_HOUSING_AGENCY_INTERVAL_HOURS\)/, 'stored agency interval reads should safely normalize legacy DB values');
     assert.match(inputGuardsSource, /function normalizeTimestamp\(value, label, fallback = 0\)/, 'agency timestamps should be validated centrally');
 
-    assert.match(socialHousingIndex, /const payload = normalizeAgencyConfigPayload\(\{[\s\S]*\.\.\.\(req\.body \|\| \{\}\)/, 'agency route should validate request config before DB writes');
+    assert.match(socialHousingIndex, /const payload = normalizeAgencyConfigPayload\(\{[\s\S]*\.\.\.preserveAgencySecretPatch\(req\.body \|\| \{\}, current\)/, 'agency route should validate request config before DB writes');
     assert.match(socialHousingIndex, /const intervalMinutes = normalizeAgencyIntervalMinutes\(config\.decision_interval_hours\)/, 'agency publish and scheduler paths should share interval normalization');
     assert.doesNotMatch(socialHousingIndex, /Math\.max\(60, Number\(config\.decision_interval_hours \|\| 6\) \* 60\)/, 'agency publish and scheduler paths must not calculate intervals with loose Number fallback');
     assert.match(socialHousingIndex, /sendSocialHousingError\(res, e\)/, 'agency route should return validation errors as 400');

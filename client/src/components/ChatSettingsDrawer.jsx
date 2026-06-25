@@ -1,7 +1,8 @@
 ﻿import React, { useMemo, useState, useEffect } from 'react';
 import { X, Trash2, Settings, RefreshCw, Download, Upload } from 'lucide-react';
+import AuthenticatedImage from './AuthenticatedImage';
 import { useLanguage } from '../LanguageContext';
-import { resolveAvatarUrl } from '../utils/avatar';
+import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 import { deriveEmotion, derivePhysicalState } from '../utils/emotion';
 
 function parseJsonSafely(value, fallback = null) {
@@ -612,10 +613,11 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
             </div>
             <div className="memory-content" style={{ padding: '0' }}>
                 <div style={{ backgroundColor: '#fff', padding: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center', borderBottom: '1px solid #eee' }}>
-                    <img
+                    <AuthenticatedImage
                         src={resolveAvatarUrl(contact.avatar, apiUrl, contact.name || contact.id || 'User')}
                         alt={contact.name}
                         style={{ width: '60px', height: '60px', borderRadius: '50%', marginBottom: '10px', objectFit: 'cover' }}
+                        fallbackSrc={defaultAvatarUrl(contact.name || contact.id || 'User')}
                     />
                     <div style={{ fontSize: '18px', fontWeight: '500' }}>{contact.name}</div>
                     <div style={{ fontSize: '13px', color: '#999', marginTop: '5px', textAlign: 'center', padding: '0 10px' }}>
@@ -944,7 +946,7 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
                         relationships.map(rel => (
                             <div key={rel.targetId} style={{ marginBottom: '12px', padding: '10px', background: '#f8f9fa', borderRadius: '8px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                                    <img src={resolveAvatarUrl(rel.targetAvatar, apiUrl, rel.targetName || rel.targetId || 'User')} alt="" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }} />
+                                    <AuthenticatedImage src={resolveAvatarUrl(rel.targetAvatar, apiUrl, rel.targetName || rel.targetId || 'User')} fallbackSrc={defaultAvatarUrl(rel.targetName || rel.targetId || 'User')} alt="" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }} />
                                     <div style={{ flex: 1 }}>
                                         <span style={{ fontWeight: '500', fontSize: '13px' }}>{rel.targetName}</span>
                                         <span style={{ fontSize: '11px', color: '#999', marginLeft: '6px' }}>❤️ {rel.affinity ?? '?'}</span>

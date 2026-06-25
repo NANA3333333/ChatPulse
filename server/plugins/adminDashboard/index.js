@@ -104,6 +104,11 @@ module.exports = function initAdminDashboard(app, context) {
         await removeFileIfExists(dbPath);
         await removeFileIfExists(`${dbPath}-wal`);
         await removeFileIfExists(`${dbPath}-shm`);
+
+        const userUploadDir = path.join(__dirname, '..', '..', 'public', 'uploads', 'users', String(userId));
+        await removeDirectoryIfExists(userUploadDir);
+        const userTtsDir = path.join(__dirname, '..', '..', 'data', 'tts', String(userId));
+        await removeDirectoryIfExists(userTtsDir);
     };
 
     const scheduleDeferredUserDeletion = (userId) => {
@@ -129,9 +134,28 @@ module.exports = function initAdminDashboard(app, context) {
         pendingUserDeletionJobs.set(key, timer);
     };
 
-    const toUploadRelativePath = (value) => {
+    const toScopedMediaUploadRelativePath = (value, userId) => {
+        const raw = String(value || '').trim();
+        const marker = '/api/media/uploads/';
+        const markerIdx = raw.indexOf(marker);
+        if (markerIdx < 0) return null;
+        const encodedFilename = raw.slice(markerIdx + marker.length).split(/[?#]/, 1)[0];
+        if (!encodedFilename) return null;
+        let filename = encodedFilename;
+        try {
+            filename = decodeURIComponent(encodedFilename);
+        } catch (e) {
+            return null;
+        }
+        if (!filename || filename.includes('\0') || filename.includes('/') || filename.includes('\\') || filename !== path.posix.basename(filename)) return null;
+        return path.join('uploads', 'users', String(userId || 'default'), filename);
+    };
+
+    const toUploadRelativePath = (value, userId = '') => {
         const raw = String(value || '').trim();
         if (!raw) return null;
+        const scopedMediaPath = toScopedMediaUploadRelativePath(raw, userId);
+        if (scopedMediaPath) return scopedMediaPath;
         const marker = '/uploads/';
         const markerIdx = raw.indexOf(marker);
         let rel = null;
@@ -167,13 +191,29 @@ module.exports = function initAdminDashboard(app, context) {
         return fullPath;
     };
 
-    const collectUploadReferences = (userDb, sql, mapper = (row) => Object.values(row || {})) => {
+    const getUserVectorStorageSize = (userId) => {
+        const vectorsRoot = path.join(__dirname, '..', '..', 'data', 'vectors');
+        if (!fs.existsSync(vectorsRoot)) return 0;
+        const candidateDirs = new Set();
+        candidateDirs.add(path.join(vectorsRoot, String(userId)));
+        for (const entry of fs.readdirSync(vectorsRoot, { withFileTypes: true })) {
+            if (!entry.isDirectory()) continue;
+            candidateDirs.add(path.join(vectorsRoot, entry.name, String(userId)));
+        }
+        let total = 0;
+        for (const dirPath of candidateDirs) {
+            total += getDirectorySize(dirPath);
+        }
+        return total;
+    };
+
+    const collectUploadReferences = (userDb, sql, mapper = (row) => Object.values(row || {}), userId = '') => {
         const refs = new Set();
         try {
             const rows = userDb.prepare(sql).all();
             for (const row of rows) {
                 for (const value of mapper(row)) {
-                    const relPath = toUploadRelativePath(value);
+                    const relPath = toUploadRelativePath(value, userId);
                     if (relPath) refs.add(relPath);
                 }
             }
@@ -183,7 +223,6 @@ module.exports = function initAdminDashboard(app, context) {
 
     const getUserStats = (user) => {
         const dbPath = path.join(__dirname, '..', '..', 'data', `chatpulse_user_${user.id}.db`);
-        const vectorDir = path.join(__dirname, '..', '..', 'data', 'vectors', String(user.id));
         const uploadsRoot = path.join(__dirname, '..', '..', 'public');
         const stats = {
             db_size_bytes: 0,
@@ -205,7 +244,7 @@ module.exports = function initAdminDashboard(app, context) {
             stats.db_size_bytes = fs.statSync(dbPath).size;
         } catch (e) { }
         try {
-            stats.vector_size_bytes = getDirectorySize(vectorDir);
+            stats.vector_size_bytes = getUserVectorStorageSize(user.id);
         } catch (e) { }
         let userDb;
         try {
@@ -219,10 +258,10 @@ module.exports = function initAdminDashboard(app, context) {
             stats.token_total = userDb.prepare('SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0) as total FROM token_usage').get()?.total || 0;
 
             const uploadRefs = new Set([
-                ...collectUploadReferences(userDb, 'SELECT avatar, banner FROM user_profile'),
-                ...collectUploadReferences(userDb, 'SELECT avatar FROM characters'),
-                ...collectUploadReferences(userDb, 'SELECT avatar FROM group_chats'),
-                ...collectUploadReferences(userDb, 'SELECT image_url FROM moments'),
+                ...collectUploadReferences(userDb, 'SELECT avatar, banner FROM user_profile', undefined, user.id),
+                ...collectUploadReferences(userDb, 'SELECT avatar FROM characters', undefined, user.id),
+                ...collectUploadReferences(userDb, 'SELECT avatar FROM group_chats', undefined, user.id),
+                ...collectUploadReferences(userDb, 'SELECT image_url FROM moments', undefined, user.id),
             ]);
             for (const relPath of uploadRefs) {
                 const fullPath = resolveUploadReferencePath(uploadsRoot, relPath);
@@ -386,6 +425,18 @@ module.exports = function initAdminDashboard(app, context) {
         }
     });
 
+    app.post('/api/admin/invites/:code/renew', authMiddleware, adminMiddleware, (req, res) => {
+        try {
+            const result = authDb.renewInviteCode(req.params.code);
+            if (!result.success) {
+                return res.status(result.statusCode || 400).json({ error: result.error });
+            }
+            res.json({ success: true, invite: result.invite });
+        } catch (e) {
+            res.status(e.statusCode === 400 ? 400 : 500).json({ error: e.message });
+        }
+    });
+
     app.delete('/api/admin/users/:id', authMiddleware, adminMiddleware, async (req, res) => {
         try {
             const targetId = req.params.id;
@@ -399,6 +450,7 @@ module.exports = function initAdminDashboard(app, context) {
                 return sendAdminUserMutationNotFound(res);
             }
 
+            authDb.revokeUserSessions(targetId);
             disconnectUserSessions(targetId);
 
             try {
@@ -430,6 +482,7 @@ module.exports = function initAdminDashboard(app, context) {
             const updated = authDb.setUserStatus(targetId, status);
             const tokenUpdated = updated ? authDb.bumpTokenVersion(targetId) : 0;
             if (!updated || !tokenUpdated) return sendAdminUserMutationNotFound(res);
+            authDb.revokeUserSessions(targetId);
             disconnectUserSessions(targetId);
             res.json({ success: true, status });
         } catch (e) {
@@ -451,6 +504,7 @@ module.exports = function initAdminDashboard(app, context) {
             const updated = authDb.setUserRole(targetId, nextRole);
             const tokenUpdated = updated ? authDb.bumpTokenVersion(targetId) : 0;
             if (!updated || !tokenUpdated) return sendAdminUserMutationNotFound(res);
+            authDb.revokeUserSessions(targetId);
             disconnectUserSessions(targetId);
             res.json({ success: true, role: nextRole });
         } catch (e) {
@@ -463,15 +517,16 @@ module.exports = function initAdminDashboard(app, context) {
             const targetId = req.params.id;
             if (!getMutableAdminTarget(req, res)) return;
             const newPassword = String(req.body?.password || '');
-            if (newPassword.length < 6) {
-                return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+            if (newPassword.length < 8) {
+                return res.status(400).json({ error: 'Password must be at least 8 characters long' });
             }
             const updated = authDb.resetPassword(targetId, newPassword);
             if (!updated) return sendAdminUserMutationNotFound(res);
+            authDb.revokeUserSessions(targetId);
             disconnectUserSessions(targetId);
             res.json({ success: true });
         } catch (e) {
-            res.status(500).json({ error: e.message });
+            res.status(e.statusCode === 400 ? 400 : 500).json({ error: e.message });
         }
     });
 
@@ -481,6 +536,7 @@ module.exports = function initAdminDashboard(app, context) {
             if (!getMutableAdminTarget(req, res)) return;
             const updated = authDb.bumpTokenVersion(targetId);
             if (!updated) return sendAdminUserMutationNotFound(res);
+            authDb.revokeUserSessions(targetId);
             disconnectUserSessions(targetId);
             res.json({ success: true });
         } catch (e) {

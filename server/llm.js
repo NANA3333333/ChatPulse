@@ -1,6 +1,7 @@
 // Native fetch is available in Node 18+ (no require needed)
 const crypto = require('crypto');
 const { getTokenCount } = require('./utils/tokenizer');
+const { buildOpenAiCompatibleUrlResolved } = require('./httpGuards');
 
 const PRE_INPUT_CHAIN_CACHE_TYPES = new Set([
     'context_module_router',
@@ -96,6 +97,19 @@ function buildCachePayload({ endpoint, model, messages, maxTokens, temperature, 
     };
 }
 
+function redactEndpointForMessage(endpoint) {
+    try {
+        const parsed = new URL(String(endpoint || '').trim());
+        parsed.username = '';
+        parsed.password = '';
+        parsed.search = '';
+        parsed.hash = '';
+        return parsed.toString();
+    } catch (e) {
+        return '[invalid endpoint]';
+    }
+}
+
 function supportsClaudePromptCacheHints(model, enablePromptCacheHints = false) {
     return !!(enablePromptCacheHints && String(model || '').toLowerCase().includes('claude'));
 }
@@ -182,25 +196,16 @@ function summarizeMessages(messages = []) {
 }
 
 function buildRequestBody({ model, messages, maxTokens, temperature, presencePenalty = 0, frequencyPenalty = 0, responseFormat = null }) {
-    return {
-        ...(temperature == null
-            ? {
-                model,
-                messages,
-                max_tokens: maxTokens,
-                presence_penalty: Number(presencePenalty || 0),
-                frequency_penalty: Number(frequencyPenalty || 0),
-            }
-            : {
-                model,
-                messages,
-                max_tokens: maxTokens,
-                temperature,
-                presence_penalty: Number(presencePenalty || 0),
-                frequency_penalty: Number(frequencyPenalty || 0),
-            }),
-        ...(responseFormat ? { response_format: responseFormat } : {}),
+    const body = {
+        model,
+        messages,
+        presence_penalty: Number(presencePenalty || 0),
+        frequency_penalty: Number(frequencyPenalty || 0),
+        ...(temperature == null ? {} : { temperature }),
+        ...(responseFormat ? { response_format: responseFormat } : {})
     };
+    if (maxTokens != null) body.max_tokens = maxTokens;
+    return body;
 }
 
 function getRelayBucketKey(endpoint, key) {
@@ -353,11 +358,7 @@ async function callLLM({
         }
     }
 
-    let baseUrl = endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
-    if (baseUrl.endsWith('/chat/completions')) {
-        baseUrl = baseUrl.slice(0, -'/chat/completions'.length);
-    }
-    const url = `${baseUrl}/chat/completions`;
+    const url = await buildOpenAiCompatibleUrlResolved(endpoint, 'chat/completions', { label: 'LLM endpoint' });
 
     const safeMaxAttempts = Math.max(1, Math.min(5, Number(maxAttempts || 2) || 2));
     const safeRequestTimeoutMs = Math.max(0, Number(requestTimeoutMs || process.env.CP_LLM_REQUEST_TIMEOUT_MS || 0) || 0);
@@ -469,6 +470,7 @@ async function callLLM({
                 try {
                     response = await fetch(url, {
                         method: 'POST',
+                        redirect: 'manual',
                         headers: {
                             'Content-Type': 'application/json',
                             'Authorization': `Bearer ${key}`,
@@ -644,10 +646,11 @@ async function callLLM({
             }
             return content;
         } catch (error) {
-            console.error(`[LLM Error] (${model} at ${endpoint}):`, error.message);
+            const safeEndpoint = redactEndpointForMessage(endpoint);
+            console.error(`[LLM Error] (${model} at ${safeEndpoint}):`, error.message);
             let errorMsg = error.message;
             if (errorMsg.includes('fetch failed') || errorMsg.includes('ECONNREFUSED')) {
-                errorMsg = `网络连接失败 (fetch failed)。请检查您的 API Endpoint [${endpoint}] 是否填写正确，以及目标服务器是否正在运行并未被防火墙拦截。`;
+                errorMsg = `网络连接失败 (fetch failed)。请检查您的 API Endpoint [${safeEndpoint}] 是否填写正确，以及目标服务器是否正在运行并未被防火墙拦截。`;
             } else if (errorMsg.includes('Unexpected response format')) {
                 errorMsg = 'API 返回格式异常。请确认您使用的是兼容 OpenAI 格式的接口。';
             }

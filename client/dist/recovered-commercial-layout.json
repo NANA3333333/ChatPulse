@@ -1,0 +1,800 @@
+[
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpe4bv2u-24",
+    "x": 5712,
+    "y": 560,
+    "w": 322,
+    "h": 259
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpe4ccxq-25",
+    "x": -158,
+    "y": 558,
+    "w": 322,
+    "h": 259
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpe1wsqx-15",
+    "x": 115,
+    "y": 558,
+    "w": 322,
+    "h": 259
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpe1wtip-19",
+    "x": 409,
+    "y": 556,
+    "w": 322,
+    "h": 259
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpe1wswp-16",
+    "x": 690,
+    "y": 578,
+    "w": 298,
+    "h": 240
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpe1wtnd-20",
+    "x": 949,
+    "y": 575,
+    "w": 298,
+    "h": 240
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpe1wu6x-24",
+    "x": 1210,
+    "y": 575,
+    "w": 298,
+    "h": 240
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpe1ws7l-13",
+    "x": 1472,
+    "y": 576,
+    "w": 298,
+    "h": 240
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpe1wt1l-17",
+    "x": 1732,
+    "y": 579,
+    "w": 296,
+    "h": 238
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpe1wts1-21",
+    "x": 1995,
+    "y": 576,
+    "w": 298,
+    "h": 240
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpe1wsm9-14",
+    "x": 2257,
+    "y": 576,
+    "w": 298,
+    "h": 240
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpe1wtdd-18",
+    "x": 2520,
+    "y": 579,
+    "w": 296,
+    "h": 238
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpe1wtwp-22",
+    "x": 2788,
+    "y": 601,
+    "w": 272,
+    "h": 219
+  },
+  {
+    "assetId": "sky_sky_day_strip_a",
+    "id": "sky_sky_day_strip_a-mpdc262b-1",
+    "x": 1319,
+    "y": -75,
+    "w": 4475,
+    "h": 538
+  },
+  {
+    "assetId": "greenery_bush_cluster_large",
+    "id": "greenery_bush_cluster_large-mpdc3sya-1",
+    "x": 4595,
+    "y": 300,
+    "w": 390,
+    "h": 233,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.62,
+      "w": 0.84,
+      "h": 0.32
+    }
+  },
+  {
+    "assetId": "greenery_hedge_low_cluster",
+    "id": "greenery_hedge_low_cluster-mpdfqyhz-2",
+    "x": 4846,
+    "y": 377,
+    "w": 297,
+    "h": 167,
+    "collision": {
+      "enabled": true,
+      "x": 0.06,
+      "y": 0.58,
+      "w": 0.88,
+      "h": 0.34
+    }
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpdfkf54-9",
+    "x": 4755,
+    "y": 598,
+    "w": 280,
+    "h": 226
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpe1v2bd-12",
+    "x": 3031,
+    "y": 599,
+    "w": 274,
+    "h": 221
+  },
+  {
+    "assetId": "road_road_strip_plain",
+    "id": "road_road_strip_plain-mpdfes4h-3",
+    "x": 4146,
+    "y": 480,
+    "w": 916,
+    "h": 215
+  },
+  {
+    "assetId": "road_road_strip_plain",
+    "id": "road_road_strip_plain-mpe4b0fa-8",
+    "x": -644,
+    "y": 485,
+    "w": 900,
+    "h": 214
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpdd96h0-3",
+    "x": 3261,
+    "y": 595,
+    "w": 280,
+    "h": 226
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpdd68p9-1",
+    "x": 3637,
+    "y": 459,
+    "w": 170,
+    "h": 138
+  },
+  {
+    "assetId": "greenery_bush_cluster_large",
+    "id": "greenery_bush_cluster_large-mpdiohwt-7",
+    "x": 3570,
+    "y": 363,
+    "w": 284,
+    "h": 164,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.62,
+      "w": 0.84,
+      "h": 0.32
+    }
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpdfgiw1-4",
+    "x": 3512,
+    "y": 596,
+    "w": 280,
+    "h": 226
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpdfgom0-5",
+    "x": 3761,
+    "y": 597,
+    "w": 280,
+    "h": 226
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpdfif6w-8",
+    "x": 4011,
+    "y": 597,
+    "w": 280,
+    "h": 226
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpdfie3c-6",
+    "x": 4506,
+    "y": 597,
+    "w": 280,
+    "h": 226
+  },
+  {
+    "assetId": "greenery_bush_cluster_large",
+    "id": "greenery_bush_cluster_large-mpdimzvy-5",
+    "x": 4368,
+    "y": 342,
+    "w": 284,
+    "h": 164,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.62,
+      "w": 0.84,
+      "h": 0.32
+    }
+  },
+  {
+    "assetId": "greenery_bush_cluster_large",
+    "id": "greenery_bush_cluster_large-mpdinzhz-6",
+    "x": 3960,
+    "y": 337,
+    "w": 284,
+    "h": 164,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.62,
+      "w": 0.84,
+      "h": 0.32
+    }
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpdfif28-7",
+    "x": 4255,
+    "y": 596,
+    "w": 280,
+    "h": 226
+  },
+  {
+    "assetId": "road_road_strip_plain",
+    "id": "road_road_strip_plain-mpdfeqex-2",
+    "x": 3908,
+    "y": 479,
+    "w": 916,
+    "h": 215
+  },
+  {
+    "assetId": "greenery_bush_cluster_large",
+    "id": "greenery_bush_cluster_large-mpdq4yr5-7",
+    "x": 3124,
+    "y": 365,
+    "w": 245,
+    "h": 146,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.62,
+      "w": 0.84,
+      "h": 0.32
+    }
+  },
+  {
+    "assetId": "road_road_strip_plain",
+    "id": "road_road_strip_plain-mpdd50d8-1",
+    "x": 3066,
+    "y": 480,
+    "w": 916,
+    "h": 215
+  },
+  {
+    "assetId": "building_agency",
+    "id": "building_agency-1",
+    "x": 3282,
+    "y": 129,
+    "w": 390,
+    "h": 390,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.94,
+      "w": 0.84,
+      "h": 0.04
+    }
+  },
+  {
+    "assetId": "building_convenience",
+    "id": "building_convenience-1",
+    "x": 3701,
+    "y": 218,
+    "w": 428,
+    "h": 341,
+    "collision": {
+      "enabled": true,
+      "x": 0.07,
+      "y": 0.91,
+      "w": 0.86,
+      "h": 0.05
+    }
+  },
+  {
+    "assetId": "prop_tree_green",
+    "id": "prop_tree_green-1",
+    "x": 3166,
+    "y": 288,
+    "w": 188,
+    "h": 293,
+    "collision": {
+      "enabled": true,
+      "x": 0.36,
+      "y": 0.76,
+      "w": 0.28,
+      "h": 0.2
+    }
+  },
+  {
+    "assetId": "building_cafe",
+    "id": "building_cafe-1",
+    "x": 4150,
+    "y": 176,
+    "w": 400,
+    "h": 396,
+    "collision": {
+      "enabled": true,
+      "x": 0.06,
+      "y": 0.92,
+      "w": 0.88,
+      "h": 0.05
+    }
+  },
+  {
+    "assetId": "prop_notice_board",
+    "id": "prop_notice_board-1",
+    "x": 3193,
+    "y": 568,
+    "w": 172,
+    "h": 232,
+    "collision": {
+      "enabled": true,
+      "x": 0.14,
+      "y": 0.66,
+      "w": 0.72,
+      "h": 0.3
+    }
+  },
+  {
+    "assetId": "prop_agency_sign",
+    "id": "prop_agency_sign-1",
+    "x": 3624,
+    "y": 416,
+    "w": 96,
+    "h": 172,
+    "collision": {
+      "enabled": true,
+      "x": 0.18,
+      "y": 0.68,
+      "w": 0.64,
+      "h": 0.28
+    }
+  },
+  {
+    "assetId": "prop_tree_green",
+    "id": "prop_tree_green-mpc2c32q-3",
+    "x": 4591,
+    "y": 234,
+    "w": 214,
+    "h": 330,
+    "collision": {
+      "enabled": true,
+      "x": 0.36,
+      "y": 0.76,
+      "w": 0.28,
+      "h": 0.2
+    }
+  },
+  {
+    "assetId": "prop_vending_machine",
+    "id": "prop_vending_machine-1",
+    "x": 4556,
+    "y": 339,
+    "w": 89,
+    "h": 224,
+    "collision": {
+      "enabled": true,
+      "x": 0.12,
+      "y": 0.64,
+      "w": 0.76,
+      "h": 0.32
+    }
+  },
+  {
+    "assetId": "prop_cafe_table",
+    "id": "prop_cafe_table-1",
+    "x": 3501,
+    "y": 688,
+    "w": 207,
+    "h": 138,
+    "collision": {
+      "enabled": true,
+      "x": 0.14,
+      "y": 0.56,
+      "w": 0.72,
+      "h": 0.38
+    }
+  },
+  {
+    "assetId": "prop_fruit_stall",
+    "id": "prop_fruit_stall-mpciwj3b-1",
+    "x": 4739,
+    "y": 358,
+    "w": 224,
+    "h": 215,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.62,
+      "w": 0.84,
+      "h": 0.32
+    }
+  },
+  {
+    "assetId": "prop_chalkboard",
+    "id": "prop_chalkboard-2",
+    "x": 3371,
+    "y": 618,
+    "w": 102,
+    "h": 182,
+    "collision": {
+      "enabled": true,
+      "x": 0.18,
+      "y": 0.66,
+      "w": 0.64,
+      "h": 0.3
+    }
+  },
+  {
+    "assetId": "prop_mailbox",
+    "id": "prop_mailbox-1",
+    "x": 4758,
+    "y": 652,
+    "w": 69,
+    "h": 150,
+    "collision": {
+      "enabled": true,
+      "x": 0.18,
+      "y": 0.66,
+      "w": 0.64,
+      "h": 0.3
+    }
+  },
+  {
+    "assetId": "prop_bicycle",
+    "id": "prop_bicycle-1",
+    "x": 3875,
+    "y": 490,
+    "w": 171,
+    "h": 120,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.58,
+      "w": 0.84,
+      "h": 0.34
+    }
+  },
+  {
+    "assetId": "prop_bus_stop",
+    "id": "prop_bus_stop-1",
+    "x": 4426,
+    "y": 518,
+    "w": 317,
+    "h": 296,
+    "collision": {
+      "enabled": true,
+      "x": 0.1,
+      "y": 0.72,
+      "w": 0.8,
+      "h": 0.22
+    }
+  },
+  {
+    "assetId": "prop_tree_green",
+    "id": "prop_tree_green-mpdlsz4k-5",
+    "x": 2064,
+    "y": -66,
+    "w": 413,
+    "h": 641,
+    "collision": {
+      "enabled": true,
+      "x": 0.36,
+      "y": 0.76,
+      "w": 0.28,
+      "h": 0.2
+    }
+  },
+  {
+    "assetId": "greenery_bush_cluster_large",
+    "id": "greenery_bush_cluster_large-mpdltliq-6",
+    "x": 2157,
+    "y": 210,
+    "w": 623,
+    "h": 372,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.62,
+      "w": 0.84,
+      "h": 0.32
+    }
+  },
+  {
+    "assetId": "road_road_strip_plain",
+    "id": "road_road_strip_plain-mpdqc0mf-4",
+    "x": 2147,
+    "y": 471,
+    "w": 958,
+    "h": 225
+  },
+  {
+    "assetId": "prop_food_truck",
+    "id": "prop_food_truck-mpctvuoq-1",
+    "x": 4027,
+    "y": 554,
+    "w": 359,
+    "h": 272,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.68,
+      "w": 0.84,
+      "h": 0.25
+    }
+  },
+  {
+    "assetId": "building_apartment_villa",
+    "id": "building_apartment_villa-mpctwa7n-1",
+    "x": 2595,
+    "y": -7,
+    "w": 596,
+    "h": 573,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.86,
+      "w": 0.84,
+      "h": 0.12
+    }
+  },
+  {
+    "assetId": "sky_clean_cloud_10",
+    "id": "sky_clean_cloud_10-mpdfpmvj-1",
+    "x": 3763,
+    "y": 147,
+    "w": 317,
+    "h": 98
+  },
+  {
+    "assetId": "prop_tree_green",
+    "id": "prop_tree_green-mpdftrby-5",
+    "x": 5311,
+    "y": 93,
+    "w": 332,
+    "h": 513,
+    "collision": {
+      "enabled": true,
+      "x": 0.36,
+      "y": 0.76,
+      "w": 0.28,
+      "h": 0.2
+    }
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpdfuhqm-10",
+    "x": 4999,
+    "y": 599,
+    "w": 280,
+    "h": 226
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpdfuldq-11",
+    "x": 5240,
+    "y": 599,
+    "w": 280,
+    "h": 226
+  },
+  {
+    "assetId": "greenery_bush_cluster_large",
+    "id": "greenery_bush_cluster_large-mpdfv4ny-3",
+    "x": 5398,
+    "y": 327,
+    "w": 390,
+    "h": 233,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.62,
+      "w": 0.84,
+      "h": 0.32
+    }
+  },
+  {
+    "assetId": "greenery_bush_cluster_mixed",
+    "id": "greenery_bush_cluster_mixed-mpdfvtvi-2",
+    "x": 5520,
+    "y": 434,
+    "w": 416,
+    "h": 200,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.62,
+      "w": 0.84,
+      "h": 0.32
+    }
+  },
+  {
+    "assetId": "road_road_strip_plain",
+    "id": "road_road_strip_plain-mpe21p0w-6",
+    "x": 1290,
+    "y": 482,
+    "w": 906,
+    "h": 216
+  },
+  {
+    "assetId": "road_extra_41",
+    "id": "road_extra_41-mpdfupce-12",
+    "x": 5477,
+    "y": 601,
+    "w": 280,
+    "h": 226
+  },
+  {
+    "assetId": "road_road_strip_plain",
+    "id": "road_road_strip_plain-mpe21odk-5",
+    "x": 409,
+    "y": 482,
+    "w": 906,
+    "h": 216
+  },
+  {
+    "assetId": "greenery_hedge_low_cluster",
+    "id": "greenery_hedge_low_cluster-mpdfwtni-3",
+    "x": 5520,
+    "y": 521,
+    "w": 374,
+    "h": 212,
+    "collision": {
+      "enabled": true,
+      "x": 0.06,
+      "y": 0.58,
+      "w": 0.88,
+      "h": 0.34
+    }
+  },
+  {
+    "assetId": "road_road_strip_plain",
+    "id": "road_road_strip_plain-mpe21p6g-7",
+    "x": 229,
+    "y": 484,
+    "w": 906,
+    "h": 216
+  },
+  {
+    "assetId": "building_hospital",
+    "id": "building_hospital-mpdfsfem-1",
+    "x": 4956,
+    "y": 157,
+    "w": 694,
+    "h": 421,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.82,
+      "w": 0.84,
+      "h": 0.14
+    }
+  },
+  {
+    "assetId": "greenery_tree_green_medium",
+    "id": "greenery_tree_green_medium-mpdfw9va-1",
+    "x": 5620,
+    "y": 382,
+    "w": 259,
+    "h": 396,
+    "collision": {
+      "enabled": true,
+      "x": 0.34,
+      "y": 0.76,
+      "w": 0.32,
+      "h": 0.2
+    }
+  },
+  {
+    "assetId": "greenery_grass_clump_tall",
+    "id": "greenery_grass_clump_tall-mpdfx4f2-1",
+    "x": 5571,
+    "y": 594,
+    "w": 199,
+    "h": 172,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.54,
+      "w": 0.84,
+      "h": 0.38
+    }
+  },
+  {
+    "assetId": "building_school",
+    "id": "building_school-mpdlshph-1",
+    "x": 1341,
+    "y": -2,
+    "w": 1200,
+    "h": 565,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.86,
+      "w": 0.84,
+      "h": 0.12
+    }
+  },
+  {
+    "assetId": "building_casino",
+    "id": "building_casino-mpdqd8v3-1",
+    "x": 604,
+    "y": 181,
+    "w": 610,
+    "h": 404,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.86,
+      "w": 0.84,
+      "h": 0.12
+    }
+  },
+  {
+    "assetId": "building_hacker_den",
+    "id": "building_hacker_den-mpdqdf8v-1",
+    "x": 313,
+    "y": 210,
+    "w": 300,
+    "h": 345,
+    "collision": {
+      "enabled": true,
+      "x": 0.08,
+      "y": 0.86,
+      "w": 0.84,
+      "h": 0.12
+    }
+  },
+  {
+    "assetId": "road_turn_arrow_marking",
+    "id": "road_turn_arrow_marking-mpe1w209-1",
+    "x": 2296,
+    "y": 1014,
+    "w": 104,
+    "h": 86
+  }
+]

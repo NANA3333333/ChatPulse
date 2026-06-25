@@ -46,6 +46,18 @@ tools/qdrant/
 
 # Debug exports / local reports / local screenshots
 debug_exports/
+.codex-*
+.logs/
+tmp/
+design-qa.md
+room-assembly-*.png
+wardrobe-*.png
+cloud-*-cutout.png
+cloud-*-check.png
+nightstand-*-check.png
+ocean-*-check.png
+*-debug.png
+*-check.png
 client/*lint*.txt
 client/*lint*.json
 client/*report*.txt

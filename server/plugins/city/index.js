@@ -16,12 +16,16 @@ const {
     normalizeStoredCityOffsetDays,
     normalizeStoredCityOffsetHours
 } = require('./utils/inputGuards');
+const { parseCityActionNarrations, sanitizeCityNarrationText } = require('./utils/actionNarrationParser');
 const initCityGrowthDb = require('../cityGrowth/growthDb');
 const schoolLogic = require('../cityGrowth/schoolLogic');
 const mcpLabTools = require('../mcpLab');
 const { enqueueBackgroundTask } = require('../../backgroundQueue');
 const { buildUniversalContext, formatTypedAntiRepeatBlock } = require('../../contextBuilder');
+const { buildHousingPromptBlock, getHousingRuntimeContext, getHousingPassiveMinutePatch, applyHousingDistrictEffects, applyNumericPatchToState } = require('../socialHousing/housingEffects');
 const { deriveEmotion, derivePhysicalState, applyEmotionEvent, getEmotionBehaviorGuidance, buildEmotionLogEntry } = require('../../emotion');
+const { buildOpenAiCompatibleUrlResolved } = require('../../httpGuards');
+const { filterAutomationUsers } = require('../../automationActivity');
 
 // Phase 5: Social encounter cooldown - prevents same pair from chatting every tick
 const socialCooldowns = new Map(); // key: "charA_id::charB_id" -> timestamp
@@ -33,6 +37,15 @@ const CITY_ENABLE_SOCIAL_COLLISIONS = process.env.CP_CITY_SOCIAL !== '0';
 const MEDICAL_RECOVERY_INTERVAL_MINUTES = 5;
 const MEDICAL_RECOVERY_INTERVAL_MS = MEDICAL_RECOVERY_INTERVAL_MINUTES * 60 * 1000;
 const MEDICAL_STAY_MINUTES_PER_TICK = 60;
+const BEHAVIOR_CONTEXT_DEFAULT_Q = 8;
+const BEHAVIOR_CONTEXT_DEFAULT_P = 12;
+const BEHAVIOR_CONTEXT_MIN_Q = 1;
+const BEHAVIOR_CONTEXT_MAX_Q = 30;
+const BEHAVIOR_CONTEXT_MIN_P = 2;
+const BEHAVIOR_CONTEXT_MAX_P = 50;
+const BEHAVIOR_CONTEXT_MAX_SUMMARIES = 3;
+const BEHAVIOR_CONTEXT_STATE_SUMMARY_LIMIT = 20;
+const BEHAVIOR_CONTEXT_SUMMARY_MAX_TOKENS = 2600;
 
 module.exports = function initCityPlugin(app, context) {
     const { getWsClients, authMiddleware, authDb, callLLM, getEngine, getMemory, getUserDb } = context;
@@ -49,6 +62,15 @@ module.exports = function initCityPlugin(app, context) {
             });
         } catch (err) {
             console.warn(`[City Debug] failed to record ${contextType} ${direction} for ${character.name}: ${err.message}`);
+        }
+    }
+
+    function recordCityTokenUsage(db, characterId, contextType, usage) {
+        if (!usage || usage.cached || !characterId || typeof db?.addTokenUsage !== 'function') return;
+        try {
+            db.addTokenUsage(characterId, contextType, usage.prompt_tokens || 0, usage.completion_tokens || 0);
+        } catch (err) {
+            console.warn(`[City Usage] failed to record ${contextType} for ${characterId}: ${err.message}`);
         }
     }
 
@@ -395,8 +417,63 @@ module.exports = function initCityPlugin(app, context) {
         return parts.join(' | ');
     }
 
+    function buildActionParseErrorLog(char, error, options = {}) {
+        const rawMessage = String(error?.message || error || '未知错误')
+            .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer ***')
+            .replace(/(sk-[A-Za-z0-9_-]{8})[A-Za-z0-9_-]+/g, '$1***')
+            .replace(/\s+/g, ' ')
+            .trim();
+        const isParseLike = /json|unexpected|parse|action|log|可选地点|结构无效|模型没有返回|缺少|背包没有可食用物品/i.test(rawMessage);
+        const prefix = isParseLike ? '行动 JSON 解析失败' : '行动生成失败';
+        const reason = rawMessage ? `${prefix}：${rawMessage.slice(0, 180)}` : prefix;
+        return buildCollapsedCityLog(char, reason, options);
+    }
+
+    function logActionParseError(db, userId, char, error, options = {}) {
+        const district = options.district || null;
+        const location = district?.id || char?.location || '';
+        const content = buildActionParseErrorLog(char, error, options);
+        try {
+            db.city.logAction(char.id, 'ACTION_PARSE_ERROR', content, 0, 0, location);
+        } catch (logErr) {
+            console.error(`[City] ${char?.name || char?.id || '角色'} ACTION_PARSE_ERROR 写入失败: ${logErr.message}`);
+            return;
+        }
+        try {
+            broadcastCityEvent(userId, char.id, 'ACTION_PARSE_ERROR', content);
+        } catch (broadcastErr) {
+            console.warn(`[City] ACTION_PARSE_ERROR 广播失败: ${broadcastErr.message}`);
+        }
+    }
+
     function isCollapsedCityLog(text = '') {
         return String(text || '').trim().startsWith('【商业街输出折叠】');
+    }
+
+    function findCityLogForOutreach(db, characterId, candidates = []) {
+        const rawDb = typeof db?.getRawDb === 'function' ? db.getRawDb() : db;
+        if (!rawDb?.prepare || !characterId) return null;
+        const values = Array.from(new Set(
+            (Array.isArray(candidates) ? candidates : [candidates])
+                .map(value => String(value || '').trim())
+                .filter(Boolean)
+        ));
+        for (const value of values) {
+            try {
+                const row = rawDb.prepare(`
+                    SELECT id, action_type, location
+                    FROM city_logs
+                    WHERE character_id = ? AND content = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                `).get(characterId, value);
+                if (row) return row;
+            } catch (err) {
+                console.warn(`[City->Chat] 查询商业街日志来源失败: ${err.message}`);
+                return null;
+            }
+        }
+        return null;
     }
 
     function parseSuggestedDistrictCandidates(message, districts) {
@@ -825,9 +902,7 @@ ${styleText ? `- 可轻微参考这段既有语气，但只能参考语气，不
     }
 
     function tryParseCityActionReply(reply = '') {
-        const cleaned = String(reply || '').replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim();
-        if (!cleaned) return null;
-        const parsed = JSON.parse(cleaned);
+        const parsed = parseCityActionNarrations(reply);
         return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
     }
 
@@ -990,6 +1065,26 @@ ${styleText ? `- 可轻微参考这段既有语气，但只能参考语气，不
 
             if (recentCharacterReplies.length === 0) return '';
             return `\n[最近私聊回复，chat 字段禁止复写]\n${recentCharacterReplies.map((text) => `- ${text}`).join('\n')}\n- 如果本轮要填写 chat，必须承接当前商业街事件说新的状态/发现/决定；不要复述上面这些私聊的观点、控诉、解释、请求或收尾句。\n- 不要把用户刚刚说过的话扩写成同一段争执；如果只是想继续旧话题，chat 可以留空。`;
+        } catch (e) {
+            return '';
+        }
+    }
+
+    function buildFreshPrivateChatTailBlock(db, char, limit = 10) {
+        try {
+            if (!db || typeof db.getVisibleMessages !== 'function' || !char?.id) return '';
+            const recentMessages = (db.getVisibleMessages(char.id, limit) || [])
+                .filter((message) => message && (message.role === 'user' || message.role === 'character'))
+                .slice(-limit);
+            if (recentMessages.length === 0) return '';
+            const userName = db.getUserProfile?.()?.name || '玩家';
+            const lines = recentMessages.map((message) => {
+                const speaker = message.role === 'user' ? userName : (char.name || '角色');
+                const text = String(message.content || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+                return text ? `- ${speaker}: ${text}` : '';
+            }).filter(Boolean);
+            if (lines.length === 0) return '';
+            return `\n[生成前实时读取的最新私聊]\n${lines.join('\n')}\n- 上面是本次商业街活动生成前从私聊库实时读取的最新尾巴，优先级高于旧摘要和旧商业街记录。\n- 如果最新用户消息比你上一条回复更新，chat 必须承接最新用户消息；不要只复述旧回复。\n- 防重复只靠语义自觉：不要把最近已经说过的私聊整段复制或近似改写。`;
         } catch (e) {
             return '';
         }
@@ -1366,8 +1461,9 @@ ${recentSameKindBlock}
         return { synced: false, reason: 'disabled' };
     }
 
-    function applyPassiveSurvivalTick(char, currentCals, currentMinute, elapsedMinutes = 1, metabolismPerMinute = 0) {
+    function applyPassiveSurvivalTick(char, currentCals, currentMinute, elapsedMinutes = 1, metabolismPerMinute = 0, dbForHousing = null) {
         const state = normalizeSurvivalState(char);
+        const housingContext = getHousingRuntimeContext(dbForHousing, char);
         const totalMinutes = Math.max(1, parseInt(elapsedMinutes, 10) || 1);
         let calories = Math.max(0, parseInt(currentCals ?? char.calories ?? 2000, 10) || 0);
 
@@ -1435,6 +1531,9 @@ ${recentSameKindBlock}
                 if (isSleeping && calories > 900) healthDelta += 1;
                 state.health = clamp(state.health + healthDelta, 0, 100);
             }
+
+            const housingPatch = getHousingPassiveMinutePatch(housingContext, { isSleeping, atHome, minuteMark });
+            Object.assign(state, applyNumericPatchToState(state, housingPatch));
         }
 
         state.mood = calculateDerivedMood(state);
@@ -1601,7 +1700,7 @@ ${recentSameKindBlock}
         return questService.normalizeQuestIntent(richNarrations);
     }
 
-    function buildSurvivalPrompt(districts, char, inventory, activeEvents, universalContext, targetDistrict, questContext = null, promptDb = null) {
+    function buildSurvivalPrompt(districts, char, inventory, activeEvents, universalContext, targetDistrict, questContext = null, promptDb = null, options = {}) {
         const energySources = [];
         const resourceGens = [];
         const medicals = [];
@@ -1687,10 +1786,16 @@ ${recentSameKindBlock}
 
         if (wallet <= 10) stateFlags.push('钱包状态=极度拮据');
 
+        const forcedRestReason = String(options?.forcedRestReason || '').trim();
         let taskInstruction = '【自由探索】在别饿晕、别破产的前提下，按性格/身体/钱包/最近经历决定下一步去哪。';
         if (targetDistrict) {
-            taskInstruction = `【既定意愿】你已经决定要去 [${targetDistrict.id.toUpperCase()}] ${targetDistrict.name}。身体状态、情绪和钱包只影响你到了之后的表现、效率和后果，不改变目的地本身。当前位置标签也必须跟随这次真实去到的地点。`;
+            taskInstruction = forcedRestReason
+                ? `【强制休整】${forcedRestReason} 你已经决定先去 [${targetDistrict.id.toUpperCase()}] ${targetDistrict.name} 休息/补觉。这一轮不要继续推进公告任务、日程或高消耗行动；身体状态已经高于任务优先级。当前位置标签也必须跟随这次真实去到的地点。`
+                : `【既定意愿】你已经决定要去 [${targetDistrict.id.toUpperCase()}] ${targetDistrict.name}。身体状态、情绪和钱包只影响你到了之后的表现、效率和后果，不改变目的地本身。当前位置标签也必须跟随这次真实去到的地点。`;
         }
+        const forcedRestQuestRule = forcedRestReason
+            ? '\n- 当前是强制休整轮，优先级高于公告任务/日程；本轮不要带 quest_intent，也不要写继续施工、交付任务或硬撑完成任务。'
+            : '';
         const questOpenBlock = questContext?.openTasks?.length > 0 ? `\n[公告栏悬赏]\n${questContext.openTasks.join('\n')}` : '';
         const personalQuestBlock = questContext?.personalTask || '';
         const promptHistoryDb = promptDb || ensureCityDb(context.getUserDb(char.user_id || 'default'));
@@ -1704,6 +1809,7 @@ ${recentSameKindBlock}
             title: '[大输入库分型防复读]'
         });
         const privateChatAntiRepeatBlock = typedAntiRepeatBlock || buildRecentPrivateChatAntiRepeatBlock(promptHistoryDb, char);
+        const freshPrivateChatTailBlock = buildFreshPrivateChatTailBlock(promptHistoryDb, char);
 
         let hardConstraintText = '';
         if (state.energy < 20) {
@@ -1738,6 +1844,7 @@ ${recentSameKindBlock}
         hardConstraintText += `\n- 情绪感受：${emotionGuidance.cityAction}`;
         const growthDb = ensureCityGrowthDb(context.getUserDb(char.user_id || 'default'));
         const schoolPromptBlock = schoolLogic.buildSchoolPromptBlock(growthDb, char);
+        const housingPromptBlock = buildHousingPromptBlock(promptHistoryDb, char);
 
         return `[世界背景]
 ${universalContext?.preamble || ''}
@@ -1760,6 +1867,7 @@ ${universalContext?.preamble || ''}
 社交需求=${state.social_need} 健康=${state.health} 饱腹=${state.satiety} 胃负担=${state.stomach_load}
 身体等级=${physicalCondition.label} | 后果=${physicalCondition.summary}${stateFlags.length > 0 ? `\n状态标签=${stateFlags.join(' / ')}` : ''}${eventInfo}
 ${schoolPromptBlock ? '\n' + schoolPromptBlock : ''}
+${housingPromptBlock ? '\n' + housingPromptBlock : ''}
 
 ${taskInstruction}
 [任务机制补充]
@@ -1767,7 +1875,7 @@ ${taskInstruction}
 - 如果你想去接某个公告任务，就在输出里额外带上 quest_intent：{"quest_id":任务ID,"stage":"claim"}，并让 action 去往对应地点。
 - 如果你已经在做任务，并且本轮行动地点就是任务目标地点，优先推进任务，必须带 stage="progress"；不要写成普通地点玩法。
 - 如果你准备交付任务、领取赏金，就额外带上 quest_intent：{"quest_id":任务ID,"stage":"report"}。
-- 不要把 quest_intent 当系统说明写进 log，log 仍然必须像普通商业街活动。${questOpenBlock}${personalQuestBlock}
+- 不要把 quest_intent 当系统说明写进 log，log 仍然必须像普通商业街活动。${forcedRestQuestRule}${questOpenBlock}${personalQuestBlock}
 - 如果本轮行动意图是“接下某个公告任务 / 开始执行某个公告任务 / 推进手上已有任务 / 交付任务”，就要在 JSON 里同步带 quest_intent；不要只在自然文案里表达这个意图却漏掉标签。
 - 如果只是看见公告、犹豫、评估要不要接，且没有明确行动，可以不带 quest_intent。
 - 任务推进必须贴合任务内容：采购/配送要写拿货、送达；清理/维修要写动手处理；调查类要写打听、寻找、发现；巡逻/护送要写陪同、盯守、来回查看。
@@ -1795,7 +1903,7 @@ ${taskInstruction}
 - 若有没说出口的心声再填 diary
 - 想花钱但钱不够时，也要把失败尝试真实写进 log
 - 不要重复 preamble 里刚做过的地点/动作
-- 不要使用高复用套话，不要把“从家离开、肚子里空空的、先把自己安顿好”这类句式当默认开头${antiRepeatBlock ? antiRepeatBlock : ''}${privateChatAntiRepeatBlock ? privateChatAntiRepeatBlock : ''}
+- 不要使用高复用套话，不要把“从家离开、肚子里空空的、先把自己安顿好”这类句式当默认开头${freshPrivateChatTailBlock ? freshPrivateChatTailBlock : ''}${antiRepeatBlock ? antiRepeatBlock : ''}${privateChatAntiRepeatBlock ? privateChatAntiRepeatBlock : ''}
 
 只返回 JSON：
   {
@@ -1994,6 +2102,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         'idle_micro'
     ]);
     const behaviorBasePatchTargetIds = new Set([
+        'movement_recovery',
         'hard_needs',
         'routine_goal',
         'place_affordance',
@@ -2007,24 +2116,72 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         return String(value || '').trim().slice(0, maxLength);
     }
 
+    function repairUnescapedJsonStringQuotes(text = '') {
+        let repaired = '';
+        let inString = false;
+        let escaped = false;
+        const source = String(text || '');
+        for (let index = 0; index < source.length; index += 1) {
+            const char = source[index];
+            if (!inString) {
+                if (char === '"') inString = true;
+                repaired += char;
+                continue;
+            }
+            if (escaped) {
+                repaired += char;
+                escaped = false;
+                continue;
+            }
+            if (char === '\\') {
+                repaired += char;
+                escaped = true;
+                continue;
+            }
+            if (char === '"') {
+                let nextIndex = index + 1;
+                while (nextIndex < source.length && /\s/.test(source[nextIndex])) nextIndex += 1;
+                const nextChar = source[nextIndex] || '';
+                if (nextChar === ':' || nextChar === ',' || nextChar === '}' || nextChar === ']' || nextChar === '') {
+                    inString = false;
+                    repaired += char;
+                } else {
+                    repaired += '\\"';
+                }
+                continue;
+            }
+            repaired += char;
+        }
+        return repaired;
+    }
+
     function parseJsonObjectFromLlmText(text) {
         const cleaned = String(text || '').replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim();
         if (!cleaned) return null;
-        return JSON.parse(cleaned);
+        try {
+            return JSON.parse(cleaned);
+        } catch (err) {
+            const repaired = repairUnescapedJsonStringQuotes(cleaned);
+            if (repaired !== cleaned) {
+                try {
+                    return JSON.parse(repaired);
+                } catch (_) { }
+            }
+            throw err;
+        }
     }
 
     async function fetchBehaviorModelList(endpoint, key, timeoutMs = 18000) {
         const apiEndpoint = String(endpoint || '').trim();
         const apiKey = String(key || '').trim();
         if (!apiEndpoint || !apiKey) throw new Error('Missing endpoint or key');
-        let baseUrl = apiEndpoint.endsWith('/') ? apiEndpoint.slice(0, -1) : apiEndpoint;
-        if (baseUrl.endsWith('/chat/completions')) baseUrl = baseUrl.slice(0, -'/chat/completions'.length);
-        const modelsUrl = `${baseUrl}/models`;
+        const modelsUrl = await buildOpenAiCompatibleUrlResolved(apiEndpoint, 'models', { label: 'Endpoint' });
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
         try {
             const response = await fetch(modelsUrl, {
                 headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+                redirect: 'manual',
                 signal: controller.signal
             });
             if (!response.ok) {
@@ -2043,7 +2200,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
 
     function getBehaviorTreeSkeleton() {
         return {
-            version: 'single-character-street-runtime-v1',
+            version: 'single-character-semantic-runtime-v1',
             root: {
                 id: 'street_character_root',
                 type: 'PrioritySelector',
@@ -2141,13 +2298,13 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
                     steps: [
                         {
                             action: behaviorTreeAllowedActions.join('|'),
-                            text: 'say/emote/create_memory/relationship_delta 可用',
+                            text: 'say/emote/create_memory/relationship_delta 可用；互动枝丫应多用短 say 和 emote 推进角色反应',
                             place_id: 'go_to_place/loop_in_front_of/browse_near/idle_at_place 可用；必须来自 allowed_place_ids',
                             from_place_id: 'wander_between/patrol_segment 可用；必须来自 allowed_place_ids',
                             to_place_id: 'wander_between/patrol_segment/walk_with_player 可用；必须来自 allowed_place_ids',
                             movement_style: '可选：slow、hesitating、window_shopping、patrol、walk_together 等文字风格',
                             duration_ms: 'wait 可用',
-                            choices: 'offer_choices 可用，最多 4 个；choice.trigger 应使用玩家互动动作白名单'
+                            choices: 'offer_choices 可用，最多 4 个；choice.trigger 应使用玩家互动动作白名单；如果 choice.trigger 是 suggest_destination，choice.place_id 必须填写且必须来自 allowed_place_ids，不能只写“去沙发/去挂画”这种文字'
                         }
                     ]
                 },
@@ -2163,7 +2320,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             ? world.allowed_movement_actions
             : behaviorSemanticMovementActions;
         return {
-            type: 'base_behavior_branch_pack_v1',
+            type: 'behavior_tree_branch_pack_v1',
             allowed_place_ids: allowedPlaceIds,
             allowed_movement_actions: allowedMovementActions,
             target_node_ids: Array.from(behaviorBasePatchTargetIds),
@@ -2171,21 +2328,45 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
                 base_branches: [
                     {
                         id: 'string，建议以 base_ 开头',
-                        target_node_id: 'hard_needs|routine_goal|place_affordance|background_mood|curiosity|wander|idle_micro',
+                        target_node_id: 'movement_recovery|hard_needs|routine_goal|place_affordance|background_mood|curiosity|wander|idle_micro',
                         title: '基础：xxx',
                         priority: '1-100',
                         ttl_ms: '3000-120000',
-                        trigger: 'runtime_state.need_high|runtime_state.routine_tick|location.has_affordance|runtime_state.mood_idle|nearby_place_or_player|otherwise|idle',
+                        trigger: 'runtime_state.travel_failed|runtime_state.need_high|runtime_state.routine_tick|location.has_affordance|runtime_state.mood_idle|nearby_place_or_player|otherwise|idle',
                         summary: '一两句话说明无互动时角色为什么做这件事',
                         steps: [
                             {
                                 action: behaviorTreeAllowedActions.join('|'),
-                                text: 'say/emote 可用；基础枝丫里不要使用 offer_choices',
+                                text: 'say/emote 可用；基础枝丫里不要使用 offer_choices；除 movement_recovery 外应至少有一句短 say 或一个 emote',
                                 place_id: 'go_to_place/loop_in_front_of/browse_near/idle_at_place 可用；必须来自 allowed_place_ids',
                                 from_place_id: 'wander_between/patrol_segment 可用；必须来自 allowed_place_ids',
                                 to_place_id: 'wander_between/patrol_segment/walk_with_player 可用；必须来自 allowed_place_ids',
                                 movement_style: '可选：slow、window_shopping、patrol、distracted 等文字风格',
                                 duration_ms: 'wait/say/emote 可用'
+                            }
+                        ]
+                    }
+                ],
+                interaction_branches: [
+                    {
+                        id: 'string，建议以 starter_ 开头',
+                        target_node_id: 'player_interaction',
+                        title: '互动开场：xxx',
+                        priority: '1-100',
+                        ttl_ms: '3000-120000',
+                        trigger: {
+                            player_action: behaviorPlayerInteractionActions.join('|'),
+                            place_id: 'optional；如果填写，必须来自 allowed_place_ids'
+                        },
+                        summary: '一两句话说明玩家点击该互动时角色先怎么接住',
+                        steps: [
+                            {
+                                action: behaviorTreeAllowedActions.join('|'),
+                                text: 'say/emote 可用；第一段开场要短，不要引用私聊当作触发原因；offer_choices 前至少 2 个 say/emote',
+                                place_id: '移动或停留可用；必须来自 allowed_place_ids',
+                                to_place_id: 'walk_with_player 可用；必须来自 allowed_place_ids',
+                                duration_ms: 'wait/say/emote 可用',
+                                choices: '最后一步必须 offer_choices，2-4 个后续选项；choice.trigger 使用玩家互动动作白名单；如果 choice.trigger 是 suggest_destination，choice.place_id 必须填写且必须来自 allowed_place_ids，不能只写“去沙发/去挂画”这种文字'
                             }
                         ]
                     }
@@ -2262,7 +2443,9 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
     function sanitizeBehaviorSteps(rawSteps, allowedPlaceIds = [], maxSteps = 10, options = {}) {
         const allowedPlaceIdSet = new Set(normalizeAllowedBehaviorPlaceIds(allowedPlaceIds));
         const allowChoices = options.allowChoices !== false;
-        return (Array.isArray(rawSteps) ? rawSteps : [])
+        const hasStepLimit = Number.isFinite(Number(maxSteps)) && Number(maxSteps) > 0;
+        const stepLimit = hasStepLimit ? Math.floor(Number(maxSteps)) : Infinity;
+        const sanitizedSteps = (Array.isArray(rawSteps) ? rawSteps : [])
             .map((step) => {
                 if (!step || typeof step !== 'object') return null;
                 const action = String(step.action || '').trim();
@@ -2313,14 +2496,26 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
                 if (action === 'offer_choices' && !Array.isArray(normalized.choices)) return null;
                 return normalized;
             })
-            .filter(Boolean)
-            .slice(0, maxSteps);
+            .filter(Boolean);
+        if (!hasStepLimit || sanitizedSteps.length <= stepLimit) return sanitizedSteps;
+        if (allowChoices) {
+            const firstChoiceStepIndex = sanitizedSteps.findIndex((step) => step?.action === 'offer_choices'
+                && Array.isArray(step.choices)
+                && step.choices.length > 0);
+            if (firstChoiceStepIndex >= stepLimit) {
+                return [
+                    ...sanitizedSteps.slice(0, Math.max(0, stepLimit - 1)),
+                    sanitizedSteps[firstChoiceStepIndex]
+                ];
+            }
+        }
+        return sanitizedSteps.slice(0, stepLimit);
     }
 
     function sanitizeBehaviorBranch(rawBranch, char, payload = {}, fallbackReason = 'sanitize_empty', allowedPlaceIds = []) {
         if (!rawBranch || typeof rawBranch !== 'object') return null;
         const allowedPlaceIdSet = new Set(normalizeAllowedBehaviorPlaceIds(allowedPlaceIds));
-        const steps = sanitizeBehaviorSteps(rawBranch.steps, allowedPlaceIds, 10, { allowChoices: true });
+        const steps = sanitizeBehaviorSteps(rawBranch.steps, allowedPlaceIds, null, { allowChoices: true });
         if (!steps.length) return null;
         const triggerPlaceId = toAllowedBehaviorPlaceId(
             rawBranch.trigger?.place_id || rawBranch.trigger?.placeId || payload?.player_event?.place_id || '',
@@ -2341,6 +2536,11 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         };
     }
 
+    function behaviorBranchHasOfferChoices(branch = {}) {
+        return Array.isArray(branch.steps)
+            && branch.steps.some((step) => step?.action === 'offer_choices' && Array.isArray(step.choices) && step.choices.length > 0);
+    }
+
     function normalizeBehaviorNodeId(value, fallback = 'node') {
         const raw = limitText(value, 80);
         const safe = raw
@@ -2359,6 +2559,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         const nodeId = normalizeBehaviorNodeId(rawNode?.id || rawNode?.node_id || branch.branch_id, 'branch');
         const requestedTargetNodeId = normalizeBehaviorNodeId(patch.target_node_id || patch.targetNodeId || 'player_interaction', 'target');
         const targetNodeId = behaviorPatchTargetIds.has(requestedTargetNodeId) ? requestedTargetNodeId : 'player_interaction';
+        if (targetNodeId === 'player_interaction' && !behaviorBranchHasOfferChoices(branch)) return null;
         const nextActiveNodeId = normalizeBehaviorNodeId(patch.next_active_node_id || patch.nextActiveNodeId || nodeId, 'active');
         const patchId = normalizeBehaviorNodeId(patch.patch_id || patch.patchId || `patch_${nodeId}_${Date.now().toString(36)}`, 'patch');
         const memoryDelta = patch.memory_delta && typeof patch.memory_delta === 'object'
@@ -2440,6 +2641,338 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         }));
     }
 
+    function normalizeBehaviorContextInteger(value, fallback, min, max) {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) return fallback;
+        return clamp(Math.trunc(parsed), min, max);
+    }
+
+    function resolveBehaviorIterationContextConfig(payload = {}, behaviorTree = {}) {
+        const raw = {
+            ...(behaviorTree?.iteration_context?.config || {}),
+            ...(behaviorTree?.iterationContext?.config || {}),
+            ...(payload?.behavior_context || payload?.behaviorContext || {})
+        };
+        return {
+            q_raw_limit: normalizeBehaviorContextInteger(
+                raw.q_raw_limit ?? raw.qRawLimit ?? raw.context_q_limit ?? raw.q,
+                BEHAVIOR_CONTEXT_DEFAULT_Q,
+                BEHAVIOR_CONTEXT_MIN_Q,
+                BEHAVIOR_CONTEXT_MAX_Q
+            ),
+            p_summary_threshold: normalizeBehaviorContextInteger(
+                raw.p_summary_threshold ?? raw.pSummaryThreshold ?? raw.context_summary_threshold ?? raw.p,
+                BEHAVIOR_CONTEXT_DEFAULT_P,
+                BEHAVIOR_CONTEXT_MIN_P,
+                BEHAVIOR_CONTEXT_MAX_P
+            ),
+            max_summary_rounds: BEHAVIOR_CONTEXT_MAX_SUMMARIES
+        };
+    }
+
+    function normalizeBehaviorIterationStep(step = {}) {
+        if (!step || typeof step !== 'object') return null;
+        const action = limitText(step.action, 60);
+        if (!action) return null;
+        const normalized = { action };
+        if (step.text !== undefined) normalized.text = limitText(step.text, 180);
+        if (step.place_id !== undefined || step.placeId !== undefined) normalized.place_id = limitText(step.place_id || step.placeId, 80);
+        if (step.from_place_id !== undefined || step.fromPlaceId !== undefined) normalized.from_place_id = limitText(step.from_place_id || step.fromPlaceId, 80);
+        if (step.to_place_id !== undefined || step.toPlaceId !== undefined) normalized.to_place_id = limitText(step.to_place_id || step.toPlaceId, 80);
+        if (step.movement_style !== undefined || step.movementStyle !== undefined) normalized.movement_style = limitText(step.movement_style || step.movementStyle, 80);
+        if (step.reason !== undefined) normalized.reason = limitText(step.reason, 120);
+        if (step.duration_ms !== undefined || step.durationMs !== undefined) normalized.duration_ms = clamp(Number(step.duration_ms || step.durationMs) || 0, 0, 120000);
+        if (Array.isArray(step.choices)) {
+            normalized.choices = step.choices.slice(0, 4).map((choice) => ({
+                id: limitText(choice?.id, 40),
+                label: limitText(choice?.label || choice?.text, 40),
+                trigger: limitText(choice?.trigger, 60),
+                place_id: limitText(choice?.place_id || choice?.placeId, 80)
+            })).filter((choice) => choice.label || choice.trigger);
+        }
+        return normalized;
+    }
+
+    function buildBehaviorIterationRecordsFromTree(behaviorTree = {}) {
+        const nodes = behaviorTree?.nodes && typeof behaviorTree.nodes === 'object' ? behaviorTree.nodes : {};
+        const patchHistory = Array.isArray(behaviorTree?.patch_history) ? behaviorTree.patch_history : [];
+        return patchHistory.slice().reverse().map((item, index) => {
+            const nodeId = limitText(item?.node_id || item?.nodeId || item?.next_active_node_id || item?.nextActiveNodeId, 80);
+            const node = nodeId ? nodes[nodeId] : null;
+            const patchId = limitText(item?.patch_id || item?.patchId, 100);
+            return {
+                record_id: patchId || `${nodeId || 'behavior_record'}_${index + 1}`,
+                sequence: normalizeBehaviorContextInteger(
+                    item?.sequence || item?.iteration_sequence || item?.iterationSequence,
+                    index + 1,
+                    1,
+                    1000000
+                ),
+                created_at: limitText(item?.created_at || item?.createdAt, 80),
+                source: limitText(item?.source || node?.source, 80),
+                target_node_id: limitText(item?.target_node_id || item?.targetNodeId, 80),
+                node_id: nodeId,
+                branch_kind: limitText(node?.branch_kind || node?.branchKind || (String(item?.target_node_id || '').trim() === 'player_interaction' ? 'special' : 'base'), 40),
+                title: limitText(item?.title || node?.title || nodeId, 100),
+                reason: limitText(item?.reason, 180),
+                summary: limitText(node?.summary || item?.summary, 220),
+                trigger: node?.trigger || item?.trigger || '',
+                steps: Array.isArray(node?.steps) ? node.steps.map(normalizeBehaviorIterationStep).filter(Boolean).slice(0, 10) : []
+            };
+        }).filter((record) => record.record_id || record.node_id || record.title || record.steps.length);
+    }
+
+    function normalizeBehaviorIterationRecords(rawRecords = [], behaviorTree = {}) {
+        const sourceRecords = Array.isArray(rawRecords) && rawRecords.length
+            ? rawRecords
+            : buildBehaviorIterationRecordsFromTree(behaviorTree);
+        return sourceRecords.map((record, index) => {
+            const normalized = {
+                record_id: limitText(record?.record_id || record?.recordId || record?.patch_id || record?.patchId, 100),
+                sequence: normalizeBehaviorContextInteger(record?.sequence, index + 1, 1, 1000000),
+                created_at: limitText(record?.created_at || record?.createdAt, 80),
+                source: limitText(record?.source, 80),
+                target_node_id: limitText(record?.target_node_id || record?.targetNodeId, 80),
+                node_id: limitText(record?.node_id || record?.nodeId, 80),
+                branch_kind: limitText(record?.branch_kind || record?.branchKind, 40),
+                title: limitText(record?.title, 100),
+                reason: limitText(record?.reason, 180),
+                summary: limitText(record?.summary, 220),
+                trigger: record?.trigger || '',
+                steps: Array.isArray(record?.steps) ? record.steps.map(normalizeBehaviorIterationStep).filter(Boolean).slice(0, 10) : []
+            };
+            if (!normalized.record_id) {
+                normalized.record_id = `${normalized.node_id || 'behavior_record'}_${normalized.sequence}`;
+            }
+            return normalized;
+        }).filter((record) => record.record_id || record.node_id || record.title || record.steps.length)
+            .sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0));
+    }
+
+    function normalizeBehaviorIterationSummaries(rawSummaries = []) {
+        return (Array.isArray(rawSummaries) ? rawSummaries : []).map((summary, index) => ({
+            summary_id: limitText(summary?.summary_id || summary?.summaryId || `behavior_summary_${index + 1}`, 100),
+            start_record_id: limitText(summary?.start_record_id || summary?.startRecordId, 100),
+            end_record_id: limitText(summary?.end_record_id || summary?.endRecordId, 100),
+            start_sequence: normalizeBehaviorContextInteger(summary?.start_sequence || summary?.startSequence, 0, 0, 1000000),
+            end_sequence: normalizeBehaviorContextInteger(summary?.end_sequence || summary?.endSequence, 0, 0, 1000000),
+            record_count: normalizeBehaviorContextInteger(summary?.record_count || summary?.recordCount, 0, 0, 1000000),
+            summary_text: limitText(summary?.summary_text || summary?.summaryText || summary?.text || '', 3000),
+            source_hash: limitText(summary?.source_hash || summary?.sourceHash, 128),
+            created_at: Number(summary?.created_at || summary?.createdAt || 0) || 0
+        })).filter((summary) => summary.summary_text);
+    }
+
+    function resolveBehaviorIterationSummaryCursor(records = [], summaries = [], incomingContext = {}) {
+        const explicitCursorId = limitText(
+            incomingContext.summary_cursor_record_id
+            || incomingContext.summaryCursorRecordId
+            || '',
+            100
+        );
+        const candidateIds = [
+            explicitCursorId,
+            ...summaries.slice().reverse().map((summary) => summary?.end_record_id)
+        ].map((id) => limitText(id, 100)).filter(Boolean);
+        for (const recordId of candidateIds) {
+            const recordIndex = records.findIndex((record) => record.record_id === recordId);
+            if (recordIndex >= 0) {
+                const record = records[recordIndex] || {};
+                return {
+                    record_id: record.record_id,
+                    sequence: Number(record.sequence || 0) || 0,
+                    index: recordIndex,
+                    found: true
+                };
+            }
+        }
+        const lastSummary = summaries[summaries.length - 1] || null;
+        return {
+            record_id: explicitCursorId || lastSummary?.end_record_id || '',
+            sequence: 0,
+            index: -1,
+            found: false
+        };
+    }
+
+    function formatBehaviorIterationRecord(record = {}) {
+        const triggerText = typeof record.trigger === 'string'
+            ? record.trigger
+            : JSON.stringify(record.trigger || {});
+        const stepText = (record.steps || []).map((step, index) => {
+            const parts = [`${index + 1}.${step.action}`];
+            if (step.text) parts.push(`text=${step.text}`);
+            if (step.place_id) parts.push(`place=${step.place_id}`);
+            if (step.from_place_id || step.to_place_id) parts.push(`from=${step.from_place_id || ''}->to=${step.to_place_id || ''}`);
+            if (step.movement_style) parts.push(`style=${step.movement_style}`);
+            if (Array.isArray(step.choices) && step.choices.length) {
+                parts.push(`choices=${step.choices.map((choice) => `${choice.label || choice.id}:${choice.trigger || ''}${choice.place_id ? `@${choice.place_id}` : ''}`).join(' / ')}`);
+            }
+            return parts.join(' | ');
+        }).join('\n');
+        return [
+            `记录 ${record.sequence} [${record.record_id}]`,
+            `类型: ${record.branch_kind || 'unknown'} | 来源: ${record.source || 'unknown'} | 节点: ${record.node_id || ''}`,
+            record.created_at ? `时间: ${record.created_at}` : '',
+            record.title ? `标题: ${record.title}` : '',
+            record.reason ? `原因: ${record.reason}` : '',
+            record.summary ? `摘要: ${record.summary}` : '',
+            triggerText && triggerText !== '{}' ? `触发: ${triggerText}` : '',
+            stepText ? `步骤:\n${stepText}` : ''
+        ].filter(Boolean).join('\n');
+    }
+
+    function resolveBehaviorSummaryModelConfig(character = {}) {
+        return {
+            endpoint: character.memory_api_endpoint || '',
+            key: character.memory_api_key || '',
+            model: character.memory_model_name || ''
+        };
+    }
+
+    async function summarizeBehaviorIterationBatch(db, char, batch = [], config = {}) {
+        const memoryConfig = resolveBehaviorSummaryModelConfig(char);
+        if (!memoryConfig.endpoint || !memoryConfig.key || !memoryConfig.model) {
+            throw createCityError('行为树迭代上下文总结失败：未配置记忆/总结小模型，请补全后重试。', 400, true);
+        }
+        const batchText = batch.map(formatBehaviorIterationRecord).join('\n\n---\n\n');
+        const summaryPrompt = [
+            '请总结下面这一段行为树枝丫迭代记录。',
+            '',
+            '要求：',
+            '- 只总结枝丫迭代事实：玩家选择、角色回应、已出现的台词/动作、开放的后续选项、关系或情绪推进。',
+            '- 不要改写成私聊记录；不要新增没有出现过的动机、地点或动作。',
+            '- 保留哪些台词/问法已经用过，方便下一轮避免复读。',
+            '- 区分日常行为枝丫和玩家互动枝丫。',
+            '- 输出纯文本，最高 3000 字，不要 JSON，不要 Markdown 表格。',
+            '',
+            `[上下文配置] q=${config.q_raw_limit} p=${config.p_summary_threshold}`,
+            '',
+            '[待总结行为树枝丫原文]',
+            batchText
+        ].join('\n');
+        recordCityLlmDebug(db, char, 'input', 'city_behavior_context_summary_update', summaryPrompt, {
+            record_count: batch.length,
+            q: config.q_raw_limit,
+            p: config.p_summary_threshold
+        });
+        const { content, usage, finishReason } = await callLLM({
+            endpoint: memoryConfig.endpoint,
+            key: memoryConfig.key,
+            model: memoryConfig.model,
+            messages: [
+                { role: 'system', content: '你是行为树迭代上下文总结器。你只输出事实总结，必须保留已用过的互动推进和台词模式。' },
+                { role: 'user', content: summaryPrompt }
+            ],
+            maxTokens: BEHAVIOR_CONTEXT_SUMMARY_MAX_TOKENS,
+            temperature: 0.1,
+            enableCache: true,
+            cacheDb: db,
+            cacheType: 'city_behavior_context_summary_update',
+            cacheTtlMs: 30 * 24 * 60 * 60 * 1000,
+            cacheScope: `character:${char.id}`,
+            cacheCharacterId: char.id,
+            returnUsage: true
+        });
+        recordCityTokenUsage(db, char.id, 'city_behavior_context_summary_update', usage);
+        const summaryText = limitText(content, 3000);
+        recordCityLlmDebug(db, char, 'output', 'city_behavior_context_summary_update', summaryText, {
+            usage: usage || null,
+            finishReason,
+            record_count: batch.length
+        });
+        if (!summaryText || String(finishReason || '').trim() === 'length') {
+            throw createCityError('行为树迭代上下文总结失败：小模型输出为空或被截断，请重试。', 502, true);
+        }
+        return summaryText;
+    }
+
+    async function buildCompressedBehaviorTreeForInput(db, char, payload = {}) {
+        const rawTree = payload.behavior_tree && typeof payload.behavior_tree === 'object' ? payload.behavior_tree : null;
+        if (!rawTree) return null;
+        const config = resolveBehaviorIterationContextConfig(payload, rawTree);
+        const incomingContext = rawTree.iteration_context || rawTree.iterationContext || {};
+        const records = normalizeBehaviorIterationRecords(incomingContext.records || incomingContext.raw_records || incomingContext.rawRecords, rawTree);
+        let summaries = normalizeBehaviorIterationSummaries(incomingContext.summaries);
+        const cursor = resolveBehaviorIterationSummaryCursor(records, summaries, incomingContext);
+        let cursorRecordId = cursor.record_id || '';
+        let cursorSequence = Number(cursor.sequence || 0) || 0;
+        const rawRecords = records.slice(-config.q_raw_limit);
+        const overflowRecords = records.slice(0, Math.max(0, records.length - config.q_raw_limit));
+        let pendingRecords = cursor.found
+            ? (cursor.index >= overflowRecords.length ? [] : overflowRecords.slice(cursor.index + 1))
+            : overflowRecords.slice();
+        const now = Date.now();
+        let summarizedNow = 0;
+
+        try {
+            while (pendingRecords.length >= config.p_summary_threshold) {
+                const batch = pendingRecords.slice(0, config.p_summary_threshold);
+                const summaryText = await summarizeBehaviorIterationBatch(db, char, batch, config);
+                const sourceHash = crypto.createHash('sha256').update(JSON.stringify({
+                    characterId: char.id,
+                    q: config.q_raw_limit,
+                    p: config.p_summary_threshold,
+                    batch: batch.map((record) => [record.record_id, record.sequence, record.title, record.summary, record.steps])
+                })).digest('hex');
+                const first = batch[0] || {};
+                const last = batch[batch.length - 1] || {};
+                const summary = {
+                    summary_id: `behavior_summary_${last.record_id || now}_${sourceHash.slice(0, 10)}`,
+                    start_record_id: first.record_id || '',
+                    end_record_id: last.record_id || '',
+                    start_sequence: Number(first.sequence || 0),
+                    end_sequence: Number(last.sequence || 0),
+                    record_count: batch.length,
+                    summary_text: summaryText,
+                    source_hash: sourceHash,
+                    created_at: Date.now()
+                };
+                summaries.push(summary);
+                cursorRecordId = summary.end_record_id;
+                cursorSequence = Number(summary.end_sequence || cursorSequence);
+                pendingRecords = pendingRecords.slice(batch.length);
+                summarizedNow += batch.length;
+            }
+        } catch (err) {
+            if (err?.status) throw err;
+            throw createCityError(`行为树迭代上下文总结失败，请检查记忆小模型后重试：${err.message || err}`, 502, true);
+        }
+
+        summaries = normalizeBehaviorIterationSummaries(summaries).slice(-BEHAVIOR_CONTEXT_STATE_SUMMARY_LIMIT);
+        const promptSummaries = summaries.slice(-BEHAVIOR_CONTEXT_MAX_SUMMARIES);
+        const compactTree = {
+            ...rawTree,
+            patch_history: rawRecords.slice().reverse().map((record) => ({
+                patch_id: record.record_id,
+                sequence: record.sequence,
+                node_id: record.node_id,
+                target_node_id: record.target_node_id,
+                title: record.title,
+                source: record.source,
+                reason: record.reason,
+                created_at: record.created_at
+            })),
+            iteration_context: {
+                config,
+                summaries: promptSummaries,
+                raw_records: rawRecords,
+                pending_count: pendingRecords.length,
+                overflow_count: overflowRecords.length,
+                summarized_now: summarizedNow,
+                rule: '模型实时输入最多读取 3 轮摘要 + q 条枝丫原文；q 窗口外待摘要达到 p 条时先总结。',
+                state: {
+                    summaries,
+                    summary_cursor_record_id: cursorRecordId,
+                    last_error: '',
+                    last_success_at: summarizedNow > 0 ? Date.now() : (incomingContext?.state?.last_success_at || 0),
+                    last_run_at: now
+                }
+            }
+        };
+        return compactTree;
+    }
+
     function createBehaviorRepeatGrams(normalizedText) {
         const text = String(normalizedText || '');
         const size = text.length >= 18 ? 3 : 2;
@@ -2502,6 +3035,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
 
     function inferBaseBehaviorTargetNode(triggerValue = '', fallback = 'wander') {
         const trigger = limitText(triggerValue, 100);
+        if (trigger.includes('travel_failed') || trigger.includes('path_failed') || trigger.includes('movement_recovery')) return 'movement_recovery';
         if (trigger.includes('need') || trigger.includes('hunger') || trigger.includes('energy')) return 'hard_needs';
         if (trigger.includes('routine')) return 'routine_goal';
         if (trigger.includes('affordance') || trigger.includes('location')) return 'place_affordance';
@@ -2513,6 +3047,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
 
     function sanitizeBaseBehaviorBranch(rawBranch, char, payload = {}, fallbackReason = 'base_branch_invalid', allowedPlaceIds = []) {
         if (!rawBranch || typeof rawBranch !== 'object') return null;
+        const sceneContext = inferBehaviorScene(payload, payload.world || {});
         const rawTrigger = rawBranch.trigger || rawBranch.trigger_id || rawBranch.triggerId || 'otherwise';
         const requestedTarget = normalizeBehaviorNodeId(rawBranch.target_node_id || rawBranch.targetNodeId || '', 'target');
         const targetNodeId = behaviorBasePatchTargetIds.has(requestedTarget)
@@ -2531,7 +3066,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             node: {
                 id: nodeId,
                 type: 'ActionSequence',
-                title: limitText(rawBranch.title || '基础：街区行动', 80),
+                title: limitText(rawBranch.title || `基础：${sceneContext.type === 'room' ? '房间行动' : '街区行动'}`, 80),
                 branch_kind: 'base',
                 priority: clamp(Number(rawBranch.priority) || 50, 1, 100),
                 ttl_ms: clamp(Number(rawBranch.ttl_ms || rawBranch.ttlMs) || 45000, 3000, 120000),
@@ -2564,6 +3099,112 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             branch_kind: 'base'
         }));
         return { base_branches: baseBranches, base_patches: patches, fallback: false };
+    }
+
+    function readBehaviorInteractionStarterAction(rawBranch = {}) {
+        const rawTrigger = rawBranch.trigger && typeof rawBranch.trigger === 'object' ? rawBranch.trigger : {};
+        return [
+            rawTrigger.player_action,
+            rawTrigger.playerAction,
+            rawBranch.player_action,
+            rawBranch.playerAction,
+            rawBranch.action_id,
+            rawBranch.actionId,
+            rawBranch.trigger_id,
+            rawBranch.triggerId,
+            rawBranch.action
+        ]
+            .map((value) => limitText(value, 80))
+            .find((value) => behaviorPlayerInteractionActionSet.has(value)) || '';
+    }
+
+    function sanitizeBehaviorInteractionStarterBranch(rawBranch, char, payload = {}, fallbackReason = 'starter_branch_invalid', allowedPlaceIds = []) {
+        if (!rawBranch || typeof rawBranch !== 'object') return null;
+        const allowedPlaceIdSet = new Set(normalizeAllowedBehaviorPlaceIds(allowedPlaceIds));
+        const rawTrigger = rawBranch.trigger && typeof rawBranch.trigger === 'object' ? rawBranch.trigger : {};
+        const playerAction = readBehaviorInteractionStarterAction(rawBranch);
+        if (!playerAction) return null;
+        const triggerPlaceId = toAllowedBehaviorPlaceId(
+            rawTrigger.place_id || rawTrigger.placeId || rawBranch.place_id || rawBranch.placeId || payload?.player_event?.place_id || '',
+            allowedPlaceIdSet
+        );
+        const branch = sanitizeBehaviorBranch({
+            ...rawBranch,
+            branch_id: rawBranch.branch_id || rawBranch.id || `starter_${playerAction}_${triggerPlaceId || 'any'}`,
+            title: rawBranch.title || `互动开场：${playerAction}`,
+            priority: rawBranch.priority || 90,
+            ttl_ms: rawBranch.ttl_ms || rawBranch.ttlMs || 60000,
+            trigger: {
+                ...rawTrigger,
+                player_action: playerAction,
+                place_id: triggerPlaceId
+            }
+        }, char, {
+            ...payload,
+            player_event: {
+                ...(payload?.player_event || {}),
+                action: playerAction,
+                place_id: triggerPlaceId || payload?.player_event?.place_id || ''
+            }
+        }, fallbackReason, allowedPlaceIds);
+        if (!branch || !branch.steps.some((step) => step.action === 'offer_choices')) return null;
+        const nodeId = normalizeBehaviorNodeId(rawBranch.id || rawBranch.branch_id || `starter_${playerAction}_${triggerPlaceId || 'any'}`, 'interaction_starter');
+        const patchId = normalizeBehaviorNodeId(rawBranch.patch_id || rawBranch.patchId || `patch_${nodeId}`, 'patch');
+        return {
+            patch_id: patchId,
+            source: 'ai-interaction-starter',
+            operation: 'upsert_child',
+            target_node_id: 'player_interaction',
+            next_active_node_id: nodeId,
+            reason: limitText(rawBranch.reason || branch.summary || fallbackReason, 180),
+            node: {
+                id: nodeId,
+                type: 'ActionSequence',
+                title: branch.title,
+                branch_kind: 'special',
+                priority: branch.priority,
+                ttl_ms: branch.ttl_ms,
+                trigger: {
+                    player_action: playerAction,
+                    ...(triggerPlaceId ? { place_id: triggerPlaceId } : {})
+                },
+                summary: branch.summary,
+                steps: branch.steps,
+                source: 'ai-interaction-starter'
+            },
+            memory_delta: {}
+        };
+    }
+
+    function sanitizeBehaviorInteractionStarterPack(rawValue, char, payload = {}, fallbackReason = 'starter_pack_invalid', allowedPlaceIds = []) {
+        const rawBranches = Array.isArray(rawValue?.interaction_branches)
+            ? rawValue.interaction_branches
+            : (Array.isArray(rawValue?.starter_branches)
+                ? rawValue.starter_branches
+                : (Array.isArray(rawValue?.special_branches) ? rawValue.special_branches : []));
+        const seenActions = new Set();
+        const patches = [];
+        rawBranches.forEach((branch) => {
+            const patch = sanitizeBehaviorInteractionStarterBranch(branch, char, payload, fallbackReason, allowedPlaceIds);
+            const playerAction = patch?.node?.trigger?.player_action || '';
+            if (!patch || !playerAction || seenActions.has(playerAction)) return;
+            seenActions.add(playerAction);
+            patches.push(patch);
+        });
+        const interactionBranches = patches.map((patch) => ({
+            id: patch.node.id,
+            branch_id: patch.node.id,
+            target_node_id: 'player_interaction',
+            title: patch.node.title,
+            priority: patch.node.priority,
+            ttl_ms: patch.node.ttl_ms,
+            trigger: patch.node.trigger,
+            summary: patch.node.summary,
+            steps: patch.node.steps,
+            branch_kind: 'special',
+            source: 'ai-interaction-starter'
+        }));
+        return { interaction_branches: interactionBranches, interaction_patches: patches };
     }
 
     function summarizeBehaviorCharacter(char) {
@@ -2609,8 +3250,116 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         };
     }
 
-    function summarizeSemanticBehaviorWorld(rawWorld = {}) {
+    function inferBehaviorScene(payload = {}, rawWorld = {}) {
+        const payloadScene = payload.scene && typeof payload.scene === 'object' ? payload.scene : {};
+        const rawScene = rawWorld.scene && typeof rawWorld.scene === 'object' ? rawWorld.scene : {};
+        const sceneType = limitText(
+            payloadScene.type || payloadScene.scene_type || rawWorld.scene_type || rawWorld.sceneType || rawScene.type || '',
+            40
+        ).toLowerCase();
+        const movementModel = limitText(rawWorld.movement_model || rawWorld.movementModel || '', 80).toLowerCase();
+        const candidatePlaceIds = [];
+        const pushPlaceId = (value) => {
+            if (Array.isArray(value)) {
+                value.forEach(pushPlaceId);
+                return;
+            }
+            if (!value && value !== 0) return;
+            const id = limitText(value, 120);
+            if (id) candidatePlaceIds.push(id);
+        };
+        const pushPlaceObject = (place) => {
+            if (!place || typeof place !== 'object') return;
+            pushPlaceId(place.id || place.place_id || place.placeId || place.location_id || place.locationId);
+            pushPlaceId(place.location_ids || place.locationIds);
+            pushPlaceObject(place.place);
+        };
+        pushPlaceId(payload?.player_event?.place_id || payload?.player_event?.placeId);
+        pushPlaceObject(rawWorld.selected_place || rawWorld.selectedPlace);
+        pushPlaceId(rawWorld.allowed_place_ids || rawWorld.allowedPlaceIds);
+        (Array.isArray(rawWorld.places_ordered || rawWorld.placesOrdered)
+            ? (rawWorld.places_ordered || rawWorld.placesOrdered)
+            : (Array.isArray(rawWorld.places) ? rawWorld.places : []))
+            .forEach(pushPlaceObject);
+        const hasRoomPlaceId = candidatePlaceIds.some((id) => (
+            id.startsWith('room-anchor:')
+            || id.startsWith('room-point:')
+            || id.startsWith('room:')
+        ));
+        const hasRoomLayout = Boolean(payload.room_layout || payload.roomLayout || payload.ai_layout || payload.aiLayout);
+        const isRoom = sceneType === 'room' || movementModel.includes('room') || hasRoomPlaceId || hasRoomLayout;
+        if (isRoom) {
+            return {
+                type: 'room',
+                label: limitText(payloadScene.label || rawWorld.scene_label || rawWorld.sceneLabel || '居住房间', 80),
+                runtime_name: '单角色房间行为运行时 V1',
+                input_kind: 'room_behavior_input_v1',
+                activity_label: '房间',
+                place_table_label: '房间家具/站位锚点表',
+                world_description: '语义房间，不是商业街，也不是大世界地图',
+                movement_model: 'room_semantic_v1',
+                movement_rule: '角色只能从 allowed_place_ids 选择当前房间里的家具或站位锚点，只能从 allowed_movement_actions 选择移动动作；不要决定像素坐标，家具锚点和碰撞由前端执行器本地映射。',
+                blocked_context_label: '最近私聊、朋友圈、商业街活动记录、公告任务',
+                policy_rule: '读取大输入库作为背景材料，但私聊、商业街活动记录、公告任务不得触发小人移动、发起互动、改变目的地或重写基础枝丫；当前行为只能由玩家在房间里的互动事件或房间本地运行时触发。',
+                layout_rule: 'input.room_layout 是当前房间 ASCII、当前家具占格和家具清单，只用于理解室内环境；不要输出家具 PLACE 行，行为树仍按 output_contract 生成 patch 或 base_branches。'
+            };
+        }
+        return {
+            type: 'commercial_street',
+            label: limitText(payloadScene.label || rawWorld.scene_label || rawWorld.sceneLabel || '商业街', 80),
+            runtime_name: '单角色街区行为运行时 V1',
+            input_kind: 'commercial_street_behavior_input_v1',
+            activity_label: '商业街',
+            place_table_label: '从左到右的可用建筑表',
+            world_description: '语义街区，不是大世界地图',
+            movement_model: 'side_scrolling_semantic_v1',
+            movement_rule: '角色只能从 allowed_place_ids 选择语义地点，只能从 allowed_movement_actions 选择移动动作；不要决定像素坐标。像素锚点、碰撞和平移移动由前端执行器本地映射。',
+            blocked_context_label: '最近私聊、朋友圈、商业街活动记录、公告任务',
+            policy_rule: '读取大输入库作为背景材料，但私聊和商业街活动记录不得触发小人移动、发起互动、改变目的地或重写基础枝丫。',
+            layout_rule: ''
+        };
+    }
+
+    function summarizeBehaviorRoomLayout(rawLayout = {}) {
+        const layout = rawLayout && typeof rawLayout === 'object' ? rawLayout : {};
+        const room = layout.room && typeof layout.room === 'object' ? layout.room : {};
+        const unit = layout.unit && typeof layout.unit === 'object' ? layout.unit : {};
+        const furniture = Array.isArray(layout.furniture) ? layout.furniture : [];
+        return {
+            kind: limitText(layout.kind || 'pixel_room_ascii_layout_v1', 80),
+            usage: '当前输入发生在房间内。该布局只帮助理解家具和空间，不改变输出格式；不要生成 PLACE 家具摆放行。',
+            unit: {
+                token: limitText(unit.token || '[b]', 20),
+                source: limitText(unit.source || '', 120),
+                cellPx: unit.cellPx || unit.cell_px || null
+            },
+            room: {
+                size: room.size || null,
+                legend: room.legend || null,
+                ascii: limitText(room.ascii || '', 6000)
+            },
+            current_ascii: limitText(layout.current_ascii || layout.currentAscii || '', 6000),
+            furniture: furniture.slice(0, 60).map((item) => ({
+                id: limitText(item?.id || '', 120),
+                kind: limitText(item?.kind || '', 60),
+                direction: limitText(item?.direction || '', 30),
+                token: limitText(item?.token || '', 30),
+                size: item?.size || null,
+                rules: Array.isArray(item?.rules) ? item.rules.slice(0, 8).map((rule) => limitText(rule, 60)).filter(Boolean) : [],
+                direction_options: Array.isArray(item?.direction_options || item?.directionOptions)
+                    ? (item.direction_options || item.directionOptions).slice(0, 8).map((option) => ({
+                        direction: limitText(option?.direction || '', 30),
+                        size: option?.size || null
+                    }))
+                    : [],
+                grid_box: item?.grid_box || item?.gridBox || null
+            })).filter((item) => item.id)
+        };
+    }
+
+    function summarizeSemanticBehaviorWorld(rawWorld = {}, scene = null) {
         const raw = rawWorld && typeof rawWorld === 'object' ? rawWorld : {};
+        const sceneInfo = scene || inferBehaviorScene({}, raw);
         const rawPlaces = Array.isArray(raw.places_ordered || raw.placesOrdered)
             ? (raw.places_ordered || raw.placesOrdered)
             : (Array.isArray(raw.places) ? raw.places : []);
@@ -2668,8 +3417,10 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             1200
         );
         return {
-            movement_model: 'side_scrolling_semantic_v1',
-            movement_rule: '角色只能从 allowed_place_ids 选择语义地点，只能从 allowed_movement_actions 选择移动动作；不要决定像素坐标。像素锚点、碰撞和平移移动由前端执行器本地映射。',
+            scene_type: sceneInfo.type,
+            scene_label: sceneInfo.label,
+            movement_model: limitText(raw.movement_model || raw.movementModel || sceneInfo.movement_model, 80),
+            movement_rule: limitText(raw.movement_rule || raw.movementRule || sceneInfo.movement_rule, 500),
             ordered_place_text: orderedPlaceText,
             allowed_place_ids: allowedPlaceIds,
             allowed_movement_actions: movementActions,
@@ -2683,28 +3434,86 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         };
     }
 
+    const behaviorPromptProtocolKeys = new Set([
+        'id', 'type', 'schema', 'version', 'source', 'operation', 'action', 'trigger',
+        'target_node_id', 'targetNodeId', 'next_active_node_id', 'nextActiveNodeId',
+        'root_id', 'rootId', 'active_node_id', 'activeNodeId', 'tree_id', 'treeId',
+        'node_id', 'nodeId', 'branch_id', 'branchId', 'patch_id', 'patchId',
+        'place_id', 'placeId', 'from_place_id', 'fromPlaceId', 'to_place_id', 'toPlaceId',
+        'target_place_id', 'targetPlaceId', 'location_id', 'locationId',
+        'player_action', 'playerAction', 'semantic_role', 'semanticRole'
+    ]);
+
+    function escapeBehaviorPromptRegex(value = '') {
+        return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    function personalizeBehaviorPromptText(text = '', userDisplayName = '') {
+        const displayName = limitText(userDisplayName, 80);
+        const source = String(text || '');
+        if (!displayName || displayName === '用户' || displayName === '玩家') return source;
+        const personalized = source.replace(/玩家|用户/g, displayName);
+        const escapedName = escapeBehaviorPromptRegex(displayName);
+        return personalized.replace(new RegExp(`${escapedName}（${escapedName}小人）`, 'g'), `${displayName}小人`);
+    }
+
+    function shouldPersonalizeBehaviorPromptKey(key = '') {
+        const normalizedKey = String(key || '');
+        if (!normalizedKey) return true;
+        if (behaviorPromptProtocolKeys.has(normalizedKey)) return false;
+        if (/_ids?$/.test(normalizedKey) || /Ids?$/.test(normalizedKey)) return false;
+        return true;
+    }
+
+    function personalizeBehaviorPromptValue(value, userDisplayName = '', key = '') {
+        if (typeof value === 'string') {
+            return shouldPersonalizeBehaviorPromptKey(key)
+                ? personalizeBehaviorPromptText(value, userDisplayName)
+                : value;
+        }
+        if (Array.isArray(value)) {
+            return value.map((item) => personalizeBehaviorPromptValue(item, userDisplayName, key));
+        }
+        if (value && typeof value === 'object') {
+            return Object.entries(value).reduce((result, [entryKey, entryValue]) => {
+                result[entryKey] = personalizeBehaviorPromptValue(entryValue, userDisplayName, entryKey);
+                return result;
+            }, {});
+        }
+        return value;
+    }
+
     async function buildBehaviorInputPackage(userId, db, char, payload = {}) {
         const engineContextWrapper = { getUserDb: context.getUserDb, getMemory: context.getMemory, userId, forceCityDetail: true };
         const universalResult = await buildUniversalContext(engineContextWrapper, char, '', false);
         const userProfile = db.getUserProfile?.() || {};
-        const world = summarizeSemanticBehaviorWorld(payload.world || payload.renderer || {});
-        return {
-            input_kind: 'commercial_street_behavior_input_v1',
+        const userDisplayName = limitText(userProfile.name || payload.user?.name || payload.userName || '', 80) || '用户';
+        const rawWorld = payload.world || payload.renderer || {};
+        const sceneContext = inferBehaviorScene(payload, rawWorld);
+        const world = summarizeSemanticBehaviorWorld(rawWorld, sceneContext);
+        const roomLayout = sceneContext.type === 'room'
+            ? summarizeBehaviorRoomLayout(payload.room_layout || payload.roomLayout || payload.ai_layout || payload.aiLayout || {})
+            : null;
+        const behaviorTree = await buildCompressedBehaviorTreeForInput(db, char, payload);
+        const inputPackage = {
+            input_kind: sceneContext.input_kind,
             generated_at: new Date().toISOString(),
+            scene_context: sceneContext,
             character: summarizeBehaviorCharacter(char),
             user: {
                 id: userId,
-                name: userProfile.name || '用户'
+                name: userDisplayName
             },
             player_event: payload.player_event || {},
-            behavior_tree: payload.behavior_tree && typeof payload.behavior_tree === 'object' ? payload.behavior_tree : null,
-            recent_special_interactions: summarizeRecentBehaviorSpecialInteractions(payload.behavior_tree || {}),
+            behavior_tree: behaviorTree,
+            recent_special_interactions: summarizeRecentBehaviorSpecialInteractions(behaviorTree || {}),
             world,
+            ...(roomLayout ? { room_layout: roomLayout } : {}),
             input_policy: {
                 large_input_enabled: true,
                 private_chat_can_trigger_behavior: false,
                 city_activity_can_trigger_behavior: false,
-                rule: '读取大输入库作为背景材料，但私聊和商业街活动记录不得触发小人移动、发起互动、改变目的地或重写基础枝丫。'
+                rule: sceneContext.policy_rule
             },
             large_input: {
                 source: 'buildUniversalContext(forceCityDetail=true)',
@@ -2717,64 +3526,126 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             },
             output_contract: getBehaviorOutputContract(world)
         };
+        return personalizeBehaviorPromptValue(inputPackage, userDisplayName);
     }
 
-    async function createBehaviorBranchWithModel(char, inputPackage, payload = {}) {
+    function buildBehaviorBaseRebuildPayload(payload = {}) {
+        const source = payload && typeof payload === 'object' ? payload : {};
+        const rawTree = source.behavior_tree && typeof source.behavior_tree === 'object' ? source.behavior_tree : {};
+        const incomingContext = rawTree.iteration_context && typeof rawTree.iteration_context === 'object'
+            ? rawTree.iteration_context
+            : {};
+        return {
+            ...source,
+            behavior_tree: {
+                tree_id: limitText(rawTree.tree_id || rawTree.treeId || 'street_runtime_single_character', 120),
+                schema: limitText(rawTree.schema || 'full_behavior_tree_patch_v1', 120),
+                version: 1,
+                root_id: limitText(rawTree.root_id || rawTree.rootId || 'street_character_root', 120),
+                active_node_id: '',
+                nodes: {},
+                memory: {},
+                patch_history: [],
+                iteration_context: {
+                    config: incomingContext.config || {},
+                    summaries: [],
+                    summary_cursor_record_id: '',
+                    records: []
+                },
+                rebuild_context_reset: true
+            }
+        };
+    }
+
+    async function createBehaviorBranchWithModel(char, inputPackage, payload = {}, db = null) {
         const payloadEndpoint = limitText(payload.api_endpoint || payload.endpoint || '', 500);
         const payloadKey = String(payload.api_key || payload.key || '').trim();
         const usePayloadCredentials = Boolean(payloadEndpoint && payloadKey);
         const apiEndpoint = usePayloadCredentials ? payloadEndpoint : limitText(char?.api_endpoint || '', 500);
         const apiKey = usePayloadCredentials ? payloadKey : String(char?.api_key || '').trim();
-        const modelName = limitText(payload.model_name || payload.model || char?.model_name || '', 200);
+        const payloadModelName = limitText(payload.model_name || payload.model || '', 200);
+        const modelName = usePayloadCredentials
+            ? limitText(payloadModelName || char?.model_name || '', 200)
+            : limitText(char?.model_name || '', 200);
         if (!apiEndpoint || !apiKey || !modelName) {
             throw createCityError('行为树生成缺少模型 URL/Key/模型名，请补全后重试。', 400, true);
         }
+        const sceneContext = inputPackage?.scene_context && typeof inputPackage.scene_context === 'object'
+            ? inputPackage.scene_context
+            : inferBehaviorScene(payload, inputPackage?.world || {});
+        const promptUserDisplayName = inputPackage?.user?.name || inputPackage?.user?.display_name || '';
+        const personalizePrompt = (text) => personalizeBehaviorPromptText(text, promptUserDisplayName);
         const messages = [
             {
                 role: 'system',
-                content: [
-                    '你是“单角色街区行为运行时 V1”的完整行为树 patch 生成器。',
+                content: personalizePrompt([
+                    `你是“${sceneContext.runtime_name || '单角色街区行为运行时 V1'}”的完整行为树 patch 生成器。`,
                     '你只返回一个 JSON 对象，不要输出 markdown、解释或额外文本。',
+                    'JSON 字符串内部不要使用未转义英文双引号；引用玩家选项或短语时请用中文引号「」或转义成 \\"。',
                     '你的任务不是替换整棵树，而是基于 input.behavior_tree 返回一个局部 patch，合并进现有完整行为树。',
                     '基础枝丫是角色无玩家互动时自己的生活、闲逛、地点行为；玩家互动后的后续分歧才叫特殊枝丫。',
                     '本接口正在响应玩家互动，所以 patch.operation 固定为 upsert_child，target_node_id 必须是 player_interaction，并设置 next_active_node_id 为本次 node.id。',
                     '这通常是玩家在预制互动枝丫末尾选择某个回应后的后续枝丫；请承接 input.player_event，不要重复预制开场。',
-                    '除非明确要结束互动，否则特殊枝丫最后一步必须是 offer_choices，给 2-4 个玩家回应选项；choice.trigger 必须来自玩家互动动作白名单。',
+                    '特殊枝丫最后一步必须是 offer_choices，给 2-4 个玩家回应选项；choice.trigger 必须来自玩家互动动作白名单。',
+                    '活跃度规则：每条特殊枝丫在 offer_choices 前要有 3-5 个可见步骤，至少 1 个身体动作或移动步骤，至少 2 个 say/emote；不要只站着说一句就给选项。',
+                    '硬规则：任何 choice.trigger 为 suggest_destination 的选项，都必须填写 choice.place_id，且必须从 input.world.allowed_place_ids 选择；这是前端判断目的地的必填协议字段，不能只把地点写进 label。',
                     'input.recent_special_interactions 是最近特殊互动台词，禁止复写这些台词、开头、收尾或同一情绪推进。',
-                    '你可以读取 input.large_input，但它只是背景材料。最近私聊、朋友圈、商业街活动记录、公告任务不能作为小人移动、发起互动、改变目的地或重写基础枝丫的原因。',
+                    `你可以读取 input.large_input，但它只是背景材料。${sceneContext.blocked_context_label || '最近私聊、朋友圈、商业街活动记录、公告任务'}不能作为小人移动、发起互动、改变目的地或重写基础枝丫的原因。`,
                     '特殊枝丫只能由当前 input.player_event 触发；基础枝丫只由 runtime_state、location、nearby_player、otherwise、idle 等本地运行时触发。',
-                    '角色可以自由决定在商业街做什么，但不要输出 x/y、像素坐标、锚点或碰撞信息。',
+                    `角色可以自由决定在${sceneContext.activity_label || '商业街'}做什么，但不要输出 x/y、像素坐标、锚点或碰撞信息。`,
+                    sceneContext.layout_rule || '',
                     '如果要移动，node.steps.action 必须从 input.world.allowed_movement_actions 里选择。',
                     '如果动作需要地点，place_id/from_place_id/to_place_id 必须从 input.world.allowed_place_ids 里选择。',
                     '不要编造表外地点、表外动作、像素点或地图对象。',
                     `node.steps.action 只能使用：${behaviorTreeAllowedActions.join(', ')}。`
-                ].join('\n')
+                ].filter(Boolean).join('\n'))
             },
             {
                 role: 'user',
-                content: [
+                content: personalizePrompt([
                     '基于下面输入，为角色小人生成一个短小、可玩、能合并进完整行为树的局部 patch。',
-                    '优先且只响应当前 player_event。large_input.preamble 可以帮助理解角色语气和背景，但不要因为最近私聊或商业街活动记录让角色行动。',
+                    `优先且只响应当前 player_event。large_input.preamble 可以帮助理解角色语气和背景，但不要因为${sceneContext.blocked_context_label || '最近私聊或商业街活动记录'}让角色行动。`,
                     '请把玩家互动造成的分歧写成 player_interaction 下的新 ActionSequence 节点；不要改写基础枝丫，除非输入明确要求重规划角色的无互动默认行为。',
                     '如果 input.behavior_tree.patch_history 里已有上一轮互动，请让新 node 承接上一轮，而不是重复开场。',
                     '如果 input.recent_special_interactions 有内容，请承接最近状态并换新的推进，不要复用里面的句子或相同问法。',
+                    '让角色更像正在场景里活动：先有靠近、转身、停顿、看向地点、走两步或整理东西，再说短句；台词每句短一点，但可以有 2 句。',
                     '最后给出 offer_choices 让玩家继续选择；这些选择会触发下一轮特殊枝丫生成。',
-                    'world 是语义街区，不是大世界地图；不要让角色选择具体像素点。',
-                    'world.places_ordered 是从左到右的可用建筑表，world.allowed_place_ids 是唯一可用地点 ID 白名单。',
+                    `world 是${sceneContext.world_description || '语义街区，不是大世界地图'}；不要让角色选择具体像素点。`,
+                    `world.places_ordered 是${sceneContext.place_table_label || '从左到右的可用建筑表'}，world.allowed_place_ids 是唯一可用地点 ID 白名单。`,
                     'world.allowed_movement_actions 是唯一可用移动动作白名单。',
+                    sceneContext.layout_rule || '',
                     '输出格式必须符合 input.output_contract.schema。',
                     '',
                     JSON.stringify(inputPackage, null, 2)
-                ].join('\n')
+                ].filter(Boolean).join('\n'))
             }
         ];
-        const rawOutput = await callLLM({
-            endpoint: apiEndpoint,
-            key: apiKey,
+        recordCityLlmDebug(db, char, 'input', 'city_behavior_branch', messages, {
             model: modelName,
-            messages,
-            maxTokens: 1800,
-            temperature: 0.72
+            action: inputPackage?.player_event?.action || '',
+            placeId: inputPackage?.player_event?.place_id || ''
+        });
+        let rawOutput = '';
+        try {
+            rawOutput = await callLLM({
+                endpoint: apiEndpoint,
+                key: apiKey,
+                model: modelName,
+                messages,
+                maxTokens: 1800,
+                temperature: 0.72,
+                debugAttempt: buildCityAttemptRecorder(db, char, 'city_behavior_branch', {
+                    action: inputPackage?.player_event?.action || '',
+                    placeId: inputPackage?.player_event?.place_id || ''
+                })
+            });
+        } catch (err) {
+            throw createCityError(`行为树生成请求失败，请重试：${err.message}`, 502, true);
+        }
+        recordCityLlmDebug(db, char, 'output', 'city_behavior_branch', rawOutput, {
+            model: modelName,
+            action: inputPackage?.player_event?.action || '',
+            placeId: inputPackage?.player_event?.place_id || ''
         });
         let parsed = null;
         try {
@@ -2813,13 +3684,16 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         };
     }
 
-    async function createBaseBehaviorBranchesWithModel(char, inputPackage, payload = {}) {
+    async function createBaseBehaviorBranchesWithModel(char, inputPackage, payload = {}, db = null) {
         const payloadEndpoint = limitText(payload.api_endpoint || payload.endpoint || '', 500);
         const payloadKey = String(payload.api_key || payload.key || '').trim();
         const usePayloadCredentials = Boolean(payloadEndpoint && payloadKey);
         const apiEndpoint = usePayloadCredentials ? payloadEndpoint : limitText(char?.api_endpoint || '', 500);
         const apiKey = usePayloadCredentials ? payloadKey : String(char?.api_key || '').trim();
-        const modelName = limitText(payload.model_name || payload.model || char?.model_name || '', 200);
+        const payloadModelName = limitText(payload.model_name || payload.model || '', 200);
+        const modelName = usePayloadCredentials
+            ? limitText(payloadModelName || char?.model_name || '', 200)
+            : limitText(char?.model_name || '', 200);
         const baseInput = {
             ...inputPackage,
             output_contract: getBehaviorBaseOutputContract(inputPackage?.world || {})
@@ -2827,44 +3701,79 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         if (!apiEndpoint || !apiKey || !modelName) {
             throw createCityError('基础枝丫生成缺少模型 URL/Key/模型名，请补全后重试。', 400, true);
         }
+        const sceneContext = baseInput?.scene_context && typeof baseInput.scene_context === 'object'
+            ? baseInput.scene_context
+            : inferBehaviorScene(payload, baseInput?.world || {});
+        const promptUserDisplayName = baseInput?.user?.name || baseInput?.user?.display_name || '';
+        const personalizePrompt = (text) => personalizeBehaviorPromptText(text, promptUserDisplayName);
         const messages = [
             {
                 role: 'system',
-                content: [
-                    '你是“单角色街区行为运行时 V1”的基础枝丫包生成器。',
+                content: personalizePrompt([
+                    `你是“${sceneContext.runtime_name || '单角色街区行为运行时 V1'}”的完整行为树初始枝丫包生成器。`,
                     '你只返回一个 JSON 对象，不要输出 markdown、解释或额外文本。',
-                    '本接口只生成基础枝丫：角色没有被玩家互动打断时，自己在街区里的生活、闲逛、好奇、地点停留和轻微说话。',
-                    '不要生成 player_interaction，不要生成特殊互动后续，不要等待玩家选择，不要使用 offer_choices。',
-                    '你可以读取 input.large_input，但它只是背景材料。最近私聊、朋友圈、商业街活动记录、公告任务不能作为小人移动、发起互动、改变目的地或重写基础枝丫的原因。',
+                    'JSON 字符串内部不要使用未转义英文双引号；引用玩家选项或短语时请用中文引号「」或转义成 \\"。',
+                    `本接口生成两类枝丫：base_branches 是无玩家互动时角色自己在${sceneContext.activity_label || '商业街'}里的生活、闲逛、好奇、地点停留和轻微说话；interaction_branches 是玩家第一次点击打招呼/闲聊/在干嘛等按钮时播放的第一段互动开场。`,
+                    'interaction_branches 必须写入 player_interaction，每条对应一个 trigger.player_action，最后一步必须是 offer_choices，给 2-4 个后续选项。',
+                    '硬规则：任何 choice.trigger 为 suggest_destination 的选项，都必须填写 choice.place_id，且必须从 input.world.allowed_place_ids 选择；这是前端判断目的地的必填协议字段，不能只把地点写进 label。',
+                    'base_branches 不要生成 player_interaction，不要等待玩家选择，不要使用 offer_choices。',
+                    '活跃度规则：除 movement_recovery 外，每条 base_branch 要有 4-7 个步骤，至少 2 个身体动作/移动/地点停留步骤，至少 1 个 say，最好再有 1 个 emote；不要输出 wait-only、idle-only 或纯摘要式枝丫。',
+                    'interaction_branches 在 offer_choices 前要有 3-5 个可见步骤，至少 1 个身体动作或移动步骤，至少 2 个 say/emote。',
+                    `你可以读取 input.large_input，但它只是背景材料。${sceneContext.blocked_context_label || '最近私聊、朋友圈、商业街活动记录、公告任务'}不能作为小人移动、发起互动、改变目的地或重写基础枝丫的原因。`,
                     '基础枝丫只能由 runtime_state、location、nearby_player、otherwise、idle 等本地运行时触发。',
-                    '角色可以自由决定在商业街做什么，但不要输出 x/y、像素坐标、锚点或碰撞信息。',
+                    'movement_recovery 是运行时移动失败专用基础枝丫；trigger 固定 runtime_state.travel_failed，steps 不要再移动，只用 say/emote/wait/face_player 做短恢复反应。',
+                    '互动开场枝丫只能由当前场景内玩家主动点击触发，不要写成模型刚看见私聊后主动说话。',
+                    `角色可以自由决定在${sceneContext.activity_label || '商业街'}做什么，但不要输出 x/y、像素坐标、锚点或碰撞信息。`,
+                    sceneContext.layout_rule || '',
                     '如果要移动，steps.action 必须从 input.world.allowed_movement_actions 里选择。',
                     '如果动作需要地点，place_id/from_place_id/to_place_id 必须从 input.world.allowed_place_ids 里选择。',
                     '不要编造表外地点、表外动作、像素点或地图对象。',
-                    '生成 12 到 20 条基础枝丫，尽量分布到 hard_needs/routine_goal/place_affordance/background_mood/curiosity/wander/idle_micro。',
-                    `steps.action 只能使用：${behaviorTreeAllowedActions.filter((action) => action !== 'offer_choices').join(', ')}。`
-                ].join('\n')
+                    '生成 8 到 14 条基础枝丫，尽量分布到 hard_needs/routine_goal/place_affordance/background_mood/curiosity/wander/idle_micro；可以额外给 movement_recovery 生成 1 条移动失败恢复枝丫。',
+                    '生成 4 到 8 条互动开场枝丫，优先覆盖 greet、small_talk、ask_current_action、ask_destination、request_company、comfort。',
+                    `base_branches.steps.action 只能使用：${behaviorTreeAllowedActions.filter((action) => action !== 'offer_choices').join(', ')}。`,
+                    `interaction_branches.steps.action 只能使用：${behaviorTreeAllowedActions.join(', ')}。`
+                ].filter(Boolean).join('\n'))
             },
             {
                 role: 'user',
-                content: [
-                    '基于下面输入，生成一批基础枝丫包。',
-                    '这些枝丫会写入完整行为树的基础分类节点，并进入自动轮询池。',
-                    '每条枝丫 3-6 个步骤，至少包含一个移动或 idle_at_place，最好穿插一句短台词或一个 emote。',
-                    '不要因为最近私聊或商业街活动记录让角色行动；它们只能影响语气、轻微心情和说话风格。',
-                    '输出格式必须是：{"base_branches":[...]}，每项符合 input.output_contract.schema.base_branches[0]。',
+                content: personalizePrompt([
+                    '基于下面输入，生成一批完整行为树初始枝丫。',
+                    'base_branches 会写入完整行为树的基础分类节点；movement_recovery 只在循迹失败时触发，不进入普通自动轮询。',
+                    'interaction_branches 会写入 player_interaction，玩家点击对应互动按钮时先执行这一段，末尾 choices 再触发下一轮特殊枝丫实时生成。',
+                    'base_branches 每条 4-7 个步骤，至少包含 2 个移动/身体动作/idle_at_place/browse_near/loop_in_front_of/patrol_segment/wander_between 步骤，且至少 1 个 say；可以再穿插 1 个 emote。',
+                    'interaction_branches 每条 4-6 个步骤，必须短、像第一段临场开场；最后一步 offer_choices，前面至少 2 个 say/emote 和 1 个身体动作或移动步骤。',
+                    `不要因为${sceneContext.blocked_context_label || '最近私聊或商业街活动记录'}让角色行动；它们只能影响语气、轻微心情和说话风格。`,
+                    `world 是${sceneContext.world_description || '语义街区，不是大世界地图'}；world.allowed_place_ids 是唯一可用地点 ID 白名单。`,
+                    sceneContext.layout_rule || '',
+                    '输出格式必须是：{"base_branches":[...],"interaction_branches":[...]}，每项分别符合 input.output_contract.schema.base_branches[0] 和 input.output_contract.schema.interaction_branches[0]。',
                     '',
                     JSON.stringify(baseInput, null, 2)
-                ].join('\n')
+                ].filter(Boolean).join('\n'))
             }
         ];
-        const rawOutput = await callLLM({
-            endpoint: apiEndpoint,
-            key: apiKey,
+        recordCityLlmDebug(db, char, 'input', 'city_behavior_base_branches', messages, {
             model: modelName,
-            messages,
-            maxTokens: 5200,
-            temperature: 0.76
+            placeCount: Array.isArray(baseInput?.world?.allowed_place_ids) ? baseInput.world.allowed_place_ids.length : 0
+        });
+        let rawOutput = '';
+        try {
+            rawOutput = await callLLM({
+                endpoint: apiEndpoint,
+                key: apiKey,
+                model: modelName,
+                messages,
+                maxTokens: 6800,
+                temperature: 0.76,
+                debugAttempt: buildCityAttemptRecorder(db, char, 'city_behavior_base_branches', {
+                    placeCount: Array.isArray(baseInput?.world?.allowed_place_ids) ? baseInput.world.allowed_place_ids.length : 0
+                })
+            });
+        } catch (err) {
+            throw createCityError(`基础枝丫生成请求失败，请重试：${err.message}`, 502, true);
+        }
+        recordCityLlmDebug(db, char, 'output', 'city_behavior_base_branches', rawOutput, {
+            model: modelName,
+            placeCount: Array.isArray(baseInput?.world?.allowed_place_ids) ? baseInput.world.allowed_place_ids.length : 0
         });
         let parsed = null;
         try {
@@ -2879,11 +3788,19 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             'model_output_invalid',
             inputPackage?.world?.allowed_place_ids || []
         );
+        const interactionStarterPack = sanitizeBehaviorInteractionStarterPack(
+            parsed,
+            char,
+            payload,
+            'model_output_invalid',
+            inputPackage?.world?.allowed_place_ids || []
+        );
         if (!sanitized.base_patches.length) {
             throw createCityError('基础枝丫生成结果没有可用的行为步骤，请重试。', 502, true);
         }
         return {
             ...sanitized,
+            ...interactionStarterPack,
             raw_output: String(rawOutput || ''),
             fallback: false
         };
@@ -2903,7 +3820,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
                 model_name: char.model_name || ''
             });
         } catch (e) {
-            res.status(500).json({ error: e.message });
+            res.status(e.statusCode === 400 ? 400 : 500).json({ error: e.message });
         }
     });
 
@@ -2915,7 +3832,10 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             const input = await buildBehaviorInputPackage(req.user.id, req.db, char, req.body || {});
             res.json({ success: true, skeleton: getBehaviorTreeSkeleton(), input });
         } catch (e) {
-            res.status(500).json({ error: e.message });
+            res.status(e.status || 500).json({
+                error: e.message,
+                ...(e.canRetry ? { canRetry: true } : {})
+            });
         }
     });
 
@@ -2924,17 +3844,21 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             ensureCityDb(req.db);
             const char = req.db.getCharacter(req.params.characterId);
             if (!char) return res.status(404).json({ error: '角色不存在' });
-            const input = await buildBehaviorInputPackage(req.user.id, req.db, char, req.body || {});
-            const generated = await createBaseBehaviorBranchesWithModel(char, input, req.body || {});
+            const rebuildPayload = buildBehaviorBaseRebuildPayload(req.body || {});
+            const input = await buildBehaviorInputPackage(req.user.id, req.db, char, rebuildPayload);
+            const generated = await createBaseBehaviorBranchesWithModel(char, input, rebuildPayload, req.db);
             res.json({
                 success: true,
                 skeleton: getBehaviorTreeSkeleton(),
                 input: {
                     ...input,
+                    rebuild_context_reset: true,
                     output_contract: getBehaviorBaseOutputContract(input?.world || {})
                 },
                 base_branches: generated.base_branches,
                 base_patches: generated.base_patches,
+                interaction_branches: generated.interaction_branches || [],
+                interaction_patches: generated.interaction_patches || [],
                 raw_output: generated.raw_output,
                 fallback: !!generated.fallback,
                 error: generated.error || ''
@@ -2953,7 +3877,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             const char = req.db.getCharacter(req.params.characterId);
             if (!char) return res.status(404).json({ error: '角色不存在' });
             const input = await buildBehaviorInputPackage(req.user.id, req.db, char, req.body || {});
-            const generated = await createBehaviorBranchWithModel(char, input, req.body || {});
+            const generated = await createBehaviorBranchWithModel(char, input, req.body || {}, req.db);
             res.json({
                 success: true,
                 skeleton: getBehaviorTreeSkeleton(),
@@ -3123,7 +4047,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         }
         cron.schedule(tickRate, async () => {
         try {
-            const users = authDb.getAllUsers();
+            const users = filterAutomationUsers(authDb.getAllUsers(), Date.now());
             for (const user of users) {
                 queueCityTask(
                     user.id,
@@ -3208,7 +4132,8 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
                                 char.calories ?? 2000,
                                 currentMinute,
                                 passiveInterval,
-                                minuteMetabolism
+                                minuteMetabolism,
+                                db
                             );
                             let currentCals = passiveState.calories;
                             if (currentCals < 500 && currentCityStatus === 'idle') currentCityStatus = 'hungry';
@@ -3314,6 +4239,57 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
     }
 
     // Core simulation
+
+    function getExhaustionRestOverride(char, currentCals, districts, requestedDistrict = null) {
+        if (!Array.isArray(districts) || districts.length === 0) return null;
+        const state = normalizeSurvivalState(char);
+        const districtType = String(requestedDistrict?.type || '').trim();
+        const calories = Number(currentCals ?? char.calories ?? 2000);
+        const isAlreadyRecovery = ['rest', 'food', 'medical'].includes(districtType);
+        if (calories <= 0 || char.city_status === 'coma') return null;
+        if (calories < 500) return null;
+        if (isAlreadyRecovery) return null;
+
+        const extremeExhaustion = state.energy <= 10
+            || state.sleep_debt >= 90
+            || (state.energy <= 20 && state.sleep_debt >= 75);
+        const heavyDistrict = ['work', 'education', 'gambling', 'leisure', 'wander', 'shopping'].includes(districtType);
+        const tooTiredForRequestedAction = requestedDistrict
+            && heavyDistrict
+            && (state.energy < 20 || state.sleep_debt > 75);
+        const shouldForceRest = requestedDistrict
+            ? (extremeExhaustion || tooTiredForRequestedAction)
+            : (state.energy < 20 || state.sleep_debt > 75);
+
+        if (!shouldForceRest) return null;
+        return districts.find(d => d.type === 'rest')
+            || districts.find(d => d.id === 'home')
+            || null;
+    }
+
+    function buildExhaustionRestReason(char, currentCals, originalDistrict = null) {
+        const state = normalizeSurvivalState(char);
+        const parts = [];
+        if (state.energy <= 10) parts.push(`精力=${state.energy}/100`);
+        else if (state.energy < 20) parts.push(`精力偏低=${state.energy}/100`);
+        if (state.sleep_debt >= 90) parts.push(`睡眠债=${state.sleep_debt}/100`);
+        else if (state.sleep_debt > 75) parts.push(`睡眠债偏高=${state.sleep_debt}/100`);
+        if (Number(currentCals ?? char.calories ?? 2000) < 900) parts.push('体力库存偏低');
+        const source = originalDistrict?.name ? `原本想去 ${originalDistrict.name}，但` : '';
+        return `${source}${parts.join('，') || '状态透支'}，继续活动会明显恶化。`;
+    }
+
+    function buildForcedRestNarrations(char, originalDistrict, restDistrict, currentCals) {
+        const reason = buildExhaustionRestReason(char, currentCals, originalDistrict);
+        const restName = restDistrict?.name || '能休息的地方';
+        return {
+            action: `[${String(restDistrict?.id || 'home').toUpperCase()}]`,
+            log: `${char.name}${reason}最后还是停了下来，转身去${restName}先补觉。眼皮沉得厉害，脚步也慢，能撑到躺下已经算是把自己从透支边缘拽回来。`,
+            chat: '',
+            moment: '',
+            diary: '不是不想把事情做完，是身体已经不太听使唤。先睡一会儿，醒了再说。'
+        };
+    }
 
     async function simulateCharacter(char, db, userId, districts, config, metabolismRate) {
         let currentCals = Math.max(0, (char.calories ?? 2000) - metabolismRate);
@@ -3486,8 +4462,16 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             }
         }
 
+        let forcedRestReason = '';
+        const restOverride = getExhaustionRestOverride(char, currentCals, districts, targetDistrict);
+        if (restOverride) {
+            forcedRestReason = buildExhaustionRestReason(char, currentCals, targetDistrict);
+            targetDistrict = restOverride;
+        }
+
         if (targetDistrict) {
-            console.log(`[City] ${char.name} 📅 按日程前往 ${targetDistrict.emoji} ${targetDistrict.name} (准备生成文案)`);
+            const intentLabel = forcedRestReason ? '透支休整' : '按日程';
+            console.log(`[City] ${char.name} 📅 ${intentLabel}前往 ${targetDistrict.emoji} ${targetDistrict.name} (准备生成文案)`);
         }
 
         // LLM decision with inventory awareness + active event context
@@ -3497,10 +4481,11 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         const lastQuestReview = activeQuestClaim ? db.city.getLatestQuestProgressReviewForClaim?.(activeQuestClaim, char.id) : null;
         const recentQuestReviews = activeQuestClaim ? db.city.getRecentQuestProgressReviewsForClaim?.(activeQuestClaim, char.id, 4) || [] : [];
         const questContext = buildQuestPromptContext(db.city.getActiveQuests(), activeQuestClaim, lastQuestReview, recentQuestReviews);
-        const prompt = buildSurvivalPrompt(districts, { ...char, calories: currentCals }, inventory, activeEvents, universalResult, targetDistrict, questContext, db);
+        const prompt = buildSurvivalPrompt(districts, { ...char, calories: currentCals }, inventory, activeEvents, universalResult, targetDistrict, questContext, db, { forcedRestReason });
+        let actionDistrict = targetDistrict || null;
         try {
             const messages = [
-                { role: 'system', content: '你是一个城市生活模拟角色行动引擎。你必须严格按照用户要求返回完整 JSON 对象，不要输出 JSON 之外的解释、markdown 或额外文本。返回结果必须包含 action、log、chat、moment、diary 五个字段。' },
+                { role: 'system', content: '你是一个城市生活模拟角色行动引擎。你必须严格按照用户要求返回完整 JSON 对象，不要输出 JSON 之外的解释、markdown 或额外文本。返回结果必须包含 action、log、chat、moment、diary 五个字段。正文内如需引用话语，优先使用中文引号“”。' },
                 { role: 'user', content: prompt }
             ];
             recordCityLlmDebug(db, char, 'input', 'city_action_decision', messages, { model: char.model_name, location: char.location || '', status: currentCityStatus });
@@ -3513,9 +4498,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
                 })
             });
             recordCityLlmDebug(db, char, 'output', 'city_action_decision', reply, { model: char.model_name, location: char.location || '', status: currentCityStatus });
-            const cleaned = String(reply || '').replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim();
-            if (!cleaned) throw new Error('商业街行动生成失败：模型没有返回 JSON 对象，请重试。');
-            const richNarrations = JSON.parse(cleaned);
+            const richNarrations = parseCityActionNarrations(reply);
             if (!richNarrations || typeof richNarrations !== 'object' || Array.isArray(richNarrations)) {
                 throw new Error('商业街行动生成失败：JSON 结构无效，请重试。');
             }
@@ -3567,6 +4550,15 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             if (!district) {
                 throw new Error(`商业街行动生成失败：action 不在可选地点中 (${codeMatch})，请重试。`);
             }
+            actionDistrict = district;
+
+            const postChoiceRestOverride = getExhaustionRestOverride(char, currentCals, districts, district);
+            if (postChoiceRestOverride && postChoiceRestOverride.id !== district.id) {
+                const restNarrations = buildForcedRestNarrations(char, district, postChoiceRestOverride, currentCals);
+                console.log(`[City] ${char.name} 🛌 状态透支，覆盖 ${district.name} -> ${postChoiceRestOverride.name}`);
+                await applyDecision(postChoiceRestOverride, char, db, userId, currentCals, config, activeEvents, restNarrations, { preserveDirectedDistrict: true });
+                return;
+            }
 
             // Schedule adherence tracking
             if (schedule) {
@@ -3604,6 +4596,15 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             await applyDecision(district, char, db, userId, currentCals, config, activeEvents, richNarrations, { preserveDirectedDistrict: true });
         } catch (e) {
             console.error(`[City] ${char.name} LLM 失败: ${e.message}`);
+            if (!actionDistrict && char.location) {
+                actionDistrict = db.city.getDistrict(char.location)
+                    || districts.find((district) => String(district.id || '').toLowerCase() === String(char.location || '').toLowerCase())
+                    || null;
+            }
+            logActionParseError(db, userId, char, e, {
+                district: actionDistrict || null,
+                locationLabel: char.location || ''
+            });
             return;
         }
     }
@@ -4156,6 +5157,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         broadcastCityEvent,
         handleQuestLifecycleAfterAction: (...args) => questService.handleQuestLifecycleAfterAction(...args),
         applyStateEffectsToCharacter,
+        applyHousingDistrictEffects,
         logEmotionTransitionToState,
         getWsClients,
         getEngine,
@@ -4279,9 +5281,9 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             ensureCityDb(db);
             const config = db.city.getConfig();
             const chatProb = parseInt(config.city_chat_probability) || 0;  // legacy fallback gate
-            const explicitChat = richNarrations?.chat && String(richNarrations.chat).trim() !== '' ? String(richNarrations.chat).trim() : '';
-            const explicitMoment = richNarrations?.moment && String(richNarrations.moment).trim() !== '' ? String(richNarrations.moment).trim() : '';
-            const explicitDiary = richNarrations?.diary && String(richNarrations.diary).trim() !== '' ? String(richNarrations.diary).trim() : '';
+            const explicitChat = sanitizeCityNarrationText(richNarrations?.chat);
+            const explicitMoment = sanitizeCityNarrationText(richNarrations?.moment);
+            const explicitDiary = sanitizeCityNarrationText(richNarrations?.diary);
 
             // 1. Private chat message to user
             // Prefer explicit intent from the character's structured output.
@@ -4291,10 +5293,22 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
                     if (chatContent && String(chatContent).trim() !== '') {
                         const engine = getEngine(userId);
                         const wsClients = getWsClients(userId);
+                        const sourceLog = findCityLogForOutreach(db, char.id, [
+                            chatContent,
+                            eventSummary,
+                            richNarrations?.log
+                        ]);
                         const cityOutreachMeta = {
                             source: 'city_outreach',
                             event_type: eventType || '',
-                            generated_from: 'city_action'
+                            generated_from: 'city_action',
+                            ...(sourceLog ? {
+                                city_outreach: {
+                                    log_id: sourceLog.id,
+                                    action_type: sourceLog.action_type || '',
+                                    location: sourceLog.location || ''
+                                }
+                            } : {})
                         };
                         const { id: msgId, timestamp: msgTs } = db.addMessage(char.id, 'character', chatContent, cityOutreachMeta);
                         const freshChar = db.getCharacter(char.id) || char;
@@ -4331,7 +5345,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
                         };
                         engine.broadcastNewMessage(wsClients, newMessage);
                         engine.broadcastEvent(wsClients, { type: 'refresh_contacts' });
-                        console.log(`[City->Chat] ${char.name} 发私聊 "${chatContent.substring(0, 40)}..."`);
+                        console.log(`[City->Chat] ${char.name} 发私聊 chars=${String(chatContent || '').length}`);
                     }
                 } catch (e) {
                     console.error(`[City->Chat] 私聊失败: ${e.message}`);
@@ -4348,7 +5362,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
                         const wsClients = getWsClients(userId);
                         const payload = JSON.stringify({ type: 'moment_update' });
                         wsClients.forEach(c => { if (c.readyState === 1) c.send(payload); });
-                        console.log(`[City->Chat] ${char.name} 发朋友圈: "${explicitMoment.substring(0, 40)}..."`);
+                        console.log(`[City->Chat] ${char.name} 发朋友圈 chars=${String(explicitMoment || '').length}`);
                     }
                 } catch (e) {
                     console.error(`[City->Chat] 朋友圈失败: ${e.message}`);

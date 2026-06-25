@@ -1,5 +1,6 @@
 ﻿import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Plus, Trash2, ToggleLeft, ToggleRight, Save, DollarSign, Heart, Edit3, X, Power, Package, ShoppingBag, AlertTriangle } from 'lucide-react';
+import AuthenticatedImage from '../../components/AuthenticatedImage';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../../utils/avatar';
 import { deriveEmotion, derivePhysicalState } from '../../utils/emotion';
 import SchoolGrowthPanel from '../cityGrowth/SchoolGrowthPanel';
@@ -843,7 +844,7 @@ export default function CityManager({ apiUrl, onRefreshLogs }) {
                         const physical = derivePhysicalState(c);
                         return (
                         <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px', border: '1px solid #eee', borderRadius: '8px' }}>
-                            <img src={avatarSrc(c.avatar, apiUrl)} alt="" style={{ width: '28px', height: '28px', borderRadius: '50%', objectFit: 'cover' }} />
+                            <AuthenticatedImage src={avatarSrc(c.avatar, apiUrl)} fallbackSrc={FALLBACK_AVATAR} alt="" style={{ width: '28px', height: '28px', borderRadius: '50%', objectFit: 'cover' }} />
                             <div style={{ flex: 1, minWidth: 0 }}>
                                 <div style={{ fontWeight: '500', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                                     <span>{c.name}</span>

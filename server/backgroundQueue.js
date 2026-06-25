@@ -134,10 +134,20 @@ function enqueueBackgroundTask({ key, dedupeKey, maxPending = 1, task }) {
     });
 }
 
-function getBackgroundQueueStats() {
+function keyMatchesUser(key, userId) {
+    const cleanUserId = String(userId || '').trim();
+    if (!cleanUserId) return false;
+    return String(key || '')
+        .split(':')
+        .some(part => part === cleanUserId);
+}
+
+function getBackgroundQueueStats(options = {}) {
     cleanupRecentTasks();
+    const userId = String(options.userId || '').trim();
     const queues = [];
     for (const [key, queue] of keyQueues.entries()) {
+        if (userId && !keyMatchesUser(key, userId)) continue;
         queues.push({
             key,
             running: !!queue.running,
@@ -156,6 +166,7 @@ function getBackgroundQueueStats() {
         pendingTasks: queues.reduce((sum, queue) => sum + queue.pending, 0),
         queues,
         recentTasks: [...recentTasks]
+            .filter(task => !userId || keyMatchesUser(task?.key, userId))
             .sort((a, b) => {
                 const aTime = Number(a?.finishedAt || a?.startedAt || a?.queuedAt || 0);
                 const bTime = Number(b?.finishedAt || b?.startedAt || b?.queuedAt || 0);

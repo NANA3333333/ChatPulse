@@ -14,6 +14,107 @@ const SMALL_MODEL_PLANNER_MAX_TOKENS = 8000;
 let loggedPrivateAutonomyDisabled = false;
 let loggedGroupAutonomyDisabled = false;
 
+const GENERATED_CITY_ACTION_PAYLOAD_KEYS = [
+    'district_id',
+    'districtId',
+    'district_name',
+    'districtName',
+    'district',
+    'name',
+    'district_type',
+    'districtType',
+    'type',
+    'intent',
+    'log',
+    'chat',
+    'moment',
+    'diary',
+    'prompt',
+    'goal',
+    'plan'
+];
+
+const GENERATED_CITY_ACTION_DISTRICT_KEYS = [
+    'district_id',
+    'districtId',
+    'district_name',
+    'districtName',
+    'district',
+    'name',
+    'district_type',
+    'districtType',
+    'type',
+    'intent'
+];
+
+function unescapeLooseGeneratedJsonString(value) {
+    return String(value || '')
+        .replace(/\\r\\n/g, '\n')
+        .replace(/\\n/g, '\n')
+        .replace(/\\r/g, '\r')
+        .replace(/\\t/g, '\t')
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\')
+        .trim();
+}
+
+function normalizeLooseGeneratedCityActionValue(value) {
+    const text = unescapeLooseGeneratedJsonString(value);
+    return /^[,，"'\s}]+$/.test(text) ? '' : text;
+}
+
+function parseLooseGeneratedCityActionPayload(rawCityAction) {
+    const text = String(rawCityAction || '').trim();
+    if (!text.startsWith('{')) return null;
+
+    const escapedKeys = GENERATED_CITY_ACTION_PAYLOAD_KEYS
+        .map(key => key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('|');
+    const markerPattern = new RegExp(`(?:^|[,{;；]\\s*)"(${escapedKeys})"\\s*:\\s*`, 'g');
+    const markers = [];
+    let match;
+    while ((match = markerPattern.exec(text)) !== null) {
+        markers.push({
+            key: match[1],
+            start: match.index,
+            valueStart: markerPattern.lastIndex
+        });
+    }
+    if (markers.length < 2) return null;
+
+    const lastBrace = text.lastIndexOf('}');
+    const parsed = {};
+    for (let index = 0; index < markers.length; index += 1) {
+        const marker = markers[index];
+        const next = markers[index + 1];
+        const valueEnd = next ? next.start : (lastBrace > marker.valueStart ? lastBrace : text.length);
+        let rawValue = text.slice(marker.valueStart, valueEnd).trim().replace(/,\s*$/, '').trim();
+        if (rawValue.startsWith('"')) rawValue = rawValue.slice(1).trimStart();
+        if (rawValue.endsWith('"')) rawValue = rawValue.slice(0, -1).trimEnd();
+        parsed[marker.key] = normalizeLooseGeneratedCityActionValue(rawValue);
+    }
+
+    const hasDistrictSignal = GENERATED_CITY_ACTION_DISTRICT_KEYS
+        .some(key => String(parsed[key] || '').trim());
+    return hasDistrictSignal ? parsed : null;
+}
+
+function parseGeneratedCityActionPayload(rawCityAction) {
+    const rawText = String(rawCityAction || '').trim();
+    let parsedCityAction;
+    try {
+        parsedCityAction = JSON.parse(rawText);
+    } catch (jsonError) {
+        const looseCityAction = parseLooseGeneratedCityActionPayload(rawText);
+        if (looseCityAction) return looseCityAction;
+        throw jsonError;
+    }
+    if (!parsedCityAction || typeof parsedCityAction !== 'object' || Array.isArray(parsedCityAction)) {
+        throw new Error('CITY_ACTION payload must be a JSON object');
+    }
+    return parsedCityAction;
+}
+
 function getDefaultGuidelines(userName = '用户') {
     const safeUserName = String(userName || '用户').trim() || '用户';
     return `Guidelines:
@@ -30,8 +131,8 @@ function getDefaultGuidelines(userName = '用户') {
    - transfer: [TRANSFER:amount|note] amount <= wallet
    - moments: [MOMENT:text] [MOMENT_LIKE:id] [MOMENT_COMMENT:id:text]
    - diary: [DIARY:text] only for a meaningful new thought; [DIARY_PASSWORD:value] only if you willingly reveal it; if user sincerely asks to read it, output [UNLOCK_DIARY]
-   - relationship: [AFFINITY:+N/-N] [CHAR_AFFINITY:characterId:+N/-N]
-   - state: [PRESSURE:0] [MOOD_DELTA:+N/-N] [PRESSURE_DELTA:+N/-N]
+   - relationship: [AFFINITY:+1] or [AFFINITY:-1] (integer -100..100); [CHAR_AFFINITY:characterId:+1] or [CHAR_AFFINITY:characterId:-1] (integer -100..100)
+   - state: [PRESSURE:0] (integer 0..4), [MOOD_DELTA:+2] or [MOOD_DELTA:-2] (integer -12..12), [PRESSURE_DELTA:+1] or [PRESSURE_DELTA:-1] (integer -2..2). Use concrete digits only; never output N placeholders.
    - emotion: optional [EMOTION_REASON:short text]; if the reply itself clearly sounds jealous|hurt|angry|lonely|happy|sad|cautious|guarded|shy|hopeful|playful|disappointed|relieved|affectionate|reassured|yearning|flustered|guilty|frustrated|wistful|proud|secure|tender|helpless|tense|calm, output exactly one [EMOTION_STATE:value] in the same reply
    - emotion whitelist: when you output [EMOTION_STATE:value], value MUST be chosen from exactly this library and nothing else: jealous, hurt, angry, lonely, happy, sad, cautious, guarded, shy, hopeful, playful, disappointed, relieved, affectionate, reassured, yearning, flustered, guilty, frustrated, wistful, proud, secure, tender, helpless, tense, calm
    - never invent a new emotion word, synonym, translation variant, or nuanced label outside the library. If none fits well enough, omit [EMOTION_STATE] instead of improvising
@@ -1325,17 +1426,6 @@ function stripInlineTags(text) {
         .trim();
 }
 
-function compactPreview(text, maxLength = 72) {
-    const cleaned = stripInlineTags(text)
-        .replace(/[“”"]/g, '')
-        .replace(/^[\s.…·—\-~～]+/, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-    if (!cleaned) return '';
-    if (cleaned.length <= maxLength) return cleaned;
-    return `${cleaned.slice(0, Math.max(12, maxLength - 1)).trim()}…`;
-}
-
 function extractSpeechOpener(text) {
     const cleaned = stripInlineTags(text)
         .replace(/^[\s"'“”‘’]+/, '')
@@ -1357,40 +1447,6 @@ function hasOverusedEllipsisStyle(messages) {
         return /^(?:[.…·]+|\.{2,})$/.test(opener);
     }).length;
     return ellipsisCount >= 3;
-}
-
-function buildCompactAntiRepeat(character, messages, options = {}) {
-    const protectedTailCount = Math.max(0, Number(options.protectedTailCount || 0));
-    const sourceMessages = (Array.isArray(messages) ? messages : []);
-    const antiRepeatSource = protectedTailCount > 0 && sourceMessages.length > protectedTailCount
-        ? sourceMessages.slice(0, sourceMessages.length - protectedTailCount)
-        : sourceMessages;
-    const recentAssistantMsgs = antiRepeatSource
-        .filter(m => m.role === 'character')
-        .slice(-6);
-    if (recentAssistantMsgs.length === 0) return '';
-
-    const recentTopics = [];
-    const recentOpeners = [];
-    for (const msg of recentAssistantMsgs) {
-        const preview = compactPreview(msg.content, 24);
-        if (!preview) continue;
-        if (!recentTopics.includes(preview)) recentTopics.push(preview);
-        const opener = extractSpeechOpener(msg.content);
-        if (opener && !recentOpeners.includes(opener)) recentOpeners.push(opener);
-        if (recentTopics.length >= 3) break;
-    }
-    if (recentTopics.length === 0) return '';
-
-    let antiRepeat = `\n\n[Anti-Repeat]\nThis is a low-priority reminder from older replies, not the source of truth for the latest turn.\nIf this conflicts with the newest raw tail messages, trust the raw tail messages.\nRecent older topics: ${recentTopics.join(' | ')}\nAvoid same accusation, same comfort ask, same emotional wording, and the same dramatic opener. Next reply must move forward with a different angle.`;
-    if (recentOpeners.length > 0) {
-        antiRepeat += `\nAvoid repeating the same sentence opener/interjection: ${recentOpeners.slice(0, 3).join(' | ')}.`;
-    }
-    antiRepeat += `\nDo not start this reply with ellipsis-style openers like "……", "...", or long sigh-like punctuation unless the latest user wording absolutely requires it.`;
-    if ((character.pressure_level || 0) >= 2) {
-        antiRepeat += `\nIf anxious, prefer one fresh move: immediate scene, one specific reassurance, react to latest wording, or reveal one new detail.`;
-    }
-    return antiRepeat;
 }
 
 function findWindowForwardOverlap(previousIds, currentIds) {
@@ -1544,6 +1600,9 @@ function getEngine(userId) {
 
     // --- ENCLOSED ENGINE FUNCTIONS ---
     const timers = new Map();
+    const userReplyDebounceTimers = new Map();
+    const latestUserReplyRequests = new Map();
+    const userReplyInFlight = new Set();
     const ragFailureCache = new Map();
     const dedupBlockCounts = new Map(); // Track consecutive dedup blocks per character
     let stateBroadcastInterval = null;
@@ -1555,6 +1614,33 @@ function getEngine(userId) {
             maxPending: options.maxPending ?? 1,
             task
         });
+    }
+
+    function getLatestUserMessageId(characterId) {
+        if (typeof db.getLatestUserMessage !== 'function') return 0;
+        const latest = db.getLatestUserMessage(characterId);
+        return Number(latest?.id || 0);
+    }
+
+    function isPrivateReplyStale(characterId, generationOptions = {}) {
+        const targetUserMessageId = Number(generationOptions?.targetUserMessageId || 0);
+        if (!targetUserMessageId) return false;
+        return getLatestUserMessageId(characterId) > targetUserMessageId;
+    }
+
+    function abortStalePrivateReply(character, wsClients, generationOptions = {}, phase = 'answer') {
+        const targetUserMessageId = Number(generationOptions?.targetUserMessageId || 0);
+        const latestUserMessageId = getLatestUserMessageId(character.id);
+        console.log(`[Engine] Discarding stale private reply for ${character.name}: target user message ${targetUserMessageId}, latest ${latestUserMessageId} (${phase}).`);
+        timers.delete(character.id);
+        if (generationOptions?.targetUserMessageId) {
+            updateRagProgress(character.id, wsClients, {
+                currentKey: 'answer',
+                status: 'skipped',
+                skipped: true
+            });
+        }
+        return { stale: true, targetUserMessageId, latestUserMessageId };
     }
 
     function recordTokenUsage(characterId, contextType, usage) {
@@ -2348,10 +2434,6 @@ function getEngine(userId) {
             ? options.privateContextSummaries.slice(-3)
             : [];
         const topicSwitchState = options.topicSwitchState || null;
-        const antiRepeatSource = Array.isArray(options.antiRepeatMessages) && options.antiRepeatMessages.length > 0
-            ? options.antiRepeatMessages
-            : contextMessages;
-
         const recentInputString = String(options.recentInputString || contextMessages.slice(-2).map(m => m.content).join(' ')).trim();
         const userProfile = db.getUserProfile?.() || null;
         const defaultGuidelines = getDefaultGuidelines(userProfile?.name || '用户');
@@ -2417,7 +2499,7 @@ ${character.world_info || 'No specific world info.'}`;
                 if (supplementalCharacterPrompt) {
                     block += `\n\n[Character-Specific Supplemental Rules]\n${supplementalCharacterPrompt}`;
                 }
-                block += '\n\n[Context Priority Rules]\n- Highest priority inside private chat: correctly identify who the user is and read their actions as actions from that user.\n- Newest explicit user wording > newest raw tail messages > compressed helper blocks.\n- If older/compressed context conflicts with the newest wording, trust the newest wording.\n- Retrieved memory/date-recall facts are reference material, not automatic proof that the user is still actively discussing every recalled item right now.\n- If something is absent from both the visible recent chat and the retrieved memory/date-recall facts, treat it as newly introduced information in this turn.\n- If the user uses meta wording, translate it back into the in-world relationship and situation.\n- If the user is correcting your interpretation, repair first instead of defending the older read.';
+                block += '\n\n[Context Priority Rules]\n- Highest priority inside private chat: correctly identify who the user is and read their actions as actions from that user.\n- Newest explicit user wording > newest raw tail messages > compressed helper blocks.\n- Chat history is a linear timeline: later rows are newer states, not parallel alternatives to answer all at once.\n- If the newest user wording resembles an earlier roleplay, argument, correction, or test, treat the earlier similar turns as already-answered past context. Do not merge all similar turns into one current accusation.\n- If older/compressed context conflicts with the newest wording, trust the newest wording.\n- Retrieved memory/date-recall facts are reference material, not automatic proof that the user is still actively discussing every recalled item right now.\n- If something is absent from both the visible recent chat and the retrieved memory/date-recall facts, treat it as newly introduced information in this turn.\n- If the user uses meta wording, translate it back into the in-world relationship and situation.\n- If the user is correcting your interpretation, repair first instead of defending the older read.\n- For repeated identity/new-owner/memory-reset/old-dispute motifs, you may preserve your recognition, but do not re-list the same old proof every turn; acknowledge the latest wording and move the conversation forward.';
                 return block;
             }
         );
@@ -2445,7 +2527,8 @@ ${dynamicPromptBase}`;
                     : switchDecision === 'FOLLOW_UP_ON_RETRIEVED_HISTORY'
                         ? '- The user is following up on just-retrieved history. Continue that recalled thread carefully, but do not treat every recalled item as an already-active live topic.'
                         : '- The user is continuing the current live thread unless the newest wording clearly redirects you.',
-                '- Answer the newest user request first. Do not let momentum from the previous hot topic override this turn.'
+                '- Answer the newest user request first. Do not let momentum from the previous hot topic override this turn.',
+                '- Similar earlier turns are past timeline steps you may have already answered, not parallel current questions. Continue from the newest occurrence without re-proving the whole old case.'
             ].join('\n');
             dynamicPrompt += `\n\n${topicSwitchBlock}`;
             prompt += `\n\n${topicSwitchBlock}`;
@@ -2493,20 +2576,12 @@ ${dynamicPromptBase}`;
             prompt += `\n[CRITICAL WAKEUP NOTICE]: Your previously self-scheduled timer has just expired! You MUST now proactively send the message you promised to send when you set the [TIMER]. Speak to the user now!\n`;
         }
 
-        // Anti-repeat
-        const antiRepeat = buildCompactAntiRepeat(character, antiRepeatSource, {
-            protectedTailCount: Array.isArray(contextMessages) ? contextMessages.length : 0
-        });
         const typedAntiRepeat = formatTypedAntiRepeatBlock(universalResult.antiRepeatHints, {
-            include: ['city_private_outreach', 'city_self_logs', 'group_character_replies'],
+            include: ['private_character_replies', 'city_private_outreach', 'city_self_logs', 'group_character_replies'],
             maxPerType: 3,
             maxTextLen: 180,
             title: '[Typed Anti-Repeat From Base Context]'
         });
-        if (antiRepeat) {
-            dynamicPrompt += antiRepeat;
-            prompt += antiRepeat;
-        }
         if (typedAntiRepeat) {
             dynamicPrompt += `\n\n${typedAntiRepeat}`;
             prompt += `\n\n${typedAntiRepeat}`;
@@ -2519,7 +2594,6 @@ ${dynamicPromptBase}`;
             topicSwitchBlock ? `\n${topicSwitchBlock}` : '',
             transferNoticeBlock ? `\n${transferNoticeBlock}\n` : '',
             isTimerWakeup ? '\n[CRITICAL WAKEUP NOTICE]: Your previously self-scheduled timer has just expired! You MUST now proactively send the message you promised to send when you set the [TIMER]. Speak to the user now!\n' : '',
-            antiRepeat || '',
             typedAntiRepeat ? `\n${typedAntiRepeat}` : ''
         ].join('\n');
         const promptWithoutDigest = `${stableCharacterBlock}\n\n${dynamicPromptWithoutDigest}`;
@@ -2535,7 +2609,7 @@ ${dynamicPromptBase}`;
                 universalBreakdown: { ...(universalResult.breakdown || {}) },
                 moduleRoutes: { ...(universalResult.moduleRoutes || {}) },
                 digestBlock,
-                antiRepeat,
+                antiRepeat: typedAntiRepeat,
                 styleCorrectionBlock,
                 transferNoticeBlock
             }
@@ -3029,7 +3103,7 @@ ${dynamicPromptBase}`;
                     source_ended_at: mem.source_ended_at || 0
                 })));
             } else {
-                console.log(`[Engine] Temporal browse returned no dated memories for "${parsedDecision.temporalHint}".`);
+                console.log(`[Engine] Temporal browse returned no dated memories. hintChars=${String(parsedDecision.temporalHint || '').length}`);
             }
             updateRagProgress(character.id, wsClients, { currentKey: 'answer' });
             return msgMetadata;
@@ -3046,7 +3120,7 @@ ${dynamicPromptBase}`;
         }
 
         const retrievalLabel = parsedDecision.retrievalLabel;
-        console.log(`[Engine] Dynamic RAG Triggered for ${character.name}. Query: "${retrievalLabel}"`);
+        console.log(`[Engine] Dynamic RAG triggered for ${character.name}. queryChars=${String(retrievalLabel || '').length}`);
         updateRagProgress(character.id, wsClients, { currentKey: 'rewrite' });
         const rewriteConstraints = normalizedResumeState?.rewriteConstraints || deriveRagRewriteConstraints({
             plannerTopics,
@@ -3316,6 +3390,7 @@ ${dynamicPromptBase}`;
                 `Current Time Now: ${currentAbsoluteTime}. ` +
                 `You must compare the current time with each memory's Event Time / Source Dialogue Time / Source Absolute Time before using it. ` +
                 `Treat the memory summaries and details below as factual recall anchors from the past, with their own timestamps. They are not automatically the current moment, and they are not permanent character settings unless the memory explicitly says so. ` +
+                `The [Newest user message] below is the current turn at the end of a linear chat timeline. Earlier similar user turns and old replies are past steps you may have already answered, not parallel current questions. Use recalled facts to disambiguate, not to re-list the same proof every turn. ` +
                 `A recalled memory may be recent or old; decide that from the time labels, not by guessing. ` +
                 `If any recalled memory conflicts with the user's newest message, trust the user's newest message first. Do not treat your own recent claims of not remembering, not knowing, or needing the user to repeat something as evidence against these retrieved memories. ` +
                 `If retrieved memories match the user's distinctive constraints such as amount, company/opportunity, contact direction, source channel, or timing, do not say you have never heard about it; acknowledge the closest recalled facts and distinguish uncertain details carefully. ` +
@@ -3353,7 +3428,7 @@ ${dynamicPromptBase}`;
                 source_ended_at: mem.source_ended_at || 0
             })));
         } else {
-            console.log(`[Engine] RAG returned no relevant matches for "${retrievalLabel}".`);
+            console.log(`[Engine] RAG returned no relevant matches. queryChars=${String(retrievalLabel || '').length}`);
         }
 
         updateRagProgress(character.id, wsClients, { currentKey: 'answer' });
@@ -3370,6 +3445,9 @@ ${dynamicPromptBase}`;
         if (!charCheck || charCheck.status !== 'active' || charCheck.is_blocked) {
             stopTimer(character.id);
             return;
+        }
+        if (isUserReply && isPrivateReplyStale(character.id, generationOptions)) {
+            return abortStalePrivateReply(charCheck, wsClients, generationOptions, 'before_generation');
         }
 
         const shouldResumeRag = !!(generationOptions && generationOptions.resumeRagState && isUserReply);
@@ -3513,7 +3591,6 @@ ${dynamicPromptBase}`;
             } = await buildPrompt(charCheck, liveHistory, isTimerWakeup, {
                 conversationDigest,
                 privateContextSummaries,
-                antiRepeatMessages: contextHistory,
                 recentInputString: effectiveRecentInputString,
                 topicSwitchState
             });
@@ -3696,7 +3773,14 @@ ${dynamicPromptBase}`;
                 })
             });
 
+            if (isUserReply && isPrivateReplyStale(character.id, generationOptions)) {
+                return abortStalePrivateReply(charCheck, wsClients, generationOptions, 'after_model');
+            }
+
             if (isUserReply && generatedText && /\[WEB_SEARCH_INTENT:/i.test(String(generatedText))) {
+                if (isPrivateReplyStale(character.id, generationOptions)) {
+                    return abortStalePrivateReply(charCheck, wsClients, generationOptions, 'before_web_draft');
+                }
                 const firstWebDraftText = stripHiddenTagsForVisibleMessage(generatedText);
                 const preWebFreshChar = db.getCharacter(character.id);
                 const preWebMessages = db.getMessages(character.id, 2);
@@ -3732,6 +3816,9 @@ ${dynamicPromptBase}`;
                 generatedText = webFollowup.generatedText;
                 usage = webFollowup.usage;
                 finishReason = webFollowup.finishReason || finishReason;
+                if (isPrivateReplyStale(character.id, generationOptions)) {
+                    return abortStalePrivateReply(charCheck, wsClients, generationOptions, 'after_web_followup');
+                }
                 if (draftSaved.length > 0) {
                     msgMetadata = null;
                 }
@@ -3787,6 +3874,10 @@ ${dynamicPromptBase}`;
                 }
             }
 
+            if (isUserReply && isPrivateReplyStale(character.id, generationOptions)) {
+                return abortStalePrivateReply(charCheck, wsClients, generationOptions, 'before_save');
+            }
+
             if (usage) {
                 recordTokenUsage(character.id, 'chat', usage);
                 broadcastEvent(wsClients, {
@@ -3797,7 +3888,7 @@ ${dynamicPromptBase}`;
                 });
             }
 
-            console.log('\n[DEBUG] LLM raw output:', JSON.stringify(generatedText));
+            console.log(`[Engine] LLM output received for ${charCheck.name}. chars=${String(generatedText || '').length}`);
             recordLlmDebug(charCheck, 'output', generatedText, {
                 context_type: isUserReply ? 'private_reply' : (isTimerWakeup ? 'timer_wakeup' : 'proactive'),
                 finishReason: finishReason || 'unknown',
@@ -3871,7 +3962,7 @@ ${dynamicPromptBase}`;
                 // Check for transfer tags like [TRANSFER: 5.20 | Sorry!]
                 if (generatedTransferIntent) {
                     const { amount, note } = generatedTransferIntent;
-                    console.log(`[Engine] ${charCheck.name} wants to send a transfer of 楼${amount} note: "${note}"`);
+                    console.log(`[Engine] ${charCheck.name} wants to send a transfer of 楼${amount}. noteChars=${String(note || '').length}`);
 
                     // Create traceable transfer record in DB (also deducts char wallet)
                     let transferId = null;
@@ -3910,7 +4001,7 @@ ${dynamicPromptBase}`;
                 const momentMatch = generatedText.match(momentRegex);
                 if (momentMatch && momentMatch[1]) {
                     const momentContent = momentMatch[1].trim();
-                    console.log(`[Engine] ${charCheck.name} posted a Moment: ${momentContent.substring(0, 20)}...`);
+                    console.log(`[Engine] ${charCheck.name} posted a Moment. chars=${momentContent.length}`);
                     db.addMoment(character.id, momentContent);
                     broadcastEvent(wsClients, { type: 'moment_update' });
                 }
@@ -4029,7 +4120,7 @@ ${dynamicPromptBase}`;
                 while ((mCommentMatch = momentCommentRegex.exec(generatedText)) !== null) {
                     if (mCommentMatch[1] && mCommentMatch[2]) {
                         db.addComment(parseInt(mCommentMatch[1], 10), character.id, mCommentMatch[2].trim());
-                        console.log(`[Engine] ${charCheck.name} commented on moment ${mCommentMatch[1]}: ${mCommentMatch[2]}`);
+                        console.log(`[Engine] ${charCheck.name} commented on moment ${mCommentMatch[1]}. chars=${String(mCommentMatch[2] || '').trim().length}`);
                         broadcastEvent(wsClients, { type: 'moment_update' });
                     }
                 }
@@ -4051,10 +4142,7 @@ ${dynamicPromptBase}`;
                 if (cityActionMatch && cityActionMatch[1] && cityReplyActionCallback) {
                     try {
                         const rawCityAction = cityActionMatch[1].trim();
-                        const parsedCityAction = JSON.parse(rawCityAction);
-                        if (!parsedCityAction || typeof parsedCityAction !== 'object' || Array.isArray(parsedCityAction)) {
-                            throw new Error('CITY_ACTION payload must be a JSON object');
-                        }
+                        const parsedCityAction = parseGeneratedCityActionPayload(rawCityAction);
                         const cityActionResult = await cityReplyActionCallback(userId, character.id, parsedCityAction, generatedText);
                         if (cityActionResult?.canRetry) {
                             throw new Error(cityActionResult.reason || 'city action retry required');
@@ -4095,6 +4183,10 @@ ${dynamicPromptBase}`;
                     }
                 }
 
+                if (isUserReply && isPrivateReplyStale(character.id, generationOptions)) {
+                    return abortStalePrivateReply(charCheck, wsClients, generationOptions, 'before_visible_save');
+                }
+
                 if (generatedText.length > 0) {
                     // Server-side deduplication: reject identical/near-identical messages.
                     const recentCharMsgs = db.getMessages(character.id, 15)
@@ -4127,7 +4219,7 @@ ${dynamicPromptBase}`;
                         // Track consecutive dedup blocks per character
                         const blockCount = (dedupBlockCounts.get(character.id) || 0) + 1;
                         dedupBlockCounts.set(character.id, blockCount);
-                        console.log(`[Engine] DEDUP: ${charCheck.name} generated duplicate message (block #${blockCount}), SKIPPING: "${generatedText.substring(0, 60)}..."`);
+                        console.log(`[Engine] DEDUP: ${charCheck.name} generated duplicate message (block #${blockCount}), skipping. chars=${generatedText.length}`);
 
                         if (blockCount >= 2) {
                             // After 2 consecutive blocks, inject a context-breaking system message
@@ -4412,6 +4504,162 @@ ${dynamicPromptBase}`;
         });
     }
 
+    function clearUserReplyDebounce(characterId) {
+        const timerId = userReplyDebounceTimers.get(characterId);
+        if (timerId) {
+            clearTimeout(timerId);
+            userReplyDebounceTimers.delete(characterId);
+        }
+    }
+
+    function createPrivateUserReplyRequest(characterId, wsClients, options = {}) {
+        const char = db.getCharacter(characterId);
+        if (!char || char.status !== 'active' || char.is_blocked) return null;
+
+        const hadPendingCityReply = !!char.city_reply_pending;
+        const cityIgnoreStreak = Math.max(0, char.city_ignore_streak || 0);
+        if (hadPendingCityReply) {
+            db.updateCharacter(characterId, {
+                city_reply_pending: 0,
+                city_post_ignore_reaction: cityIgnoreStreak > 0 ? 1 : 0
+            });
+        }
+
+        return {
+            ...options,
+            wsClients,
+            targetUserMessageId: Number(options?.targetUserMessageId || 0) || getLatestUserMessageId(characterId),
+            hadPendingCityReply,
+            cityIgnoreStreak,
+            createdAt: Date.now()
+        };
+    }
+
+    function cleanupPrivateUserReplyRequest(characterId, request = {}) {
+        const cleanupPatch = {};
+        if (request.hadPendingCityReply) {
+            cleanupPatch.city_post_ignore_reaction = 0;
+            cleanupPatch.city_ignore_streak = 0;
+        }
+        if (Object.keys(cleanupPatch).length > 0) {
+            db.updateCharacter(characterId, cleanupPatch);
+        }
+    }
+
+    function mergePrivateUserReplyCleanup(previousRequest = {}, nextRequest = {}) {
+        if (!previousRequest?.hadPendingCityReply) return nextRequest;
+        return {
+            ...nextRequest,
+            hadPendingCityReply: true,
+            cityIgnoreStreak: Math.max(
+                Number(previousRequest.cityIgnoreStreak || 0),
+                Number(nextRequest.cityIgnoreStreak || 0)
+            )
+        };
+    }
+
+    function scheduleQueuedUserReply(characterId, wsClients, options = {}) {
+        const request = createPrivateUserReplyRequest(characterId, wsClients, options);
+        if (!request) return Promise.resolve({ skipped: true, reason: 'character_unavailable' });
+        const previousRequest = latestUserReplyRequests.get(characterId);
+        const nextRequest = mergePrivateUserReplyCleanup(previousRequest, request);
+        latestUserReplyRequests.set(characterId, nextRequest);
+        clearUserReplyDebounce(characterId);
+        const debounceMs = Math.max(0, Number(options?.debounceMs ?? 1500) || 0);
+        if (debounceMs === 0) {
+            return queueLatestUserReply(characterId);
+        }
+        const timerId = setTimeout(() => {
+            userReplyDebounceTimers.delete(characterId);
+            queueLatestUserReply(characterId).catch(err => {
+                console.error(`[Engine] Failed to run queued user reply for ${characterId}:`, err.message);
+            });
+        }, debounceMs);
+        userReplyDebounceTimers.set(characterId, timerId);
+        return Promise.resolve({ queued: true, targetUserMessageId: nextRequest.targetUserMessageId });
+    }
+
+    async function runUserReplyRequest(characterId, request) {
+        const freshChar = db.getCharacter(characterId);
+        if (!freshChar || freshChar.status !== 'active' || freshChar.is_blocked) {
+            return { skipped: true, reason: 'character_unavailable' };
+        }
+
+        const {
+            wsClients: requestWsClients,
+            hadPendingCityReply,
+            cityIgnoreStreak,
+            debounceMs,
+            createdAt,
+            ...generationRequest
+        } = request || {};
+
+        const resumeRagState = generationRequest?.useRetryResume ? getRagFailureState(characterId) : null;
+        const resumedExtraSystemDirective = String(
+            resumeRagState?.extraSystemDirective ||
+            generationRequest?.extraSystemDirective ||
+            ''
+        ).trim() || null;
+
+        try {
+            return await triggerMessage(
+                freshChar,
+                requestWsClients || new Set(),
+                true,
+                false,
+                resumedExtraSystemDirective,
+                {
+                    ...generationRequest,
+                    resumeRagState,
+                    targetUserMessageId: Number(generationRequest?.targetUserMessageId || 0) || getLatestUserMessageId(characterId)
+                }
+            );
+        } finally {
+            cleanupPrivateUserReplyRequest(characterId, { hadPendingCityReply, cityIgnoreStreak });
+        }
+    }
+
+    function queueLatestUserReply(characterId) {
+        if (userReplyInFlight.has(characterId)) {
+            return Promise.resolve({ queued: true, reason: 'reply_in_flight' });
+        }
+        const request = latestUserReplyRequests.get(characterId);
+        if (!request) return Promise.resolve({ skipped: true, reason: 'no_pending_reply' });
+
+        latestUserReplyRequests.delete(characterId);
+        userReplyInFlight.add(characterId);
+
+        return queueEngineTask(
+            `char:${characterId}`,
+            () => runUserReplyRequest(characterId, request),
+            {
+                dedupeKey: `private-reply:${characterId}`,
+                maxPending: 1
+            }
+        ).then(result => {
+            if (result?.skipped && ['queue_full', 'duplicate'].includes(result.reason)) {
+                latestUserReplyRequests.set(characterId, request);
+                if (!userReplyDebounceTimers.has(characterId)) {
+                    const retryTimer = setTimeout(() => {
+                        userReplyDebounceTimers.delete(characterId);
+                        queueLatestUserReply(characterId).catch(err => {
+                            console.error(`[Engine] Failed to retry queued user reply for ${characterId}:`, err.message);
+                        });
+                    }, 500);
+                    userReplyDebounceTimers.set(characterId, retryTimer);
+                }
+            }
+            return result;
+        }).finally(() => {
+            userReplyInFlight.delete(characterId);
+            if (latestUserReplyRequests.has(characterId) && !userReplyDebounceTimers.has(characterId)) {
+                queueLatestUserReply(characterId).catch(err => {
+                    console.error(`[Engine] Failed to run follow-up queued user reply for ${characterId}:`, err.message);
+                });
+            }
+        });
+    }
+
     /**
      * Handle a user message. Resets timer, and triggers an immediate "return reaction" 
      * if pressure was high, before zeroing out the pressure.
@@ -4426,37 +4674,10 @@ ${dynamicPromptBase}`;
             isTimerWakeup: false
         }, 'handleUserMessage called');
         console.log(`[Engine] User sent message to ${char.name}. Resetting timer.`);
-        const hadPendingCityReply = !!char.city_reply_pending;
-        const cityIgnoreStreak = Math.max(0, char.city_ignore_streak || 0);
-
-        if (hadPendingCityReply) {
-            db.updateCharacter(characterId, {
-                city_reply_pending: 0,
-                city_post_ignore_reaction: cityIgnoreStreak > 0 ? 1 : 0
-            });
-        }
-
-        // We optionally trigger an immediate response. Wait 1-3 seconds for realism.
-        setTimeout(() => {
-            // Re-fetch fresh character data (settings may have changed in the 1.5s gap)
-            const freshChar = db.getCharacter(characterId);
-            if (!freshChar || freshChar.status !== 'active' || freshChar.is_blocked) return;
-            const resumeRagState = options?.useRetryResume ? getRagFailureState(characterId) : null;
-            const resumedExtraSystemDirective = String(resumeRagState?.extraSystemDirective || '').trim() || null;
-            // Trigger a reply. We leave pressure AND jealousy as-is for this reply so it generates the Return Reaction
-            // Jealousy is NOT zeroed out; the AI decides via [JEALOUSY:N] tag when to forgive.
-            triggerMessage(freshChar, wsClients, true, false, resumedExtraSystemDirective, { resumeRagState }).finally(() => {
-                // The model must explicitly relax via [PRESSURE]/[JEALOUSY] tags.
-                const cleanupPatch = {};
-                if (hadPendingCityReply) {
-                    cleanupPatch.city_post_ignore_reaction = 0;
-                    cleanupPatch.city_ignore_streak = 0;
-                }
-                if (Object.keys(cleanupPatch).length > 0) {
-                    db.updateCharacter(characterId, cleanupPatch);
-                }
-            });
-        }, 1500);
+        // User replies are serialized per character so rapid sends cannot save older AI output after newer user input.
+        scheduleQueuedUserReply(characterId, wsClients, options).catch(err => {
+            console.error(`[Engine] Failed to schedule user reply for ${char.name}:`, err.message);
+        });
 
         // Stop current background timer
         stopTimer(characterId);
@@ -4474,14 +4695,10 @@ ${dynamicPromptBase}`;
             isTimerWakeup: false
         }, 'triggerImmediateUserReply called');
         stopTimer(characterId);
-        await triggerMessage(
-            freshChar,
-            wsClients,
-            true,
-            false,
-            options?.extraSystemDirective || null,
-            options || {}
-        );
+        await scheduleQueuedUserReply(characterId, wsClients, {
+            ...options,
+            debounceMs: 0
+        });
     }
 
     /**
@@ -4548,7 +4765,7 @@ ${dynamicPromptBase}`;
         const character = db.getCharacter(charId);
         if (!character || character.is_blocked) return;
 
-        console.log(`[Engine] Proactive task triggered for ${character.name}: ${taskPrompt}`);
+        console.log(`[Engine] Proactive task triggered for ${character.name}. promptChars=${String(taskPrompt || '').length}`);
 
         // Emulate a system message at the end of the context to force the AI's hand
         const sysDirective = `[System Directive: ${taskPrompt} (Respond immediately based on this instruction, but stay in persona)]`;
@@ -4690,7 +4907,7 @@ ${dynamicPromptBase}`;
                     }
                     const payload = JSON.stringify({ type: 'group_message', data: { id: msgId, group_id: groupId, sender_id: picked.id, sender_name: picked.name, sender_avatar: picked.avatar, content: clean, timestamp: Date.now() } });
                     wsClients.forEach(c => { if (c.readyState === 1) c.send(payload); });
-                    console.log(`[GroupProactive] ${picked.name} in ${group.name}: "${clean}"`);
+                    console.log(`[GroupProactive] ${picked.name} in ${group.name}. chars=${clean.length}`);
 
                     // Trigger other AIs to respond to this proactive message!
                     if (groupChainCallback) {

@@ -11,6 +11,7 @@ const { getTokenCount } = require('./utils/tokenizer');
 const { getAdaptiveTailWindowSize } = require('./utils/contextWindow');
 const { getEmotionFeelingGuidance, getPhysicalFeelingGuidance } = require('./emotion');
 const initSocialHousingDb = require('./plugins/socialHousing/db');
+const { buildHousingPromptBlock, getHousingRuntimeContext } = require('./plugins/socialHousing/housingEffects');
 const crypto = require('crypto');
 const { callLLM } = require('./llm');
 
@@ -884,50 +885,34 @@ function ensureSocialHousingDb(db) {
 }
 
 function buildHousingContextBlock(db, character) {
-    let housingContext = null;
     try {
-        housingContext = ensureSocialHousingDb(db)?.getHousingContextForCharacter?.(character.id) || null;
+        const housingContext = ensureSocialHousingDb(db)?.getHousingContextForCharacter?.(character.id) || null;
+        const socialClass = housingContext?.social_class || null;
+        const socialClassLine = socialClass
+            ? `[社会阶层]: ${socialClass.emoji || ''}${socialClass.name || socialClass.id} - ${socialClass.description || ''}\n`
+            : '';
+        return `\n[住房与阶层]\n${socialClassLine}${buildHousingPromptBlock(db, character)}\n`;
     } catch (e) {
         return '';
     }
-    if (!housingContext?.binding) return '';
-    const binding = housingContext.binding;
-    const home = housingContext.housing;
-    const socialClass = housingContext.social_class;
-    const rent = Number(binding.rent_weekly || home?.weekly_rent || 0);
-    const dueAt = Number(binding.rent_due_at || 0);
-    const dueText = dueAt > 0 ? new Date(dueAt).toLocaleString('zh-CN') : '未设置';
-    const statusLabels = {
-        stable: '稳定居住',
-        temporary: '临时落脚',
-        unstable: '居住不稳',
-        overdue: '租金拖欠'
-    };
-    let block = '\n[住房与阶层]\n';
-    if (socialClass) {
-        block += `[社会阶层]: ${socialClass.emoji || ''}${socialClass.name || socialClass.id} - ${socialClass.description || ''}\n`;
-    }
-    if (home) {
-        block += `[当前住所]: ${home.emoji || ''}${home.name || home.id}\n`;
-        block += `[住所质感]: 舒适度${Number(home.comfort || 0)} / 体面感${Number(home.prestige || 0)} / 隐私感${Number(home.privacy || 0)}\n`;
-        if (home.description) block += compactLine('住所描述', home.description);
-    } else if (binding.housing_id) {
-        block += `[当前住所]: ${binding.housing_id}\n`;
-    }
-    block += `[居住状态]: ${statusLabels[String(binding.housing_status || 'stable')] || binding.housing_status || '稳定居住'}\n`;
-    if (rent > 0) block += `[房租压力]: 周租 ${rent} 金币；下次催租 ${dueText}；已拖欠 ${Number(binding.missed_rent_count || 0)} 次\n`;
-    if (binding.note) block += compactLine('住房备注', binding.note);
-    if (String(binding.housing_status || '') === 'overdue') {
-        block += '[租金拖欠感受]: 这件事压在心里，会带来现实压力、被催促感和不稳定感。\n';
-    }
-    return block;
 }
 
 function getHousingContextSourceParts(db, character) {
     try {
+        const runtimeContext = getHousingRuntimeContext(db, character);
         const housingContext = ensureSocialHousingDb(db)?.getHousingContextForCharacter?.(character.id) || null;
-        if (!housingContext?.binding) return null;
+        if (!housingContext?.binding?.housing_id) {
+            return {
+                status: 'homeless',
+                has_housing: 0,
+                housing: null,
+                binding: null,
+                social_class: housingContext?.social_class || null
+            };
+        }
         return {
+            status: runtimeContext.status,
+            has_housing: runtimeContext.hasHousing ? 1 : 0,
             binding: housingContext.binding,
             housing: housingContext.housing,
             social_class: housingContext.social_class
@@ -1061,7 +1046,7 @@ async function buildUniversalContext(context, character, recentInput = '', isGro
         character.id,
         isGroupContext ? 'runtime_state_group' : 'runtime_state_private',
         {
-            template_version: 3,
+            template_version: 4,
             isGroupContext: !!isGroupContext,
             wallet: character.wallet ?? 0,
             calories: character.calories,

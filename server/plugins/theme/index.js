@@ -93,7 +93,14 @@ Only output the raw valid JSON object, without markdown formatting or surroundin
     // AI Theme Generation
     app.post('/api/theme/generate', authMiddleware, async (req, res) => {
         try {
-            const { query, api_endpoint, api_key, model_name } = req.body;
+            const { query, character_id } = req.body;
+            let { api_endpoint, api_key, model_name } = req.body;
+            if ((!api_endpoint || !api_key || !model_name) && character_id && typeof req.db?.getCharacter === 'function') {
+                const character = req.db.getCharacter(character_id);
+                api_endpoint = api_endpoint || character?.api_endpoint;
+                api_key = api_key || character?.api_key;
+                model_name = model_name || character?.model_name;
+            }
             if (!query || !api_endpoint || !api_key || !model_name) {
                 return res.status(400).json({ error: 'Missing required API keys or theme description.' });
             }

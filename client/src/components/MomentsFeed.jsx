@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Heart, MessageCircle, Send, Trash2, ChevronLeft } from 'lucide-react';
+import AuthenticatedImage from './AuthenticatedImage';
 import { useLanguage } from '../LanguageContext';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 
@@ -159,7 +160,7 @@ function MomentsFeed({ apiUrl, userProfile, onBack }) {
                 )}
                 <div className="moments-cover-user">
                     <span className="moments-cover-name">{userProfile?.name || 'User'}</span>
-                    <img src={resolveAvatarUrl(userProfile?.avatar, apiUrl, userProfile?.name || 'User')} alt="Me" className="moments-cover-avatar" style={{ objectFit: 'cover' }} />
+                    <AuthenticatedImage src={resolveAvatarUrl(userProfile?.avatar, apiUrl, userProfile?.name || 'User')} fallbackSrc={defaultAvatarUrl(userProfile?.name || 'User')} alt="Me" className="moments-cover-avatar" style={{ objectFit: 'cover' }} />
                 </div>
             </div>
 
@@ -167,7 +168,7 @@ function MomentsFeed({ apiUrl, userProfile, onBack }) {
                 {/* Post New Moment Area */}
                 <div style={{ backgroundColor: '#fff', padding: '15px', marginBottom: '20px', borderBottom: '1px solid #f0f0f0', borderRadius: '8px' }}>
                     <div style={{ display: 'flex', gap: '10px' }}>
-                        <img src={resolveAvatarUrl(userProfile?.avatar, apiUrl, userProfile?.name || 'User')} style={{ width: '44px', height: '44px', borderRadius: '50%', objectFit: 'cover' }} alt="" />
+                        <AuthenticatedImage src={resolveAvatarUrl(userProfile?.avatar, apiUrl, userProfile?.name || 'User')} fallbackSrc={defaultAvatarUrl(userProfile?.name || 'User')} style={{ width: '44px', height: '44px', borderRadius: '50%', objectFit: 'cover' }} alt="" />
                         <div style={{ flex: 1 }}>
                             <textarea
                                 placeholder={t('Share something new')}
@@ -198,11 +199,11 @@ function MomentsFeed({ apiUrl, userProfile, onBack }) {
 
                         return (
                             <div key={moment.id} className="moment-post" style={{ paddingBottom: '15px', marginBottom: '15px', borderBottom: '1px solid #f0f0f0' }}>
-                                <img src={author.avatar} alt={author.name} className="moment-avatar" />
+                                <AuthenticatedImage src={author.avatar} fallbackSrc={defaultAvatarUrl(author.name || 'User')} alt={author.name} className="moment-avatar" />
                                 <div className="moment-body" style={{ flex: 1, minWidth: 0 }}>
                                     <div className="moment-author">{author.name}</div>
                                     <div className="moment-content" style={{ marginTop: '5px' }}>{moment.content}</div>
-                                    {moment.image_url && <img src={moment.image_url} alt="Attached" className="moment-image" />}
+                                    {moment.image_url && <AuthenticatedImage src={resolveAvatarUrl(moment.image_url, apiUrl)} alt="Attached" className="moment-image" />}
 
                                     <div className="moment-footer" style={{ marginTop: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                         <span className="moment-time">{formatTime(moment.timestamp)}</span>

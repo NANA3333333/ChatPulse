@@ -278,7 +278,7 @@ ${simulationLogs.map((l, idx) => `${idx + 1}. ${l}`).join('\n')}
             systemResult = JSON.parse(clean);
         } catch (e) {
             console.error('[City/Social] System Final Parser 失败:', e.message);
-            console.error('[City/Social] 尝试解析的文本:\n', clean ? clean.substring(0, 1500) : '未提取到 JSON');
+            console.error('[City/Social] 尝试解析的文本长度:', clean ? String(clean).length : 0);
             if (e.canRetry) throw e;
             throw createSocialEncounterError(`社交遭遇结算生成失败，请重试：${e.message}`);
         }

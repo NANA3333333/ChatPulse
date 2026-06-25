@@ -84,9 +84,10 @@ async function fetchWithTimeout(url, options = {}) {
     try {
         return await fetch(url, {
             ...options,
+            redirect: 'manual',
             signal: controller.signal,
             headers: {
-                'user-agent': 'ChatPluse-MCP-Lab/0.1',
+                'user-agent': 'ChatPulse-MCP-Lab/0.1',
                 accept: 'text/html,application/json,text/plain;q=0.9,*/*;q=0.8',
                 ...(options.headers || {})
             }
@@ -350,13 +351,11 @@ function getWebSearchConfig(db) {
     const provider = String(profile.web_search_provider || 'auto').trim() || 'auto';
     const providers = WEB_SEARCH_PROVIDERS.map(item => {
         const profileKey = String(storedKeys[item.id] || '').trim();
-        const envKey = String(process.env[item.env] || '').trim();
-        const key = profileKey || envKey;
         return {
             ...item,
-            has_key: !!key,
-            masked: maskSecret(key),
-            source: profileKey ? 'user_profile' : (envKey ? 'env' : 'none')
+            has_key: !!profileKey,
+            masked: maskSecret(profileKey),
+            source: profileKey ? 'user_profile' : 'none'
         };
     });
     return { provider, providers, keys: storedKeys };
@@ -373,7 +372,7 @@ function resolveSearchProvider(db, preferredProvider = '') {
         : WEB_SEARCH_PROVIDERS.map(item => item.id);
     for (const id of orderedIds) {
         const provider = config.providers.find(item => item.id === id);
-        const key = String(config.keys[id] || process.env[provider?.env] || '').trim();
+        const key = String(config.keys[id] || '').trim();
         if (provider && key) return { id, label: provider.label, key, config };
     }
     return { id: 'duckduckgo', label: 'DuckDuckGo Instant Answer', key: '', config };

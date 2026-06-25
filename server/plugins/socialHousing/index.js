@@ -1,5 +1,7 @@
 const initSocialHousingDb = require('./db');
 const initCityDb = require('../city/cityDb');
+const { buildUniversalContext } = require('../../contextBuilder');
+const { createRentalChainService } = require('./rentalChainService');
 const {
     isSocialHousingValidationError,
     normalizeAgencyConfigPayload,
@@ -8,6 +10,7 @@ const {
     normalizeHousingPayload,
     normalizeSocialClassPayload
 } = require('./inputGuards');
+const { filterAutomationUsers } = require('../../automationActivity');
 
 const AUTO_TICK_MS = 60 * 1000;
 const RENT_TICK_MS = 60 * 1000;
@@ -30,6 +33,20 @@ function unwrapAgencyJsonText(text) {
     if (!raw) return '';
     const fenceMatch = raw.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
     return fenceMatch ? String(fenceMatch[1] || '').trim() : raw;
+}
+
+function parseLooseAgencyJsonText(text) {
+    const raw = unwrapAgencyJsonText(text);
+    try {
+        return JSON.parse(raw);
+    } catch (error) {
+        const start = raw.indexOf('{');
+        const end = raw.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+            return JSON.parse(raw.slice(start, end + 1));
+        }
+        throw error;
+    }
 }
 
 function looksLikePriceText(text) {
@@ -58,6 +75,45 @@ function resolveAgencyAiChar(db, config = {}) {
         if (selected) return selected;
     }
     return chars.find((char) => char?.api_endpoint && char?.api_key && char?.model_name) || null;
+}
+
+function maskSecretLast4(value) {
+    const text = String(value || '').trim();
+    return text ? text.slice(-4) : '';
+}
+
+function redactSocialHousingCharacterSecrets(characters = []) {
+    return (Array.isArray(characters) ? characters : []).map((char) => {
+        const apiKey = String(char?.api_key || '').trim();
+        return {
+            ...char,
+            api_key: '',
+            api_key_configured: !!apiKey,
+            api_key_last4: maskSecretLast4(apiKey)
+        };
+    });
+}
+
+function redactAgencyConfig(config = {}) {
+    const llmKey = String(config?.llm_key || '').trim();
+    const safe = {
+        ...config,
+        llm_key_configured: !!llmKey,
+        llm_key_last4: maskSecretLast4(llmKey)
+    };
+    delete safe.llm_key;
+    return safe;
+}
+
+function preserveAgencySecretPatch(payload = {}, current = {}) {
+    const next = { ...(payload || {}) };
+    if (Object.prototype.hasOwnProperty.call(next, 'llm_key')) {
+        const value = String(next.llm_key || '').trim();
+        if ((!value || /^(\u2022{2,}|\*{2,})/.test(value)) && String(current?.llm_key || '').trim()) {
+            delete next.llm_key;
+        }
+    }
+    return next;
 }
 
 function removeAgencyArtifacts(cityDb, title, content) {
@@ -138,6 +194,17 @@ function getAgencyAdsWithPublishState(socialHousingDb, cityDb, limit = 12) {
     }));
 }
 
+function getRentalChainEventMap(socialHousingDb, chains = []) {
+    if (!socialHousingDb?.getRentalChainEvents) return {};
+    const map = {};
+    for (const chain of Array.isArray(chains) ? chains : []) {
+        const id = Number(chain?.id || 0);
+        if (!Number.isSafeInteger(id) || id <= 0) continue;
+        map[String(id)] = socialHousingDb.getRentalChainEvents(id);
+    }
+    return map;
+}
+
 function clampNumber(value, min, max) {
     const num = Number(value);
     if (!Number.isFinite(num)) return min;
@@ -162,7 +229,24 @@ function buildRentLog(char = {}, binding = {}, paid = false, amount = 0) {
     return `${char.name} 的 ${homeLabel} 房租到期，但钱包余额不足，居住状态变成拖欠。`;
 }
 
+function buildFridayAgencyRentLog(char = {}, binding = {}, paid = false, amount = 0) {
+    const homeLabel = `${binding.housing_emoji || ''}${binding.housing_name || binding.housing_id || '住所'}`.trim();
+    if (paid) {
+        return `周五中介收费日，安家置业来收 ${homeLabel} 的本周房租。${char.name} 付出 ${amount} 金币，租约继续稳定一周。`;
+    }
+    return `周五中介收费日，安家置业来收 ${homeLabel} 的本周房租，但 ${char.name} 钱包余额不足，当场被中介赶了出去，重新变成无固定住所。`;
+}
+
+function buildFridayRentPrivateMessage(char = {}, binding = {}, paid = false, amount = 0) {
+    const homeLabel = `${binding.housing_emoji || ''}${binding.housing_name || binding.housing_id || '住所'}`.trim();
+    if (paid) {
+        return `今天周五，中介来收 ${homeLabel} 的房租。我付了 ${amount} 金币，这周租约稳住了。`;
+    }
+    return `今天周五，中介来收 ${homeLabel} 的房租，但我钱不够。他们把我赶出来了，我现在又没有固定住所了。`;
+}
+
 function doesAgencyAdReferenceHome(ad, home) {
+    if (ad?.home_id && home?.id && String(ad.home_id) === String(home.id)) return true;
     const title = compactText(ad?.title);
     const content = compactText(ad?.content);
     const haystack = `${title}\n${content}`;
@@ -370,8 +454,414 @@ async function generateAgencyAd({ callLLM, db, config, snapshot, aiChar }) {
     return { title, content, home_id: selectedHomeExists ? selectedHomeId : '' };
 }
 
+const ROOM_ASSEMBLY_ALLOWED_ITEMS = new Set(['bed', 'nightstand', 'wardrobe', 'vanity', 'desk', 'bookshelf', 'sofa', 'rug', 'floorLamp', 'wallArt']);
+const ROOM_ASSEMBLY_ALLOWED_DIRECTIONS = new Set(['front', 'back', 'left', 'right']);
+const ROOM_ASSEMBLY_ITEM_ALIASES = {
+    bed: 'bed',
+    '床': 'bed',
+    nightstand: 'nightstand',
+    bedside: 'nightstand',
+    '床头柜': 'nightstand',
+    wardrobe: 'wardrobe',
+    closet: 'wardrobe',
+    '衣柜': 'wardrobe',
+    vanity: 'vanity',
+    dresser: 'vanity',
+    '梳妆台': 'vanity',
+    desk: 'desk',
+    table: 'desk',
+    '书桌': 'desk',
+    bookshelf: 'bookshelf',
+    bookcase: 'bookshelf',
+    shelf: 'bookshelf',
+    '书架': 'bookshelf',
+    '书柜': 'bookshelf',
+    sofa: 'sofa',
+    couch: 'sofa',
+    '沙发': 'sofa',
+    rug: 'rug',
+    carpet: 'rug',
+    '地毯': 'rug',
+    floorlamp: 'floorLamp',
+    'floor_lamp': 'floorLamp',
+    'floor-lamp': 'floorLamp',
+    lamp: 'floorLamp',
+    tablelamp: 'floorLamp',
+    'table_lamp': 'floorLamp',
+    'table-lamp': 'floorLamp',
+    '落地灯': 'floorLamp',
+    '台灯': 'floorLamp',
+    wallart: 'wallArt',
+    'wall_art': 'wallArt',
+    'wall-art': 'wallArt',
+    art: 'wallArt',
+    painting: 'wallArt',
+    '挂画': 'wallArt',
+    '墙面装饰': 'wallArt'
+};
+const ROOM_ASSEMBLY_DIRECTION_ALIASES = {
+    front: 'front',
+    '正面': 'front',
+    back: 'back',
+    '背面': 'back',
+    left: 'left',
+    '左侧': 'left',
+    '左': 'left',
+    right: 'right',
+    '右侧': 'right',
+    '右': 'right'
+};
+const ROOM_ASSEMBLY_ASCII = [
+    'ROOM 16x16',
+    '[w][w][w][w][w][w][w][w][w][w][w][w][w][w][w][w]',
+    '[w][m][m][m][m][m][m][m][m][m][m][m][m][m][m][w]',
+    '[w][m][d][d][d][d][d][d][d][d][d][d][d][d][m][w]',
+    '[w][m][d][d][d][d][d][d][d][d][d][d][d][d][m][w]',
+    '[w][m][d][d][d][d][d][d][d][d][d][d][d][d][m][w]',
+    '[w][m][d][d][d][d][d][d][d][d][d][d][d][d][m][w]',
+    '[w][m][d][d][d][d][d][d][d][d][d][d][d][d][m][w]',
+    '[w][m][d][d][d][d][d][d][d][d][d][d][d][d][m][w]',
+    '[w][m][d][d][d][d][d][d][d][d][d][d][d][d][m][w]',
+    '[w][m][d][d][d][d][d][d][d][d][d][d][d][d][m][w]',
+    '[w][m][d][d][d][d][d][d][d][d][d][d][d][d][m][w]',
+    '[w][m][d][d][d][d][d][d][d][d][d][d][d][d][m][w]',
+    '[w][m][d][d][d][d][d][d][d][d][d][d][d][d][m][w]',
+    '[w][m][d][d][d][d][d][d][d][d][d][d][d][d][m][w]',
+    '[w][m][m][m][m][m][m][m][m][m][m][m][m][m][m][w]',
+    '[w][w][w][w][w][w][w][w][w][w][w][w][w][w][w][w]'
+].join('\n');
+
+function scrubRoomAssemblyPromptText(value) {
+    return compactText(value).replace(/door/ig, '').replace(/门/g, '');
+}
+
+function normalizeRoomAssemblyItem(value) {
+    const text = String(value || '').trim();
+    const compact = text.replace(/[\s_-]+/g, '').toLowerCase();
+    const key = ROOM_ASSEMBLY_ITEM_ALIASES[text] || ROOM_ASSEMBLY_ITEM_ALIASES[text.toLowerCase()] || ROOM_ASSEMBLY_ITEM_ALIASES[compact];
+    return ROOM_ASSEMBLY_ALLOWED_ITEMS.has(key) ? key : '';
+}
+
+function normalizeRoomAssemblyDirection(value) {
+    const text = String(value || '').trim();
+    const key = ROOM_ASSEMBLY_DIRECTION_ALIASES[text] || ROOM_ASSEMBLY_DIRECTION_ALIASES[text.toLowerCase()];
+    return ROOM_ASSEMBLY_ALLOWED_DIRECTIONS.has(key) ? key : 'front';
+}
+
+function normalizeRoomAssemblyGridValue(value, fallback = 1, options = {}) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return fallback;
+    const rounded = Math.round(num);
+    return options.clamp === false ? num : clampNumber(rounded, 1, 14);
+}
+
+function normalizeRoomAssemblyAssetId(value) {
+    return compactText(value).replace(/[^\w.-]/g, '').slice(0, 140);
+}
+
+function normalizeRoomAssemblyBudget(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return 0;
+    return Math.round(clampNumber(num, 0, 100000));
+}
+
+function normalizeRoomAssemblyShopItem(item = {}) {
+    const assetId = normalizeRoomAssemblyAssetId(item.assetId || item.asset_id || item.id);
+    const kind = normalizeRoomAssemblyItem(item.item || item.kind || item.category);
+    const price = Math.max(0, Math.round(Number(item.price || 0)));
+    if (!assetId || !kind) return null;
+    return {
+        assetId,
+        item: kind,
+        label: scrubRoomAssemblyPromptText(item.label || item.name || assetId),
+        style: scrubRoomAssemblyPromptText(item.style || ''),
+        price,
+        maxQuantity: Math.max(1, Math.min(99, Math.round(Number(item.maxQuantity || item.max_quantity || 99)))),
+        cells: item.cells || item.size || null,
+        preferred_dir: normalizeRoomAssemblyDirection(item.preferred_dir || item.direction || 'front'),
+        directional: item.directional !== false
+    };
+}
+
+function getRoomAssemblyBaseAssetId(assetId) {
+    const value = normalizeRoomAssemblyAssetId(assetId);
+    const match = value.match(/^room_dir_(.+)_(front|back|left|right)_v1$/);
+    return match ? `room_front_${match[1]}_v1` : value;
+}
+
+function findRoomAssemblyShopItemByAssetId(shopItems, assetId) {
+    const baseAssetId = getRoomAssemblyBaseAssetId(assetId);
+    return shopItems.find((item) => item.assetId === baseAssetId) || null;
+}
+
+function findCheapestRoomAssemblyShopItem(shopItems, kind, remainingBudget = Infinity, quantity = 1) {
+    const safeKind = normalizeRoomAssemblyItem(kind);
+    if (!safeKind) return null;
+    return shopItems
+        .filter((item) => item.item === safeKind && item.price * quantity <= remainingBudget)
+        .sort((a, b) => (a.price - b.price) || a.assetId.localeCompare(b.assetId))[0] || null;
+}
+
+function normalizeAgencyRoomAssemblyOutput(parsed, furnitureList = [], budget = 0) {
+    const safeBudget = normalizeRoomAssemblyBudget(budget);
+    const shopItems = (Array.isArray(furnitureList) ? furnitureList : [])
+        .map(normalizeRoomAssemblyShopItem)
+        .filter(Boolean);
+    const resolvedShopItems = shopItems.length > 0 ? shopItems : [
+        { assetId: 'room_front_bed_peach_lemon_v1', item: 'bed', label: '床', style: '基础', price: 70, maxQuantity: 99, cells: { front: '5x5' }, preferred_dir: 'front', directional: true },
+        { assetId: 'room_front_peach_nightstand_v1', item: 'nightstand', label: '床头柜', style: '基础', price: 22, maxQuantity: 99, cells: { front: '3x3' }, preferred_dir: 'front', directional: true },
+        { assetId: 'room_front_peach_wardrobe_v1', item: 'wardrobe', label: '衣柜', style: '基础', price: 55, maxQuantity: 99, cells: { front: '3x5' }, preferred_dir: 'front', directional: true },
+        { assetId: 'room_front_peach_vanity_v1', item: 'vanity', label: '梳妆台', style: '基础', price: 45, maxQuantity: 99, cells: { front: '4x5' }, preferred_dir: 'front', directional: true }
+    ];
+    const source = Array.isArray(parsed?.placements)
+        ? parsed.placements
+        : (Array.isArray(parsed?.items) ? parsed.items : (Array.isArray(parsed) ? parsed : []));
+    const sourcePurchases = Array.isArray(parsed?.purchases)
+        ? parsed.purchases
+        : (Array.isArray(parsed?.shopping_list) ? parsed.shopping_list : []);
+    const purchasesByAsset = new Map();
+    const singlePurchaseKinds = new Set(['rug', 'wallArt']);
+    let spent = 0;
+
+    const addPurchase = (candidate = {}, quantityFallback = 1) => {
+        const requestedAssetId = normalizeRoomAssemblyAssetId(candidate.assetId || candidate.asset_id || candidate.id || candidate.asset);
+        const requestedShopItem = requestedAssetId ? findRoomAssemblyShopItemByAssetId(resolvedShopItems, requestedAssetId) : null;
+        const requestedKind = normalizeRoomAssemblyItem(candidate.item || candidate.kind || candidate.category || requestedShopItem?.item);
+        const requestedQuantity = Math.max(1, Math.round(Number(candidate.quantity || candidate.qty || quantityFallback || 1)));
+        const remainingBudget = safeBudget > 0 ? Math.max(0, safeBudget - spent) : Infinity;
+        let shopItem = requestedShopItem || findCheapestRoomAssemblyShopItem(resolvedShopItems, requestedKind, remainingBudget, requestedQuantity);
+        if (shopItem && safeBudget > 0 && shopItem.price * requestedQuantity > remainingBudget) {
+            shopItem = findCheapestRoomAssemblyShopItem(resolvedShopItems, requestedKind || shopItem.item, remainingBudget, requestedQuantity);
+        }
+        if (!shopItem) return null;
+        if (singlePurchaseKinds.has(shopItem.item)) {
+            const existingByKind = Array.from(purchasesByAsset.values()).find((purchase) => purchase.item === shopItem.item);
+            if (existingByKind) return existingByKind;
+        }
+        const quantity = shopItem.item === 'rug' || shopItem.item === 'wallArt'
+            ? 1
+            : Math.min(requestedQuantity, Math.max(1, Number(shopItem.maxQuantity || requestedQuantity)));
+        const subtotal = shopItem.price * quantity;
+        if (safeBudget > 0 && spent + subtotal > safeBudget) return null;
+        const existing = purchasesByAsset.get(shopItem.assetId);
+        if (existing) {
+            if (!singlePurchaseKinds.has(existing.item)) {
+                existing.quantity += quantity;
+                existing.subtotal += subtotal;
+                spent += subtotal;
+            }
+            return existing;
+        }
+        const purchase = {
+            assetId: shopItem.assetId,
+            item: shopItem.item,
+            label: shopItem.label,
+            style: shopItem.style,
+            quantity,
+            price: shopItem.price,
+            subtotal
+        };
+        purchasesByAsset.set(shopItem.assetId, purchase);
+        spent += subtotal;
+        return purchase;
+    };
+    const findPurchasedByKind = (kind) => {
+        const safeKind = normalizeRoomAssemblyItem(kind);
+        if (!safeKind) return null;
+        return Array.from(purchasesByAsset.values()).find((purchase) => purchase.item === safeKind) || null;
+    };
+
+    for (const purchase of sourcePurchases) addPurchase(purchase, 1);
+    if (sourcePurchases.length === 0) {
+        for (const item of source) addPurchase(item, 1);
+    }
+
+    const placements = [];
+    for (const item of source) {
+        const requestedAssetId = normalizeRoomAssemblyAssetId(item?.assetId || item?.asset_id || item?.asset);
+        const requestedShopItem = requestedAssetId ? findRoomAssemblyShopItemByAssetId(resolvedShopItems, requestedAssetId) : null;
+        const normalizedItem = normalizeRoomAssemblyItem(item?.item || item?.kind || item?.id || item?.name || requestedShopItem?.item);
+        const alreadyPurchasedKind = requestedShopItem ? null : findPurchasedByKind(normalizedItem);
+        const purchase = requestedShopItem && purchasesByAsset.has(requestedShopItem.assetId)
+            ? purchasesByAsset.get(requestedShopItem.assetId)
+            : (alreadyPurchasedKind || addPurchase({ ...item, item: normalizedItem }, 1));
+        if (!purchase) continue;
+        const constrainPlacement = purchase.item === 'wallArt';
+        placements.push({
+            assetId: purchase.assetId,
+            item: purchase.item,
+            x: normalizeRoomAssemblyGridValue(item?.x ?? item?.col ?? item?.grid_x, purchase.item === 'wardrobe' ? 1 : 2, { clamp: constrainPlacement }),
+            y: normalizeRoomAssemblyGridValue(item?.y ?? item?.row ?? item?.grid_y, 4, { clamp: constrainPlacement }),
+            dir: normalizeRoomAssemblyDirection(item?.dir || item?.direction || item?.facing)
+        });
+    }
+    return {
+        budget: safeBudget,
+        spent,
+        purchases: Array.from(purchasesByAsset.values()),
+        placements,
+        notes: scrubRoomAssemblyPromptText(parsed?.notes || parsed?.reason || parsed?.summary || '')
+    };
+}
+
+async function generateAgencyRoomAssembly({ callLLM, db, config, home = {}, palette = {}, furniture = [], budget = 0, room = {}, aiChar }) {
+    const endpoint = compactText(aiChar?.api_endpoint || config.llm_endpoint);
+    const key = compactText(aiChar?.api_key || config.llm_key);
+    const model = compactText(aiChar?.model_name || config.llm_model);
+
+    if (!endpoint || !key || !model) {
+        throw new Error('Agency AI model config is missing. Please choose an available API.');
+    }
+
+    const roomSize = {
+        cols: clampNumber(room?.size?.cols || room?.cols || 16, 8, 24),
+        rows: clampNumber(room?.size?.rows || room?.rows || 16, 8, 24)
+    };
+    const roomBudget = normalizeRoomAssemblyBudget(budget || home?.room_budget || home?.assembly_budget);
+    const safeFurniture = (Array.isArray(furniture) ? furniture : [])
+        .map(normalizeRoomAssemblyShopItem)
+        .filter(Boolean);
+    const furnitureList = safeFurniture.length > 0 ? safeFurniture : [
+        { assetId: 'room_front_bed_peach_lemon_v1', item: 'bed', label: '床', style: '基础', price: 70, maxQuantity: 99, cells: { front: '5x5' }, preferred_dir: 'front', directional: true },
+        { assetId: 'room_front_peach_nightstand_v1', item: 'nightstand', label: '床头柜', style: '基础', price: 22, maxQuantity: 99, cells: { front: '3x3' }, preferred_dir: 'front', directional: true },
+        { assetId: 'room_front_peach_wardrobe_v1', item: 'wardrobe', label: '衣柜', style: '基础', price: 55, maxQuantity: 99, cells: { front: '3x5' }, preferred_dir: 'front', directional: true },
+        { assetId: 'room_front_peach_vanity_v1', item: 'vanity', label: '梳妆台', style: '基础', price: 45, maxQuantity: 99, cells: { front: '4x5' }, preferred_dir: 'front', directional: true }
+    ];
+    const homeSummary = {
+        name: scrubRoomAssemblyPromptText(home?.name || home?.id || '样板房'),
+        weekly_rent: Number(home?.weekly_rent || 0),
+        comfort: Number(home?.comfort || 0),
+        prestige: Number(home?.prestige || 0),
+        privacy: Number(home?.privacy || 0),
+        description: scrubRoomAssemblyPromptText(home?.description || '').slice(0, 220)
+    };
+    const systemPrompt = [
+        '你是像素小屋里的房屋销售顾问兼室内家具布局 AI。',
+        '你的目标是根据预算把房间布置得更容易被买家喜欢：家具摆放要有生活逻辑、动线清楚、功能区明确、视觉上整洁，并尽量让关键家具正面朝镜头。',
+        '你的任务是根据 ASCII 网格、家具商店价格和预算，输出可以直接转换成像素家具坐标的采购摆放方案。',
+        '你只负责室内家具采购和摆放，不输出销售文案，不发布广告，不描述商业街内容。',
+        '使用快速贪心布局，不要寻找最优解，不要做长篇预算组合推演。',
+        '只输出 JSON，不要解释，不要写 Markdown。'
+    ].join('\n');
+    const userPrompt = [
+        '请为当前像素小屋生成家具摆放。',
+        '',
+        '[房间 ASCII]',
+        ROOM_ASSEMBLY_ASCII,
+        '',
+        '[图例]',
+        '[w]=墙体',
+        '[d]=地面',
+        '[m]=墙边视觉缓冲区/踢脚线/留白，不可摆放家具',
+        'x,y 使用 0 起点视觉网格坐标，必须给出家具左上角锚点，不是中心点。',
+        '每个素材都有 cells，占地是矩形面积；放置时用左上格加宽高形成完整矩形来检查边界和重叠。',
+        '普通家具完整占格必须落在 [d] 区域内；边界以 ASCII 中的 [d]/[m]/[w] 为准，不要压住墙体或墙边视觉缓冲区。',
+        '墙和地板的过渡线在房间上方墙面与地面相接的位置；普通家具渲染时地线会按背景向上校准半格，第一排地面贴近这条过渡线，wallArt 放在过渡线上方的墙面区域。',
+        '检查重叠必须用 cells 占地矩形，不许只比较左上角；ASCII 房间网格就是用来判断可放区域和碰撞的。',
+        '',
+        '[当前房源]',
+        JSON.stringify(homeSummary, null, 2),
+        '',
+        '[装修预算]',
+        String(roomBudget),
+        '',
+        '[家具商店]',
+        JSON.stringify(furnitureList, null, 2),
+        '',
+        '[摆放规则]',
+        '1. 只能从家具商店选择素材，必须使用商店里的 assetId。',
+        '2. purchases 的总价不能超过装修预算，price 以家具商店为准；预算是装修上限，不是存款目标。',
+        '3. 用快速贪心：先覆盖更多家具种类，再用剩余预算补装饰或重复件；不要计算最优组合。',
+        '4. 在不超预算、普通家具占地不重叠、不压墙的前提下，尽可能多买家具和装饰，尽量把花费推近预算上限。',
+        '5. 如果还有预算和合法空位，不要停在基础四件套；继续加入书桌、书架、沙发、地毯、灯、挂画，直到空间或预算接近上限。',
+        '6. 家具商店包含功能家具和装饰品；装饰品包括 rug、floorLamp、wallArt，它们是房屋档次的一部分，不是可忽略杂物。',
+        '7. 必需品优先级：床、床头柜、衣柜、梳妆台；然后按房源档次加入书桌、书架、沙发、地毯、灯、挂画。',
+        '8. 普通家具 bed/nightstand/wardrobe/vanity/desk/bookshelf/sofa/floorLamp 只放在 [d] 地面范围内；床、书架、衣柜、书桌、梳妆台、沙发等大件推荐靠后墙或侧墙，但不能为了靠墙压住 [w]/[m] 或墙地过渡线。',
+        '9. rug 最多 1 张，必须放在地面/地毯区域，不要挂到墙面；wallArt 最好只放 1 张，必须放在墙面区域，不要贴地、不要落到地板。',
+        '10. rug 和 wallArt 都是置底图层，可以被其他家具部分遮盖；但最好仍露出主要图案，不要被床、沙发、衣柜等大件完全盖住。',
+        '11. 除 rug/wallArt 外，所有家具必须用 cells 占地面积做碰撞检查，任意两个普通家具的占地矩形不能重叠；可以紧凑摆放，留出一条可读走道即可。',
+        '12. 大件家具靠墙/沿墙只是布局建议，不是硬约束；优先保证合法占格、不重叠、走道可读，然后再考虑靠墙。',
+        '13. 尽量使用 dir=front，让家具正面朝镜头；只有布局明显更自然时，才使用 left、right 或 back。',
+        '14. 衣柜正面、梳妆台镜面、床正面、床头柜正面尽量可见。',
+        '15. 床头柜必须靠近床，梳妆台和衣柜前方至少留出 1 格地面。',
+        '16. 即使预算 < 950，只要有空位也应加入装饰；预算 >= 950 时优先加入至少 2 类装饰；预算 >= 1450 或 prestige >= 32 时优先加入地毯、灯、挂画三类装饰。',
+        '17. 高档房源不要只摆功能家具；如果空间允许，用同风格装饰品、沙发、书桌、书架拉开居住档次。',
+        '18. 优先覆盖更多家具种类，再考虑重复同类；书柜、书桌、沙发这类大件优先于第二个梳妆台、第二个床头柜或第二盏灯。',
+        '19. 除 rug 和 wallArt 最多 1 张外，不限制购买和摆放数量；可以增加不同家具和装饰，但不要无意义重复堆同一件素材。',
+        '20. 输出必须是紧凑 JSON；不要复述家具商店、预算、规则、ASCII 或推理过程。',
+        '21. purchases 只写 assetId 和 quantity；placements 只写 assetId、item、x、y、dir；notes 简短。',
+        '',
+        '[输出格式]',
+        '返回一个 JSON 对象，包含 budget、spent、purchases、placements、notes。',
+        'purchases 是数组，每项只包含 assetId 和 quantity；assetId 必须完整复制家具商店里的字符串，不要改写。',
+        'placements 是数组，每项只包含 assetId、item、x、y、dir；x/y 是左上角视觉网格坐标，必须由你根据 ASCII 和 cells 自己计算，不要复用任何示例。'
+    ].join('\n');
+
+    recordAgencyDebug(db, aiChar, 'input', {
+        system_prompt: systemPrompt,
+        user_prompt: userPrompt
+    }, {
+        context_type: 'social_housing_room_assembly',
+        model,
+        endpoint
+    });
+
+    const result = await callLLM({
+        endpoint,
+        key,
+        model,
+        messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+        ],
+        maxTokens: null,
+        temperature: 0.25,
+        responseFormat: { type: 'json_object' },
+        returnUsage: true,
+        maxAttempts: 1
+    });
+
+    const raw = typeof result === 'string' ? result : result?.content;
+    const finishReason = String(result?.finishReason || '').trim();
+
+    recordAgencyDebug(db, aiChar, 'output', String(raw || ''), {
+        context_type: 'social_housing_room_assembly',
+        model,
+        endpoint,
+        finishReason,
+        cached: !!result?.cached,
+        usage: result?.usage || null
+    });
+
+    let parsed;
+    try {
+        parsed = parseLooseAgencyJsonText(raw);
+    } catch (e) {
+        if (finishReason === 'length') {
+            throw new Error('Agency room assembly AI output was truncated. Please retry.');
+        }
+        throw new Error('Agency room assembly AI output was malformed. Please retry.');
+    }
+
+    const assembly = normalizeAgencyRoomAssemblyOutput(parsed, furnitureList, roomBudget);
+    if (assembly.placements.length === 0) {
+        throw new Error('Agency room assembly AI output had no usable placements. Please retry.');
+    }
+    if (finishReason === 'length' && !assembly.notes) {
+        assembly.notes = '模型返回到长度上限，但前段 JSON 已成功解析。';
+    }
+
+    return {
+        ...assembly,
+        room: roomSize,
+        model,
+        ai_character: aiChar ? { id: String(aiChar.id), name: String(aiChar.name || aiChar.id) } : null,
+        raw_output: String(raw || '')
+    };
+}
+
 module.exports = function initSocialHousingPlugin(app, context) {
-    const { authMiddleware, authDb, getUserDb, getWsClients, callLLM } = context;
+    const { authMiddleware, authDb, getUserDb, getWsClients, getEngine, getMemory, callLLM } = context;
 
     function ensureSocialHousingDb(db) {
         if (!db.socialHousing) {
@@ -389,6 +879,20 @@ module.exports = function initSocialHousingPlugin(app, context) {
         return db.city;
     }
 
+    const rentalChainService = createRentalChainService({
+        callLLM,
+        buildUniversalContext,
+        getMemory,
+        getUserDb,
+        getEngine,
+        getWsClients,
+        ensureSocialHousingDb,
+        ensureCityDb,
+        resolveAgencyAiChar,
+        recordAgencyDebug,
+        redactSocialHousingCharacterSecrets
+    });
+
     async function publishAgencyAdForDb(db, triggerType = 'manual') {
         const socialHousingDb = ensureSocialHousingDb(db);
         const cityDb = ensureCityDb(db);
@@ -398,6 +902,7 @@ module.exports = function initSocialHousingPlugin(app, context) {
         const ad = await generateAgencyAd({ callLLM, db, config, snapshot, aiChar });
 
         socialHousingDb.addAgencyAd({
+            home_id: ad.home_id || '',
             title: ad.title,
             content: ad.content,
             trigger_type: triggerType,
@@ -441,42 +946,113 @@ module.exports = function initSocialHousingPlugin(app, context) {
         const home = housingContext.housing || {};
         const amount = Number(binding.rent_weekly || home.weekly_rent || 0);
         if (!Number.isFinite(amount) || amount <= 0) return { success: false, reason: 'rent_not_configured' };
+        const weeklyAgencyCollection = String(options.source || '') === 'weekly_friday_agency';
+
+        const sendWeeklyPrivate = (paid, nextBinding, extra = {}) => {
+            if (!weeklyAgencyCollection || options.notifyPrivate === false) return null;
+            const content = buildFridayRentPrivateMessage(character, { ...binding, housing_name: home.name, housing_emoji: home.emoji }, paid, amount);
+            const metadata = {
+                source: 'social_housing_friday_rent_collection',
+                paid: !!paid,
+                evicted: !!extra.evicted,
+                amount,
+                home_id: home.id || binding.housing_id || '',
+                next_rent_due_at: Number(nextBinding?.rent_due_at || 0),
+                missed_rent_count: Number(nextBinding?.missed_rent_count || 0)
+            };
+            const { id: msgId, timestamp: msgTs } = db.addMessage(character.id, 'character', content, metadata);
+            const engine = options.userId ? getEngine(options.userId) : null;
+            const wsClients = options.userId ? getWsClients(options.userId) : new Set();
+            engine?.broadcastNewMessage?.(wsClients, {
+                id: msgId,
+                character_id: character.id,
+                role: 'character',
+                content,
+                timestamp: msgTs,
+                read: 0,
+                metadata
+            });
+            engine?.broadcastEvent?.(wsClients, { type: 'refresh_contacts' });
+            return { id: msgId, content };
+        };
 
         if (Number(character.wallet || 0) >= amount) {
             db.updateCharacter(character.id, { wallet: Number(character.wallet || 0) - amount });
             const nextBinding = socialHousingDb.markRentPaid(character.id, Date.now());
+            const log = weeklyAgencyCollection
+                ? buildFridayAgencyRentLog(character, { ...binding, housing_name: home.name, housing_emoji: home.emoji }, true, amount)
+                : buildRentLog(character, { ...binding, housing_name: home.name, housing_emoji: home.emoji }, true, amount);
             cityDb.logAction(
                 character.id,
-                'RENT',
-                buildRentLog(character, { ...binding, housing_name: home.name, housing_emoji: home.emoji }, true, amount),
+                weeklyAgencyCollection ? 'AGENCY_RENT_COLLECTION' : 'RENT',
+                log,
                 0,
                 -amount,
                 character.location || 'home'
             );
-            return { success: true, paid: true, amount, character: db.getCharacter(character.id), binding: nextBinding };
+            return { success: true, paid: true, amount, character: db.getCharacter(character.id), binding: nextBinding, private_message: sendWeeklyPrivate(true, nextBinding) };
         }
 
-        const nextBinding = socialHousingDb.markRentOverdue(character.id);
-        const stressPatch = applyRentStressPatch(character, nextBinding || binding);
+        let nextBinding = null;
+        let stressPatch = applyRentStressPatch(character, binding);
+        if (weeklyAgencyCollection) {
+            socialHousingDb.saveBinding(character.id, {
+                social_class_id: binding.social_class_id || '',
+                housing_id: '',
+                housing_status: 'homeless',
+                rent_weekly: 0,
+                rent_due_day: 7,
+                rent_due_at: 0,
+                rent_last_paid_at: Number(binding.rent_last_paid_at || 0),
+                deposit_paid: 0,
+                missed_rent_count: Number(binding.missed_rent_count || 0) + 1,
+                note: `周五中介收费失败：${home.name || binding.housing_id || '住所'} 被收回`
+            });
+            nextBinding = socialHousingDb.getBinding(character.id);
+            stressPatch = {
+                ...stressPatch,
+                stress: clampNumber(Number(character.stress || 20) + 12, 0, 100),
+                mood: clampNumber(Number(character.mood || 50) - 8, 0, 100),
+                social_need: clampNumber(Number(character.social_need || 50) + 4, 0, 100),
+                pressure_level: clampNumber(Number(character.pressure_level || 0) + 2, 0, 4)
+            };
+        } else {
+            nextBinding = socialHousingDb.markRentOverdue(character.id);
+        }
         db.updateCharacter(character.id, stressPatch);
+        const log = weeklyAgencyCollection
+            ? buildFridayAgencyRentLog(character, { ...binding, housing_name: home.name, housing_emoji: home.emoji }, false, amount)
+            : buildRentLog(character, { ...binding, housing_name: home.name, housing_emoji: home.emoji }, false, amount);
         cityDb.logAction(
             character.id,
-            'RENT_OVERDUE',
-            buildRentLog(character, { ...binding, housing_name: home.name, housing_emoji: home.emoji }, false, amount),
+            weeklyAgencyCollection ? 'AGENCY_RENT_EVICTION' : 'RENT_OVERDUE',
+            log,
             0,
             0,
-            character.location || 'home'
+            weeklyAgencyCollection ? 'street' : (character.location || 'home')
         );
-        return { success: true, paid: false, amount, character: db.getCharacter(character.id), binding: nextBinding };
+        return {
+            success: true,
+            paid: false,
+            evicted: !!weeklyAgencyCollection,
+            amount,
+            character: db.getCharacter(character.id),
+            binding: nextBinding,
+            private_message: sendWeeklyPrivate(false, nextBinding, { evicted: !!weeklyAgencyCollection })
+        };
     }
 
-    function settleDueRentsForDb(db) {
+    function settleDueRentsForDb(db, options = {}) {
         const socialHousingDb = ensureSocialHousingDb(db);
         const dueBindings = socialHousingDb.getDueRentBindings(Date.now());
         const results = [];
         for (const binding of dueBindings) {
             try {
-                results.push(settleCharacterRent(db, binding.character_id));
+                results.push(settleCharacterRent(db, binding.character_id, {
+                    source: 'weekly_friday_agency',
+                    notifyPrivate: true,
+                    userId: options.userId
+                }));
             } catch (e) {
                 results.push({ success: false, character_id: binding.character_id, error: e.message });
             }
@@ -490,15 +1066,18 @@ module.exports = function initSocialHousingPlugin(app, context) {
             const cityDb = ensureCityDb(req.db);
             cleanupOrphanAgencyArtifacts(socialHousingDb, cityDb);
             const publicAgencyAnnouncements = getPublicAgencyAnnouncements(cityDb, 50);
+            const rentalChains = socialHousingDb.getRentalChains ? socialHousingDb.getRentalChains(20) : [];
             res.json({
                 success: true,
                 classes: socialHousingDb.getClasses(),
                 housing_tiers: socialHousingDb.getHousingTiers(),
-                characters: socialHousingDb.getCharactersWithBindings(() => req.db.getCharacters()),
+                characters: redactSocialHousingCharacterSecrets(socialHousingDb.getCharactersWithBindings(() => req.db.getCharacters())),
                 districts: cityDb.getDistricts ? cityDb.getDistricts() : [],
                 agency_model_options: getAgencyModelOptions(req.db),
-                agency: socialHousingDb.getAgencyConfig(),
+                agency: redactAgencyConfig(socialHousingDb.getAgencyConfig()),
                 agency_ads: getAgencyAdsWithPublishState(socialHousingDb, cityDb, 12),
+                rental_chains: rentalChains,
+                rental_chain_events: getRentalChainEventMap(socialHousingDb, rentalChains),
                 public_agency_announcements: publicAgencyAnnouncements
             });
         } catch (e) {
@@ -589,7 +1168,7 @@ module.exports = function initSocialHousingPlugin(app, context) {
             socialHousingDb.saveBinding(req.params.id, payload);
             res.json({
                 success: true,
-                characters: socialHousingDb.getCharactersWithBindings(() => req.db.getCharacters()),
+                characters: redactSocialHousingCharacterSecrets(socialHousingDb.getCharactersWithBindings(() => req.db.getCharacters())),
                 housing_context: socialHousingDb.getHousingContextForCharacter(req.params.id)
             });
         } catch (e) {
@@ -618,10 +1197,94 @@ module.exports = function initSocialHousingPlugin(app, context) {
             res.json({
                 success: true,
                 result,
-                characters: socialHousingDb.getCharactersWithBindings(() => req.db.getCharacters())
+                characters: redactSocialHousingCharacterSecrets(socialHousingDb.getCharactersWithBindings(() => req.db.getCharacters()))
             });
         } catch (e) {
             res.status(500).json({ success: false, error: e.message });
+        }
+    });
+
+    app.post('/api/social-housing/characters/:id/recommend-home', authMiddleware, async (req, res) => {
+        try {
+            const homeId = String(req.body?.home_id || req.body?.housing_id || '').trim();
+            if (!homeId) {
+                return res.status(400).json({ success: false, error: '缺少推荐房源' });
+            }
+            const result = await rentalChainService.recommendHomeToCharacter({
+                db: req.db,
+                userId: req.user.id,
+                characterId: req.params.id,
+                homeId,
+                agencyAdId: Number(req.body?.agency_ad_id || 0),
+                runFullChain: req.body?.run_full_chain !== false
+            });
+            const socialHousingDb = ensureSocialHousingDb(req.db);
+            const cityDb = ensureCityDb(req.db);
+            const wsClients = getWsClients(req.user.id);
+            wsClients?.forEach((client) => {
+                if (client.readyState === 1) {
+                    client.send(JSON.stringify({ type: 'refresh_contacts' }));
+                    client.send(JSON.stringify({ type: 'city_update', action: 'social-housing-rental-chain', character_id: req.params.id }));
+                }
+            });
+            const rentalChains = socialHousingDb.getRentalChains ? socialHousingDb.getRentalChains(20) : [];
+            res.json({
+                success: true,
+                outcome: result.outcome,
+                chain: result.chain,
+                chain_events: socialHousingDb.getRentalChainEvents ? socialHousingDb.getRentalChainEvents(result.chain?.id) : [],
+                characters: redactSocialHousingCharacterSecrets(socialHousingDb.getCharactersWithBindings(() => req.db.getCharacters())),
+                rental_chains: rentalChains,
+                rental_chain_events: getRentalChainEventMap(socialHousingDb, rentalChains),
+                agency_ads: getAgencyAdsWithPublishState(socialHousingDb, cityDb, 12)
+            });
+        } catch (e) {
+            const socialHousingDb = ensureSocialHousingDb(req.db);
+            const status = Number(e.status || e.statusCode || 500);
+            const rentalChains = socialHousingDb.getRentalChains ? socialHousingDb.getRentalChains(20) : [];
+            res.status(status >= 400 && status < 600 ? status : 500).json({
+                success: false,
+                error: e.message || '租房链路失败，请重试',
+                can_retry: e.canRetry !== false,
+                chain: e.chain || null,
+                rental_chains: rentalChains,
+                rental_chain_events: getRentalChainEventMap(socialHousingDb, rentalChains)
+            });
+        }
+    });
+
+    app.post('/api/social-housing/characters/:id/assign-home', authMiddleware, async (req, res) => {
+        try {
+            const homeId = String(req.body?.home_id || req.body?.housing_id || '').trim();
+            if (!homeId) {
+                return res.status(400).json({ success: false, error: '缺少指派房源' });
+            }
+            const result = await rentalChainService.assignHomeToCharacter({
+                db: req.db,
+                userId: req.user.id,
+                characterId: req.params.id,
+                homeId
+            });
+            const socialHousingDb = ensureSocialHousingDb(req.db);
+            const wsClients = getWsClients(req.user.id);
+            wsClients?.forEach((client) => {
+                if (client.readyState === 1) {
+                    client.send(JSON.stringify({ type: 'refresh_contacts' }));
+                    client.send(JSON.stringify({ type: 'city_update', action: 'social-housing-assigned', character_id: req.params.id }));
+                }
+            });
+            res.json({
+                success: true,
+                ...result,
+                characters: result.characters || redactSocialHousingCharacterSecrets(socialHousingDb.getCharactersWithBindings(() => req.db.getCharacters()))
+            });
+        } catch (e) {
+            const status = Number(e.status || e.statusCode || 500);
+            res.status(status >= 400 && status < 600 ? status : 500).json({
+                success: false,
+                error: e.message || '指派住房失败，请重试',
+                can_retry: e.canRetry !== false
+            });
         }
     });
 
@@ -631,10 +1294,10 @@ module.exports = function initSocialHousingPlugin(app, context) {
             const current = socialHousingDb.getAgencyConfig();
             const payload = normalizeAgencyConfigPayload({
                 ...current,
-                ...(req.body || {})
+                ...preserveAgencySecretPatch(req.body || {}, current)
             }, current);
             const saved = socialHousingDb.saveAgencyConfig(payload);
-            res.json({ success: true, agency: saved });
+            res.json({ success: true, agency: redactAgencyConfig(saved) });
         } catch (e) {
             sendSocialHousingError(res, e);
         }
@@ -653,7 +1316,7 @@ module.exports = function initSocialHousingPlugin(app, context) {
             res.json({
                 success: true,
                 ad,
-                agency: socialHousingDb.getAgencyConfig(),
+                agency: redactAgencyConfig(socialHousingDb.getAgencyConfig()),
                 agency_ads: getAgencyAdsWithPublishState(socialHousingDb, ensureCityDb(req.db), 12)
             });
         } catch (e) {
@@ -663,6 +1326,41 @@ module.exports = function initSocialHousingPlugin(app, context) {
                 socialHousingDb.saveAgencyConfig({
                     ...current,
                     last_error: String(e.message || '中介所 AI 执行失败'),
+                    last_error_at: Date.now()
+                });
+            } catch (_) { /* ignore */ }
+            res.status(500).json({ success: false, error: e.message });
+        }
+    });
+
+    app.post('/api/social-housing/agency/room-assembly', authMiddleware, async (req, res) => {
+        try {
+            const socialHousingDb = ensureSocialHousingDb(req.db);
+            const config = socialHousingDb.getAgencyConfig();
+            const aiChar = resolveAgencyAiChar(req.db, config);
+            const assembly = await generateAgencyRoomAssembly({
+                callLLM,
+                db: req.db,
+                config,
+                aiChar,
+                home: req.body?.home || {},
+                palette: req.body?.palette || {},
+                furniture: req.body?.furniture || [],
+                budget: req.body?.budget || 0,
+                room: req.body?.room || {}
+            });
+            res.json({
+                success: true,
+                assembly,
+                agency: redactAgencyConfig(socialHousingDb.getAgencyConfig())
+            });
+        } catch (e) {
+            try {
+                const socialHousingDb = ensureSocialHousingDb(req.db);
+                const current = socialHousingDb.getAgencyConfig();
+                socialHousingDb.saveAgencyConfig({
+                    ...current,
+                    last_error: String(e.message || '房间组装 AI 执行失败'),
                     last_error_at: Date.now()
                 });
             } catch (_) { /* ignore */ }
@@ -694,10 +1392,11 @@ module.exports = function initSocialHousingPlugin(app, context) {
     });
 
     setInterval(async () => {
-        const users = typeof authDb.getAllUsers === 'function' ? authDb.getAllUsers() : [];
+        const users = typeof authDb.getAllUsers === 'function'
+            ? filterAutomationUsers(authDb.getAllUsers(), Date.now())
+            : [];
         for (const user of users) {
             try {
-                if (String(user.status || 'active') !== 'active') continue;
                 const db = getUserDb(user.id);
                 const socialHousingDb = ensureSocialHousingDb(db);
                 const config = socialHousingDb.getAgencyConfig();
@@ -739,12 +1438,13 @@ module.exports = function initSocialHousingPlugin(app, context) {
     }, AUTO_TICK_MS);
 
     setInterval(() => {
-        const users = typeof authDb.getAllUsers === 'function' ? authDb.getAllUsers() : [];
+        const users = typeof authDb.getAllUsers === 'function'
+            ? filterAutomationUsers(authDb.getAllUsers(), Date.now())
+            : [];
         for (const user of users) {
             try {
-                if (String(user.status || 'active') !== 'active') continue;
                 const db = getUserDb(user.id);
-                const results = settleDueRentsForDb(db);
+                const results = settleDueRentsForDb(db, { userId: user.id });
                 if (!results.some((item) => item?.success)) continue;
                 const wsClients = getWsClients(user.id);
                 wsClients?.forEach((client) => {

@@ -1,7 +1,8 @@
 ﻿import React, { useState, useEffect, useCallback } from 'react';
 import { User, Trash2, Edit3, Save, RefreshCw, Palette, Download, Upload, FileText, ChevronDown, ChevronRight, Sparkles, ChevronLeft, Database, Volume2 } from 'lucide-react';
+import AuthenticatedImage from './AuthenticatedImage';
 import { useLanguage } from '../LanguageContext';
-import { resolveAvatarUrl } from '../utils/avatar';
+import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 import { useAuth } from '../AuthContext';
 import Scheduler from './Scheduler';
 
@@ -498,17 +499,94 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
         }
     }, [apiUrl]);
 
-    const fetchModels = async (endpoint, key, setList, setFetching, setError) => {
-        if (!endpoint || !key) { setError('请先填写 Endpoint 和 Key'); return; }
+    const getSecretPlaceholder = useCallback((record, field, fallback = '') => {
+        if (record?.[`${field}_clear`]) {
+            return lang === 'en' ? 'Marked to clear on save' : '已标记保存时清除';
+        }
+        if (record?.[`${field}_configured`]) {
+            const last4 = record?.[`${field}_last4`] ? `••••${record[`${field}_last4`]}` : (lang === 'en' ? 'saved key' : '已保存 Key');
+            return lang === 'en'
+                ? `Saved: ${last4}. Leave blank to keep it; type a new key to replace.`
+                : `已保存：${last4}。留空保留，输入新 Key 替换。`;
+        }
+        return fallback;
+    }, [lang]);
+
+    const getSecretStatusText = useCallback((record, field) => {
+        if (record?.[`${field}_clear`]) {
+            return lang === 'en' ? 'This saved key will be cleared after saving.' : '保存后会清除当前已保存的 Key。';
+        }
+        if (record?.[`${field}_configured`]) {
+            const last4 = record?.[`${field}_last4`] ? `••••${record[`${field}_last4`]}` : '';
+            return lang === 'en'
+                ? `Saved ${last4}. Leave this field blank to keep it.`
+                : `已保存 ${last4}。这个输入框留空会继续保留原 Key。`;
+        }
+        return lang === 'en' ? 'No key saved yet.' : '还没有保存 Key。';
+    }, [lang]);
+
+    const updateEditingSecret = useCallback((field, value) => {
+        setEditingContact(prev => prev ? { ...prev, [field]: value, [`${field}_clear`]: false } : prev);
+    }, []);
+
+    const markEditingSecretClear = useCallback((field) => {
+        const ok = window.confirm(lang === 'en'
+            ? 'Clear the saved key for this field after saving?'
+            : '保存后清除这个已保存的 Key？');
+        if (!ok) return;
+        setEditingContact(prev => prev ? {
+            ...prev,
+            [field]: '',
+            [`${field}_clear`]: true
+        } : prev);
+    }, [lang]);
+
+    const renderSecretStatus = useCallback((field) => {
+        if (!editingContact) return null;
+        const isClearMarked = !!editingContact[`${field}_clear`];
+        const hasSavedKey = !!editingContact[`${field}_configured`];
+        return (
+            <div style={{ marginTop: '5px', display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between', fontSize: '12px', color: isClearMarked ? '#b91c1c' : '#64748b' }}>
+                <span>{getSecretStatusText(editingContact, field)}</span>
+                {hasSavedKey && !isClearMarked && (
+                    <button
+                        type="button"
+                        onClick={() => markEditingSecretClear(field)}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 7px', border: '1px solid #fecaca', borderRadius: '5px', background: '#fff', color: '#b91c1c', cursor: 'pointer', fontSize: '12px', whiteSpace: 'nowrap' }}
+                    >
+                        <Trash2 size={12} /> {lang === 'en' ? 'Clear' : '清除'}
+                    </button>
+                )}
+                {isClearMarked && (
+                    <button
+                        type="button"
+                        onClick={() => setEditingContact(prev => prev ? { ...prev, [`${field}_clear`]: false } : prev)}
+                        style={{ padding: '2px 7px', border: '1px solid #cbd5e1', borderRadius: '5px', background: '#fff', color: '#475569', cursor: 'pointer', fontSize: '12px', whiteSpace: 'nowrap' }}
+                    >
+                        {lang === 'en' ? 'Undo' : '取消清除'}
+                    </button>
+                )}
+            </div>
+        );
+    }, [editingContact, getSecretStatusText, lang, markEditingSecretClear]);
+
+    const fetchModels = async (endpoint, key, setList, setFetching, setError, options = {}) => {
+        const cleanEndpoint = String(endpoint || '').trim();
+        const cleanKey = String(key || '').trim();
+        if (!cleanEndpoint) { setError('请先填写 Endpoint'); return; }
+        if (!cleanKey && !options.hasSavedKey) { setError('请先填写 Key，或使用已保存的 Key'); return; }
         setFetching(true); setError(''); setList([]);
         try {
-            const res = await fetch(`${apiUrl}/models`, {
+            const modelUrl = options.characterId
+                ? `${apiUrl}/characters/${encodeURIComponent(options.characterId)}/models`
+                : `${apiUrl}/models`;
+            const res = await fetch(modelUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`
                 },
-                body: JSON.stringify({ endpoint, key })
+                body: JSON.stringify({ endpoint: cleanEndpoint, key: cleanKey, scope: options.scope || 'main' })
             });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error);
@@ -809,7 +887,7 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
             return;
         }
 
-        let endpoint, key, model;
+        let endpoint, key, model, characterId;
         if (aiProviderId === 'manual') {
             endpoint = aiManualEndpoint;
             key = aiManualKey;
@@ -820,10 +898,11 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                 endpoint = provider.api_endpoint;
                 key = provider.api_key;
                 model = provider.model_name;
+                characterId = provider.id;
             }
         }
 
-        if (!endpoint || !key || !model) {
+        if (!endpoint || (!key && !characterId) || !model) {
             alert(lang === 'en' ? 'Missing API configuration. Please select a valid Contact or enter manual API details.' : '缺少 API 配置，请选择有效联系人或手动输入 API 信息。');
             return;
         }
@@ -840,7 +919,8 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                     query: aiThemeQuery,
                     api_endpoint: endpoint,
                     api_key: key,
-                    model_name: model
+                    model_name: model,
+                    character_id: characterId
                 })
             });
 
@@ -1146,7 +1226,7 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                                 <div>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                                            <img src={resolveAvatarUrl(profile.avatar, apiUrl, profile.name || 'User')} alt="Me" style={{ width: '60px', height: '60px', borderRadius: '50%', objectFit: 'cover' }} />
+                                            <AuthenticatedImage src={resolveAvatarUrl(profile.avatar, apiUrl, profile.name || 'User')} fallbackSrc={defaultAvatarUrl(profile.name || 'User')} alt="Me" style={{ width: '60px', height: '60px', borderRadius: '50%', objectFit: 'cover' }} />
                                             <div>
                                                 <h3 style={{ margin: '0 0 5px 0', fontSize: '20px' }}>{profile.name}</h3>
                                                 <p style={{ color: '#666', margin: 0, whiteSpace: 'pre-wrap', fontSize: '14px' }}>{profile.bio || 'Signature...'}</p>
@@ -1418,7 +1498,7 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                         {contacts.map(c => (
                             <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px', border: '1px solid #f0f0f0', borderRadius: '6px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                    <img src={resolveAvatarUrl(c.avatar, apiUrl, c.name || c.id || 'User')} alt={c.name} style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover' }} />
+                                    <AuthenticatedImage src={resolveAvatarUrl(c.avatar, apiUrl, c.name || c.id || 'User')} fallbackSrc={defaultAvatarUrl(c.name || c.id || 'User')} alt={c.name} style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover' }} />
                                     <div>
                                         <div style={{ fontWeight: '500' }}>{c.name}</div>
                                         <div style={{ fontSize: '12px', color: '#999' }}>
@@ -1905,7 +1985,8 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
 
                         <label style={{ display: 'flex', flexDirection: 'column', fontSize: '14px', color: '#666' }}>
                             {t('API Key')}:
-                            <input type="password" value={editingContact.api_key || ''} onChange={(e) => setEditingContact({ ...editingContact, api_key: e.target.value })} placeholder="sk-..." style={{ padding: '8px', marginTop: '5px', border: '1px solid #ddd', borderRadius: '4px' }} />
+                            <input type="password" value={editingContact.api_key || ''} onChange={(e) => updateEditingSecret('api_key', e.target.value)} placeholder={getSecretPlaceholder(editingContact, 'api_key', 'sk-...')} style={{ padding: '8px', marginTop: '5px', border: '1px solid #ddd', borderRadius: '4px' }} />
+                            {renderSecretStatus('api_key')}
                         </label>
 
                         <div style={{ display: 'flex', gap: '10px' }}>
@@ -1913,7 +1994,7 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                                 {t('Model Name')}:
                                 <div style={{ display: 'flex', gap: '5px', marginTop: '5px' }}>
                                     <input type="text" value={editingContact.model_name || ''} onChange={(e) => setEditingContact({ ...editingContact, model_name: e.target.value })} style={{ flex: 1, padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
-                                    <button type="button" onClick={() => fetchModels(editingContact.api_endpoint, editingContact.api_key, setMainModels, setMainModelFetching, setMainModelError)} disabled={mainModelFetching}
+                                    <button type="button" onClick={() => fetchModels(editingContact.api_endpoint, editingContact.api_key, setMainModels, setMainModelFetching, setMainModelError, { characterId: editingContact.id, scope: 'main', hasSavedKey: editingContact.api_key_configured && !editingContact.api_key_clear })} disabled={mainModelFetching}
                                         style={{ padding: '6px 10px', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px' }}>
                                         <RefreshCw size={13} /> {mainModelFetching ? '...' : t('Fetch Models')}
                                     </button>
@@ -1984,13 +2065,14 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                             </label>
                             <label style={{ display: 'flex', flexDirection: 'column', fontSize: '14px', color: '#666' }}>
                                 {t('Memory API Key')}:
-                                <input type="password" value={editingContact.memory_api_key || ''} onChange={(e) => setEditingContact({ ...editingContact, memory_api_key: e.target.value })} style={{ padding: '8px', marginTop: '5px', border: '1px solid #ddd', borderRadius: '4px' }} />
+                                <input type="password" value={editingContact.memory_api_key || ''} onChange={(e) => updateEditingSecret('memory_api_key', e.target.value)} placeholder={getSecretPlaceholder(editingContact, 'memory_api_key', 'sk-...')} style={{ padding: '8px', marginTop: '5px', border: '1px solid #ddd', borderRadius: '4px' }} />
+                                {renderSecretStatus('memory_api_key')}
                             </label>
                             <label style={{ display: 'flex', flexDirection: 'column', fontSize: '14px', color: '#666' }}>
                                 Memory Model Name:
                                 <div style={{ display: 'flex', gap: '5px', marginTop: '5px' }}>
                                     <input type="text" value={editingContact.memory_model_name || ''} onChange={(e) => setEditingContact({ ...editingContact, memory_model_name: e.target.value })} placeholder="e.g. gpt-4o-mini" style={{ flex: 1, padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
-                                    <button type="button" onClick={() => fetchModels(editingContact.memory_api_endpoint, editingContact.memory_api_key, setMemModels, setMemModelFetching, setMemModelError)} disabled={memModelFetching}
+                                    <button type="button" onClick={() => fetchModels(editingContact.memory_api_endpoint, editingContact.memory_api_key, setMemModels, setMemModelFetching, setMemModelError, { characterId: editingContact.id, scope: 'memory', hasSavedKey: editingContact.memory_api_key_configured && !editingContact.memory_api_key_clear })} disabled={memModelFetching}
                                         style={{ padding: '6px 10px', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px' }}>
                                         <RefreshCw size={13} /> {memModelFetching ? '...' : '拉取'}
                                     </button>
@@ -2054,19 +2136,20 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                                 {editingContact.tts_provider === 'tencent' ? (
                                     <textarea
                                         value={editingContact.tts_api_key || ''}
-                                        onChange={(e) => setEditingContact({ ...editingContact, tts_api_key: e.target.value })}
-                                        placeholder={'SecretId 这里粘贴第一行\nSecretKey 这里粘贴第二行'}
+                                        onChange={(e) => updateEditingSecret('tts_api_key', e.target.value)}
+                                        placeholder={getSecretPlaceholder(editingContact, 'tts_api_key', 'SecretId 这里粘贴第一行\nSecretKey 这里粘贴第二行')}
                                         style={{ padding: '8px', marginTop: '5px', border: '1px solid #ddd', borderRadius: '4px', minHeight: '58px', resize: 'vertical', fontFamily: 'monospace', fontSize: '12px' }}
                                     />
                                 ) : (
                                     <input
                                         type="password"
                                         value={editingContact.tts_api_key || ''}
-                                        onChange={(e) => setEditingContact({ ...editingContact, tts_api_key: e.target.value })}
-                                        placeholder={getEditingTtsProviderConfig(editingContact.tts_provider).keyHint}
+                                        onChange={(e) => updateEditingSecret('tts_api_key', e.target.value)}
+                                        placeholder={getSecretPlaceholder(editingContact, 'tts_api_key', getEditingTtsProviderConfig(editingContact.tts_provider).keyHint)}
                                         style={{ padding: '8px', marginTop: '5px', border: '1px solid #ddd', borderRadius: '4px' }}
                                     />
                                 )}
+                                {renderSecretStatus('tts_api_key')}
                             </label>
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>

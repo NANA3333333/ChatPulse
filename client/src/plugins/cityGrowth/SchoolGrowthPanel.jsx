@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Edit3, Plus, ToggleLeft, ToggleRight, X } from 'lucide-react';
+import AuthenticatedImage from '../../components/AuthenticatedImage';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../../utils/avatar';
 
 const FALLBACK_AVATAR = defaultAvatarUrl('User');
@@ -292,7 +293,7 @@ export default function SchoolGrowthPanel({ apiUrl, headers }) {
                     return (
                         <div key={character.id} style={{ border: '1px solid #eee', borderRadius: '12px', padding: '14px', backgroundColor: '#fff' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
-                                <img src={avatarSrc(character.avatar, apiUrl)} alt="" style={{ width: '38px', height: '38px', borderRadius: '50%', objectFit: 'cover' }} />
+                                <AuthenticatedImage src={avatarSrc(character.avatar, apiUrl)} fallbackSrc={FALLBACK_AVATAR} alt="" style={{ width: '38px', height: '38px', borderRadius: '50%', objectFit: 'cover' }} />
                                 <div style={{ minWidth: 0, flex: 1 }}>
                                     <div style={{ fontSize: '14px', fontWeight: 700, color: '#344054' }}>{character.name}</div>
                                     <div style={{ fontSize: '12px', color: '#667085', marginTop: '2px' }}>

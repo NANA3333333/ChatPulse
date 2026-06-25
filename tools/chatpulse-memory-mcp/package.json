@@ -1,7 +1,7 @@
 {
   "name": "chatpulse-memory-mcp",
   "version": "0.1.0",
-  "description": "Portable MCP memory server extracted from ChatPluse's long-term memory design.",
+  "description": "Portable MCP memory server extracted from ChatPulse's long-term memory design.",
   "type": "module",
   "bin": {
     "chatpulse-memory-mcp": "./src/index.js"

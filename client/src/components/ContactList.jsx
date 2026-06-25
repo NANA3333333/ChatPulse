@@ -1,4 +1,5 @@
 import React from 'react';
+import AuthenticatedImage from './AuthenticatedImage';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 
 function ContactList({ apiUrl, contacts, activeId, onSelect, engineState = {} }) {
@@ -8,6 +9,7 @@ function ContactList({ apiUrl, contacts, activeId, onSelect, engineState = {} })
                 const state = engineState[contact.id];
                 const countdown = state?.countdownMs ? Math.ceil(state.countdownMs / 1000) : null;
                 const isWorking = !!(state?.isThinking || state?.webSearchActive);
+                const statusText = countdown ? `${countdown}s` : contact.time;
 
                 return (
                     <div
@@ -16,14 +18,11 @@ function ContactList({ apiUrl, contacts, activeId, onSelect, engineState = {} })
                         onClick={() => onSelect(contact.id)}
                     >
                         <div className="contact-avatar" style={{ position: 'relative' }}>
-                            <img
+                            <AuthenticatedImage
                                 src={resolveAvatarUrl(contact.avatar, apiUrl, contact.name || contact.id || 'User')}
                                 alt={contact.name}
                                 style={{ objectFit: 'cover' }}
-                                onError={(e) => {
-                                    e.target.onerror = null;
-                                    e.target.src = defaultAvatarUrl(contact.name || contact.id || 'User');
-                                }}
+                                fallbackSrc={defaultAvatarUrl(contact.name || contact.id || 'User')}
                             />
                             <div className={`autopulse-status-dot ${isWorking ? 'thinking' : 'connected'}`} />
                         </div>
@@ -40,14 +39,14 @@ function ContactList({ apiUrl, contacts, activeId, onSelect, engineState = {} })
                                 <span
                                     className="contact-time"
                                     style={{
-                                        color: countdown ? (isWorking ? '#ff9800' : 'var(--accent-color)') : undefined,
+                                        color: countdown ? 'var(--accent-color)' : undefined,
                                         fontWeight: countdown ? 'bold' : 'normal',
                                         whiteSpace: 'nowrap',
                                         flexShrink: 0,
                                         marginLeft: '8px'
                                     }}
                                 >
-                                    {countdown ? (isWorking ? '思考中' : `${countdown}s`) : contact.time}
+                                    {statusText}
                                 </span>
                             </div>
                             <div className="contact-last-msg">

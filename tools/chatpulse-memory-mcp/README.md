@@ -1,6 +1,6 @@
-# ChatPluse Memory MCP
+# ChatPulse Memory MCP
 
-This is a portable MCP server that extracts the reusable core of ChatPluse's memory system:
+This is a portable MCP server that extracts the reusable core of ChatPulse's memory system:
 
 - structured long-term memory records
 - namespace isolation for different apps, users, agents, or characters
@@ -9,7 +9,7 @@ This is a portable MCP server that extracts the reusable core of ChatPluse's mem
 - lexical fallback when embeddings are disabled or unavailable
 - optional LLM-powered memory extraction through an OpenAI-compatible `/chat/completions` API
 
-It is not a full copy of ChatPluse's in-app memory engine. The original system is tightly coupled to ChatPluse characters, message history, private summaries, RAG planning, Qdrant, WebSocket updates, and UI routes. This MCP package keeps the part other apps can realistically reuse.
+It is not a full copy of ChatPulse's in-app memory engine. The original system is tightly coupled to ChatPulse characters, message history, private summaries, RAG planning, Qdrant, WebSocket updates, and UI routes. This MCP package keeps the part other apps can realistically reuse.
 
 ## Install
 
@@ -48,7 +48,7 @@ MEMORY_MCP_LLM_MODEL=gpt-4.1-mini
   "mcpServers": {
     "chatpulse-memory": {
       "command": "node",
-      "args": ["C:/Users/Nana/Documents/ChatPluse/tools/chatpulse-memory-mcp/src/index.js"],
+      "args": ["C:/Users/Nana/Documents/ChatPulse/tools/chatpulse-memory-mcp/src/index.js"],
       "env": {
         "MEMORY_MCP_DB_PATH": "C:/Users/Nana/.chatpulse-memory-mcp/memory.db",
         "MEMORY_MCP_DISABLE_EMBEDDINGS": "1"

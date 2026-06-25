@@ -24,6 +24,7 @@ function createActionService(deps = {}) {
         broadcastCityEvent,
         handleQuestLifecycleAfterAction,
         applyStateEffectsToCharacter,
+        applyHousingDistrictEffects,
         logEmotionTransitionToState,
         getWsClients,
         getEngine,
@@ -91,6 +92,9 @@ function createActionService(deps = {}) {
         const growthDb = ensureCityGrowthDb(db);
         const schoolProfile = schoolLogic.getCharacterSchoolProfile(growthDb, char.id);
         stateEffects = schoolLogic.applySchoolPerksToState(district, stateEffects, schoolProfile, currentState);
+        if (typeof applyHousingDistrictEffects === 'function') {
+            stateEffects = applyHousingDistrictEffects(db, char, district, stateEffects);
+        }
 
         if (district.type === 'work' && dMoney > 0 && schoolProfile.vocational > 0) {
             const vocationalBonus = schoolProfile.vocational >= 70

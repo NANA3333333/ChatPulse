@@ -1,0 +1,27 @@
+{
+  "id": "char",
+  "displayName": "Char",
+  "source": "source/char-sheet.png",
+  "frameSize": {
+    "width": 64,
+    "height": 80
+  },
+  "anchor": {
+    "x": 32,
+    "y": 72
+  },
+  "directions": [
+    "front",
+    "back",
+    "left",
+    "right"
+  ],
+  "frames": [
+    "idle",
+    "step_a",
+    "passing",
+    "step_b"
+  ],
+  "recommendedFps": 8,
+  "notes": "Installed AI-generated v18 light-gray formal suit character with white tie; transparent PNG frames aligned for the looping commercial street stage."
+}

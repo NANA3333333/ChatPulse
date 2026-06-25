@@ -21,6 +21,7 @@ import {
     RotateCcw,
 } from 'lucide-react';
 import CityManager from './CityManager';
+import AuthenticatedImage from '../../components/AuthenticatedImage';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../../utils/avatar';
 import { deriveEmotion, derivePhysicalState } from '../../utils/emotion';
 
@@ -630,7 +631,8 @@ export default function CityLog({ apiUrl }) {
                                                     {!collapsed &&
                                                         dateLogs.map((log) => {
                                                             const isSocial = log.action_type === 'SOCIAL';
-                                                            const isTruncated = Boolean(log.is_truncated);
+                                                            const isCollapsedOutput = String(log.content || '').trim().startsWith('【商业街输出折叠】');
+                                                            const isTruncated = Boolean(log.is_truncated) || isCollapsedOutput;
                                                             const hiddenExpanded = Boolean(expandedHiddenLogs[log.id]);
                                                             const hackerIntelView = splitHackerIntelContent(log.content);
                                                             const hasHiddenHackerIntel = hackerIntelView.hasIntel;
@@ -658,7 +660,7 @@ export default function CityLog({ apiUrl }) {
                                                                             : {}),
                                                                     }}
                                                                 >
-                                                                    <img src={avatarSrc(log.char_avatar, apiUrl)} alt="" style={{ width: isMobile ? '32px' : '36px', height: isMobile ? '32px' : '36px', borderRadius: '50%', objectFit: 'cover' }} />
+                                                                    <AuthenticatedImage src={avatarSrc(log.char_avatar, apiUrl)} fallbackSrc={FALLBACK_AVATAR} alt="" style={{ width: isMobile ? '32px' : '36px', height: isMobile ? '32px' : '36px', borderRadius: '50%', objectFit: 'cover' }} />
                                                                     <div style={{ flex: 1, minWidth: 0 }}>
                                                                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '3px' }}>
                                                                             <span style={{ fontWeight: '600', fontSize: isMobile ? '12px' : '13px', color: isSocial ? '#7b1fa2' : undefined }}>
@@ -699,7 +701,7 @@ export default function CityLog({ apiUrl }) {
                                                                                 >
                                                                                     <div style={{ fontSize: isMobile ? '10px' : '11px', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '4px', letterSpacing: '0.01em' }}>
                                                                                         <AlertCircle size={11} />
-                                                                                        隐藏内容
+                                                                                        {isCollapsedOutput ? '商业街活动已折叠' : '隐藏内容'}
                                                                                     </div>
                                                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '2px', fontSize: '9px', color: 'rgba(108, 108, 108, 0.42)' }}>
                                                                                         <span>{hiddenExpanded ? '收起' : '查看'}</span>
@@ -731,7 +733,7 @@ export default function CityLog({ apiUrl }) {
                                                                                         }}
                                                                                     >
                                                                                         <RotateCcw size={10} />
-                                                                                        {rerollingLogId === log.id ? '重 roll 中...' : '重 roll'}
+                                                                                        {rerollingLogId === log.id ? '重试中...' : '重试'}
                                                                                     </button>
                                                                                 </div>
                                                                             </div>
@@ -915,7 +917,7 @@ export default function CityLog({ apiUrl }) {
                                     return (
                                         <div key={c.id} style={{ padding: isMobile ? '8px' : '10px', border: '1px solid #eee', borderRadius: '8px', marginBottom: '8px' }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                                                <img src={avatarSrc(c.avatar, apiUrl)} alt="" style={{ width: isMobile ? '26px' : '28px', height: isMobile ? '26px' : '28px', borderRadius: '50%', objectFit: 'cover' }} />
+                                                <AuthenticatedImage src={avatarSrc(c.avatar, apiUrl)} fallbackSrc={FALLBACK_AVATAR} alt="" style={{ width: isMobile ? '26px' : '28px', height: isMobile ? '26px' : '28px', borderRadius: '50%', objectFit: 'cover' }} />
                                                 <span style={{ fontWeight: '500', flex: 1, minWidth: 0, fontSize: isMobile ? '12px' : '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
                                                 <span style={{ fontSize: '10px', color: emotion.color, fontWeight: '700', flexShrink: 0 }}>{emotion.emoji} {emotion.label}</span>
                                                 <span style={{ fontSize: '10px', color: physical.color, fontWeight: '700', flexShrink: 0 }}>{physical.emoji} {physical.label}</span>

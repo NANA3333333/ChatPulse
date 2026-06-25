@@ -173,6 +173,8 @@ function getUserDb(userId) {
         changes += runOptionalDelete('DELETE FROM city_quest_progress_reviews WHERE character_id = ?', id);
         changes += runOptionalDelete('DELETE FROM city_quest_claims WHERE character_id = ?', id);
         changes += runOptionalDelete('DELETE FROM social_housing_bindings WHERE character_id = ?', id);
+        changes += runOptionalDelete('DELETE FROM social_housing_rental_chain_events WHERE chain_id IN (SELECT id FROM social_housing_rental_chains WHERE character_id = ?)', id);
+        changes += runOptionalDelete('DELETE FROM social_housing_rental_chains WHERE character_id = ?', id);
         changes += deleteExternalKnowledgeDocsForCharacter(id);
         return changes;
     }

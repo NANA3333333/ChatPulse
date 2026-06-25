@@ -1,5 +1,6 @@
 ﻿import React, { useState, useEffect } from 'react';
-import { AlertCircle, ArrowRightLeft, Volume2 } from 'lucide-react';
+import { AlertCircle, ChevronDown, ChevronRight, RotateCcw, Volume2 } from 'lucide-react';
+import AuthenticatedImage from './AuthenticatedImage';
 import { useLanguage } from '../LanguageContext';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 
@@ -119,6 +120,195 @@ function buildAuthHeaders(extraHeaders = {}) {
         ...extraHeaders,
         'Authorization': `Bearer ${token}`
     };
+}
+
+const COLLAPSED_CITY_MARKER = '【商业街输出折叠】';
+
+function isCollapsedCityOutreachContent(content) {
+    return String(content || '').trim().startsWith(COLLAPSED_CITY_MARKER);
+}
+
+function parseCollapsedCityOutreach(content) {
+    const parts = String(content || '')
+        .split('|')
+        .map(part => part.trim())
+        .filter(Boolean);
+    const detail = {
+        character: '',
+        location: '',
+        reason: '',
+        raw: String(content || '').trim()
+    };
+    for (const part of parts) {
+        if (part === COLLAPSED_CITY_MARKER) continue;
+        if (part.startsWith('地点=')) {
+            detail.location = part.slice('地点='.length).trim();
+            continue;
+        }
+        if (part.startsWith('原因=')) {
+            detail.reason = part.slice('原因='.length).trim();
+            continue;
+        }
+        if (!detail.character) detail.character = part;
+    }
+    return detail;
+}
+
+function getCityOutreachLogId(message) {
+    const metadata = message?.metadata && typeof message.metadata === 'object' ? message.metadata : {};
+    const cityMeta = metadata.city_outreach || metadata.cityOutreach || {};
+    const id = Number(cityMeta.log_id || cityMeta.logId || metadata.city_log_id || metadata.cityLogId || 0);
+    return Number.isInteger(id) && id > 0 ? id : 0;
+}
+
+async function resolveCollapsedCityLogId({ apiUrl, message, content }) {
+    const response = await fetch(`${apiUrl}/city/logs?limit=all`, { headers: buildAuthHeaders() });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) {
+        throw new Error(data.error || '无法读取商业街日志');
+    }
+    const exactContent = String(content || '').trim();
+    const rows = Array.isArray(data.logs) ? data.logs : [];
+    const exact = rows.find((log) => (
+        String(log.character_id || '') === String(message.character_id || '')
+        && String(log.content || '').trim() === exactContent
+    ));
+    if (exact?.id) return Number(exact.id);
+    const collapsed = rows.find((log) => (
+        String(log.character_id || '') === String(message.character_id || '')
+        && isCollapsedCityOutreachContent(log.content)
+    ));
+    return Number(collapsed?.id || 0);
+}
+
+function CollapsedCityOutreachBubble({ message, content, apiUrl }) {
+    const { lang } = useLanguage();
+    const [expanded, setExpanded] = useState(false);
+    const [retrying, setRetrying] = useState(false);
+    const [error, setError] = useState('');
+    const detail = parseCollapsedCityOutreach(content);
+    const logId = getCityOutreachLogId(message);
+
+    const retryCityLog = async () => {
+        if (retrying) return;
+        setRetrying(true);
+        setError('');
+        try {
+            const resolvedLogId = logId || await resolveCollapsedCityLogId({ apiUrl, message, content });
+            if (!resolvedLogId) throw new Error('找不到对应的商业街活动记录');
+            const response = await fetch(`${apiUrl}/city/logs/${resolvedLogId}/reroll`, {
+                method: 'POST',
+                headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ messageId: message.id })
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || '商业街活动重试失败');
+            }
+            window.dispatchEvent(new CustomEvent('city_update', {
+                detail: { characterId: message.character_id }
+            }));
+        } catch (e) {
+            setError(e.message || (lang === 'en' ? 'Retry failed' : '重试失败'));
+        } finally {
+            setRetrying(false);
+        }
+    };
+
+    return (
+        <div
+            className="message-bubble"
+            style={{
+                width: 'min(520px, 100%)',
+                background: '#fffaf0',
+                border: '1px solid #fed7aa',
+                color: '#7c2d12',
+                padding: '8px 10px',
+                boxShadow: '0 2px 8px rgba(180, 83, 9, 0.08)'
+            }}
+        >
+            <button
+                type="button"
+                onClick={() => setExpanded(value => !value)}
+                style={{
+                    width: '100%',
+                    border: 'none',
+                    background: 'transparent',
+                    padding: 0,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '8px',
+                    color: 'inherit',
+                    textAlign: 'left'
+                }}
+            >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', minWidth: 0, fontSize: '12px', fontWeight: 700 }}>
+                    <AlertCircle size={14} />
+                    <span>{lang === 'en' ? 'City activity folded' : '商业街活动已折叠'}</span>
+                </span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', flex: '0 0 auto', fontSize: '11px', color: '#b45309' }}>
+                    {expanded ? (lang === 'en' ? 'Hide' : '收起') : (lang === 'en' ? 'View' : '查看')}
+                    {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                </span>
+            </button>
+            <div style={{ marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', lineHeight: 1.45 }}>
+                {detail.location && (
+                    <div style={{ color: '#92400e', wordBreak: 'break-word' }}>
+                        {lang === 'en' ? 'Location: ' : '地点：'}{detail.location}
+                    </div>
+                )}
+                {detail.reason && (
+                    <div style={{ color: '#9a3412', wordBreak: 'break-word' }}>
+                        {lang === 'en' ? 'Reason: ' : '原因：'}{detail.reason}
+                    </div>
+                )}
+                {expanded && (
+                    <div style={{
+                        marginTop: '2px',
+                        padding: '6px 8px',
+                        borderRadius: '6px',
+                        background: 'rgba(255, 255, 255, 0.65)',
+                        border: '1px solid rgba(251, 191, 36, 0.26)',
+                        color: '#9a3412',
+                        wordBreak: 'break-word'
+                    }}>
+                        {detail.raw}
+                    </div>
+                )}
+            </div>
+            <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                    type="button"
+                    onClick={retryCityLog}
+                    disabled={retrying}
+                    title={lang === 'en' ? 'Retry city activity generation' : '重试商业街活动生成'}
+                    style={{
+                        border: '1px solid rgba(245, 158, 11, 0.45)',
+                        borderRadius: '999px',
+                        padding: '5px 9px',
+                        background: retrying ? '#fde68a' : '#fff',
+                        color: '#b45309',
+                        cursor: retrying ? 'not-allowed' : 'pointer',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px'
+                    }}
+                >
+                    <RotateCcw size={12} />
+                    {retrying ? (lang === 'en' ? 'Retrying...' : '重试中...') : (lang === 'en' ? 'Retry' : '重试')}
+                </button>
+            </div>
+            {error && (
+                <div style={{ marginTop: '6px', fontSize: '11px', color: '#c2410c', wordBreak: 'break-word' }}>
+                    {error}
+                </div>
+            )}
+        </div>
+    );
 }
 
 /* Interactive Transfer Card; handles both old and new formats */
@@ -374,15 +564,17 @@ function MessageBubble({ message, avatar, characterName, apiUrl, onRetry, contac
         <>
             <div className={`message-wrapper ${isUser ? 'user' : 'character'}`}>
                 <div className="message-avatar">
-                    <img
+                    <AuthenticatedImage
                         src={resolveAvatarUrl(avatar, apiUrl, isUser ? 'User' : (characterName || message.character_id || 'User'))}
                         style={{ objectFit: 'cover' }}
                         alt="Avatar"
-                        onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatarUrl(isUser ? 'User' : (characterName || message.character_id || 'User')); }}
+                        fallbackSrc={defaultAvatarUrl(isUser ? 'User' : (characterName || message.character_id || 'User'))}
                     />
                 </div>
                 <div className="message-content">
-                    {content.startsWith('[TRANSFER]') ? (
+                    {isCollapsedCityOutreachContent(content) ? (
+                        <CollapsedCityOutreachBubble message={message} content={content} apiUrl={apiUrl} />
+                    ) : content.startsWith('[TRANSFER]') ? (
                         <TransferCardInteractive content={content} isUser={isUser} apiUrl={apiUrl} />
                     ) : content.startsWith('[CONTACT_CARD:') ? (
                         (() => {
@@ -401,11 +593,11 @@ function MessageBubble({ message, avatar, characterName, apiUrl, onRetry, contac
                                 return (
                                     <div className="message-bubble" style={{ padding: 0, overflow: 'hidden', backgroundColor: '#fff', color: '#333', textAlign: 'left', width: '220px', boxSizing: 'border-box', border: '1px solid #eaeaea' }}>
                                         <div style={{ padding: '12px 15px', display: 'flex', alignItems: 'center', gap: '12px', borderBottom: '1px solid #f0f0f0' }}>
-                                            <img
+                                            <AuthenticatedImage
                                                 src={resolveAvatarUrl(cardAvatar.replace(']', ''), apiUrl, cardName || cardId || 'User')}
                                                 alt={cardName}
                                                 style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover' }}
-                                                onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatarUrl(cardName || cardId || 'User'); }}
+                                                fallbackSrc={defaultAvatarUrl(cardName || cardId || 'User')}
                                             />
                                             <div style={{ fontSize: '16px', fontWeight: '400' }}>{cardName}</div>
                                         </div>

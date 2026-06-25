@@ -55,6 +55,27 @@ const DEFAULT_AGENCY = {
     agent_name: '安居顾问',
     business_scope: '租房,买房,换房,圈层建议'
 };
+const RENT_COLLECTION_WEEKDAY = 5; // Friday, local time.
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function getNextRentCollectionAt(from = Date.now(), options = {}) {
+    const base = new Date(Number(from || Date.now()));
+    if (!Number.isFinite(base.getTime())) return getNextRentCollectionAt(Date.now());
+    if (base.getDay() === RENT_COLLECTION_WEEKDAY && options.includeCurrentDay === true) {
+        return base.getTime();
+    }
+    const next = new Date(base.getTime());
+    next.setHours(0, 0, 0, 0);
+    let dayDelta = (RENT_COLLECTION_WEEKDAY - next.getDay() + 7) % 7;
+    if (dayDelta === 0) dayDelta = 7;
+    next.setDate(next.getDate() + dayDelta);
+    return next.getTime();
+}
+
+function isRentCollectionDay(at = Date.now()) {
+    const date = new Date(Number(at || Date.now()));
+    return Number.isFinite(date.getTime()) && date.getDay() === RENT_COLLECTION_WEEKDAY;
+}
 
 module.exports = function initSocialHousingDb(db) {
     function quoteSqlIdentifier(identifier) {
@@ -117,6 +138,7 @@ module.exports = function initSocialHousingDb(db) {
             rent_due_day INTEGER DEFAULT 7,
             rent_due_at INTEGER DEFAULT 0,
             rent_last_paid_at INTEGER DEFAULT 0,
+            housing_started_at INTEGER DEFAULT 0,
             deposit_paid REAL DEFAULT 0,
             missed_rent_count INTEGER DEFAULT 0,
             note TEXT DEFAULT '',
@@ -126,8 +148,38 @@ module.exports = function initSocialHousingDb(db) {
     `);
     addColumnIfMissing('social_housing_bindings', 'rent_due_at', 'INTEGER DEFAULT 0');
     addColumnIfMissing('social_housing_bindings', 'rent_last_paid_at', 'INTEGER DEFAULT 0');
+    addColumnIfMissing('social_housing_bindings', 'housing_started_at', 'INTEGER DEFAULT 0');
     addColumnIfMissing('social_housing_bindings', 'deposit_paid', 'REAL DEFAULT 0');
     addColumnIfMissing('social_housing_bindings', 'missed_rent_count', 'INTEGER DEFAULT 0');
+    db.prepare(`
+        UPDATE social_housing_bindings
+        SET housing_started_at = CASE
+            WHEN COALESCE(rent_last_paid_at, 0) > 0 THEN rent_last_paid_at
+            WHEN COALESCE(updated_at, 0) > 0 THEN updated_at
+            ELSE ?
+        END
+        WHERE COALESCE(housing_id, '') != ''
+          AND COALESCE(housing_started_at, 0) <= 0
+    `).run(Date.now());
+    const legacyDueRows = db.prepare(`
+        SELECT character_id, rent_due_at
+        FROM social_housing_bindings
+        WHERE COALESCE(housing_id, '') != ''
+          AND COALESCE(rent_due_at, 0) > 0
+    `).all();
+    const updateLegacyDue = db.prepare(`
+        UPDATE social_housing_bindings
+        SET rent_due_at = ?, updated_at = ?
+        WHERE character_id = ?
+    `);
+    for (const row of legacyDueRows) {
+        if (isRentCollectionDay(row.rent_due_at)) continue;
+        updateLegacyDue.run(
+            getNextRentCollectionAt(row.rent_due_at, { includeCurrentDay: true }),
+            Date.now(),
+            row.character_id
+        );
+    }
 
     db.exec(`
         CREATE TABLE IF NOT EXISTS social_housing_agency (
@@ -158,11 +210,42 @@ module.exports = function initSocialHousingDb(db) {
     db.exec(`
         CREATE TABLE IF NOT EXISTS social_housing_ads (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            home_id TEXT DEFAULT '',
             title TEXT DEFAULT '',
             content TEXT NOT NULL,
             trigger_type TEXT DEFAULT 'manual',
             office_district TEXT DEFAULT 'street',
             created_at INTEGER NOT NULL
+        );
+    `);
+    addColumnIfMissing('social_housing_ads', 'home_id', "TEXT DEFAULT ''");
+
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS social_housing_rental_chains (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            character_id TEXT NOT NULL,
+            home_id TEXT NOT NULL,
+            agency_ad_id INTEGER DEFAULT 0,
+            source TEXT DEFAULT 'user_recommendation',
+            status TEXT DEFAULT 'running',
+            stage TEXT DEFAULT 'recommended',
+            error_message TEXT DEFAULT '',
+            retry_count INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            completed_at INTEGER DEFAULT 0,
+            FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
+        );
+    `);
+
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS social_housing_rental_chain_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chain_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            payload_json TEXT DEFAULT '{}',
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (chain_id) REFERENCES social_housing_rental_chains(id) ON DELETE CASCADE
         );
     `);
 
@@ -407,7 +490,7 @@ module.exports = function initSocialHousingDb(db) {
         if (!cleanId) return 0;
         const info = db.prepare('DELETE FROM social_housing_homes WHERE id = ?').run(cleanId);
         if ((info.changes || 0) > 0) {
-            db.prepare("UPDATE social_housing_bindings SET housing_id = '' WHERE housing_id = ?").run(cleanId);
+            db.prepare("UPDATE social_housing_bindings SET housing_id = '', housing_status = 'homeless', rent_weekly = 0, rent_due_at = 0, rent_last_paid_at = 0, housing_started_at = 0, deposit_paid = 0, missed_rent_count = 0, updated_at = ? WHERE housing_id = ?").run(Date.now(), cleanId);
         }
         return info.changes || 0;
     }
@@ -425,13 +508,13 @@ module.exports = function initSocialHousingDb(db) {
     }
 
     function normalizeRentDueAt(payload = {}, current = null, home = null) {
+        if (!String(payload.housing_id || '').trim()) return 0;
         const explicit = Number(payload.rent_due_at || 0);
         if (explicit > 0) return explicit;
         const existingDueAt = Number(current?.rent_due_at || 0);
         const housingChanged = String(payload.housing_id || '') !== String(current?.housing_id || '');
         if (existingDueAt > 0 && !housingChanged) return existingDueAt;
-        const dueDays = Math.max(1, Math.min(30, Number(payload.rent_due_day || current?.rent_due_day || 7)));
-        return Date.now() + dueDays * 24 * 60 * 60 * 1000;
+        return getNextRentCollectionAt(Date.now());
     }
 
     function saveBinding(characterId, payload = {}) {
@@ -442,14 +525,23 @@ module.exports = function initSocialHousingDb(db) {
         if (nextHousingId && !home) throw new SocialHousingValidationError('房屋不存在');
         if (nextClassId && !getClassById(nextClassId)) throw new SocialHousingValidationError('阶层不存在');
         const normalized = normalizeHousingBindingPayload(payload, current, home);
-        const rentWeekly = normalized.rent_weekly;
-        const depositPaid = normalized.deposit_paid;
+        const hasHousing = !!normalized.housing_id;
+        const rentWeekly = hasHousing ? normalized.rent_weekly : 0;
+        const depositPaid = hasHousing ? normalized.deposit_paid : 0;
         const nextDueAt = normalizeRentDueAt(normalized, current, home);
         const housingChanged = String(normalized.housing_id || '') !== String(current?.housing_id || '');
+        const housingStartedAt = hasHousing
+            ? Number(payload.housing_started_at || (housingChanged ? Date.now() : current?.housing_started_at) || current?.rent_last_paid_at || Date.now())
+            : 0;
+        const rentLastPaidAt = hasHousing ? normalized.rent_last_paid_at : 0;
+        const missedRentCount = hasHousing ? normalized.missed_rent_count : 0;
+        const housingStatus = hasHousing
+            ? (String(payload.housing_status || (housingChanged ? 'stable' : current?.housing_status) || 'stable').trim() || 'stable')
+            : 'homeless';
         db.prepare(`
             INSERT INTO social_housing_bindings
-            (character_id, social_class_id, housing_id, housing_status, rent_weekly, rent_due_day, rent_due_at, rent_last_paid_at, deposit_paid, missed_rent_count, note, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (character_id, social_class_id, housing_id, housing_status, rent_weekly, rent_due_day, rent_due_at, rent_last_paid_at, housing_started_at, deposit_paid, missed_rent_count, note, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(character_id) DO UPDATE SET
                 social_class_id=excluded.social_class_id,
                 housing_id=excluded.housing_id,
@@ -458,6 +550,7 @@ module.exports = function initSocialHousingDb(db) {
                 rent_due_day=excluded.rent_due_day,
                 rent_due_at=excluded.rent_due_at,
                 rent_last_paid_at=excluded.rent_last_paid_at,
+                housing_started_at=excluded.housing_started_at,
                 deposit_paid=excluded.deposit_paid,
                 missed_rent_count=excluded.missed_rent_count,
                 note=excluded.note,
@@ -466,13 +559,14 @@ module.exports = function initSocialHousingDb(db) {
             characterId,
             nextClassId,
             normalized.housing_id,
-            String(payload.housing_status || (housingChanged ? 'stable' : current?.housing_status) || 'stable').trim() || 'stable',
+            housingStatus,
             rentWeekly,
             normalized.rent_due_day,
             nextDueAt,
-            normalized.rent_last_paid_at,
+            rentLastPaidAt,
+            housingStartedAt,
             depositPaid,
-            normalized.missed_rent_count,
+            missedRentCount,
             String(payload.note || '').trim(),
             Date.now()
         );
@@ -512,6 +606,7 @@ module.exports = function initSocialHousingDb(db) {
                     rent_due_day: Number(binding.rent_due_day || 7),
                     rent_due_at: Number(binding.rent_due_at || 0),
                     rent_last_paid_at: Number(binding.rent_last_paid_at || 0),
+                    housing_started_at: Number(binding.housing_started_at || 0),
                     deposit_paid: Number(binding.deposit_paid || 0),
                     missed_rent_count: Number(binding.missed_rent_count || 0),
                     social_class: socialClass,
@@ -602,12 +697,13 @@ module.exports = function initSocialHousingDb(db) {
         return getAgencyConfig();
     }
 
-    function addAgencyAd({ title = '', content = '', trigger_type = 'manual', office_district = 'street' }) {
+    function addAgencyAd({ home_id = '', title = '', content = '', trigger_type = 'manual', office_district = 'street' }) {
         const createdAt = Date.now();
         db.prepare(`
-            INSERT INTO social_housing_ads (title, content, trigger_type, office_district, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO social_housing_ads (home_id, title, content, trigger_type, office_district, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
         `).run(
+            String(home_id || '').trim(),
             String(title || '').trim(),
             String(content || '').trim(),
             String(trigger_type || 'manual').trim(),
@@ -633,6 +729,135 @@ module.exports = function initSocialHousingDb(db) {
         return db.prepare('DELETE FROM social_housing_ads WHERE id = ?').run(adId).changes || 0;
     }
 
+    function parseRentalChainEventPayload(value) {
+        try {
+            const parsed = JSON.parse(String(value || '{}'));
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (_) {
+            return {};
+        }
+    }
+
+    function normalizeRentalChainRow(row) {
+        if (!row) return null;
+        return {
+            ...row,
+            id: Number(row.id || 0),
+            agency_ad_id: Number(row.agency_ad_id || 0),
+            retry_count: Number(row.retry_count || 0),
+            created_at: Number(row.created_at || 0),
+            updated_at: Number(row.updated_at || 0),
+            completed_at: Number(row.completed_at || 0)
+        };
+    }
+
+    function createRentalChain(payload = {}) {
+        const characterId = String(payload.character_id || '').trim();
+        const homeId = String(payload.home_id || '').trim();
+        if (!characterId) throw new SocialHousingValidationError('缺少角色');
+        if (!homeId) throw new SocialHousingValidationError('缺少房源');
+        if (!getHousingById(homeId)) throw new SocialHousingValidationError('房源不存在');
+        const now = Date.now();
+        const info = db.prepare(`
+            INSERT INTO social_housing_rental_chains
+            (character_id, home_id, agency_ad_id, source, status, stage, error_message, retry_count, created_at, updated_at, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, '', 0, ?, ?, 0)
+        `).run(
+            characterId,
+            homeId,
+            Number(payload.agency_ad_id || 0),
+            String(payload.source || 'user_recommendation').trim() || 'user_recommendation',
+            String(payload.status || 'running').trim() || 'running',
+            String(payload.stage || 'recommended').trim() || 'recommended',
+            now,
+            now
+        );
+        return Number(info.lastInsertRowid || 0);
+    }
+
+    function getRentalChain(id) {
+        const chainId = Number(id);
+        if (!Number.isSafeInteger(chainId) || chainId <= 0) return null;
+        return normalizeRentalChainRow(db.prepare(`
+            SELECT rc.*, h.name AS home_name, h.emoji AS home_emoji, h.weekly_rent, h.deposit
+            FROM social_housing_rental_chains rc
+            LEFT JOIN social_housing_homes h ON h.id = rc.home_id
+            WHERE rc.id = ?
+        `).get(chainId));
+    }
+
+    function getRentalChains(limit = 30) {
+        const safeLimit = Math.max(1, Math.min(200, Number(limit || 30)));
+        return db.prepare(`
+            SELECT rc.*, c.name AS character_name, h.name AS home_name, h.emoji AS home_emoji, h.weekly_rent, h.deposit
+            FROM social_housing_rental_chains rc
+            LEFT JOIN characters c ON c.id = rc.character_id
+            LEFT JOIN social_housing_homes h ON h.id = rc.home_id
+            ORDER BY rc.updated_at DESC, rc.id DESC
+            LIMIT ?
+        `).all(safeLimit).map(normalizeRentalChainRow);
+    }
+
+    function updateRentalChain(id, patch = {}) {
+        const chain = getRentalChain(id);
+        if (!chain) return null;
+        const allowed = new Set(['status', 'stage', 'error_message', 'retry_count', 'completed_at']);
+        const fields = [];
+        const values = [];
+        for (const [key, value] of Object.entries(patch || {})) {
+            if (!allowed.has(key)) continue;
+            fields.push(`${key} = ?`);
+            values.push(key === 'retry_count' || key === 'completed_at' ? Number(value || 0) : String(value || '').trim());
+        }
+        if (fields.length === 0) return chain;
+        fields.push('updated_at = ?');
+        values.push(Date.now());
+        values.push(Number(chain.id));
+        db.prepare(`UPDATE social_housing_rental_chains SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+        return getRentalChain(chain.id);
+    }
+
+    function markRentalChainFailed(id, errorMessage = '') {
+        const chain = getRentalChain(id);
+        if (!chain) return null;
+        return updateRentalChain(chain.id, {
+            status: 'failed',
+            error_message: String(errorMessage || '租房链路失败').trim(),
+            retry_count: Number(chain.retry_count || 0) + 1
+        });
+    }
+
+    function appendRentalChainEvent(chainId, eventType, payload = {}) {
+        const id = Number(chainId);
+        if (!Number.isSafeInteger(id) || id <= 0) return 0;
+        const type = String(eventType || '').trim();
+        if (!type) return 0;
+        const now = Date.now();
+        const info = db.prepare(`
+            INSERT INTO social_housing_rental_chain_events (chain_id, event_type, payload_json, created_at)
+            VALUES (?, ?, ?, ?)
+        `).run(id, type, JSON.stringify(payload || {}), now);
+        db.prepare('UPDATE social_housing_rental_chains SET updated_at = ? WHERE id = ?').run(now, id);
+        return Number(info.lastInsertRowid || 0);
+    }
+
+    function getRentalChainEvents(chainId) {
+        const id = Number(chainId);
+        if (!Number.isSafeInteger(id) || id <= 0) return [];
+        return db.prepare(`
+            SELECT *
+            FROM social_housing_rental_chain_events
+            WHERE chain_id = ?
+            ORDER BY id ASC
+        `).all(id).map((row) => ({
+            ...row,
+            id: Number(row.id || 0),
+            chain_id: Number(row.chain_id || 0),
+            created_at: Number(row.created_at || 0),
+            payload: parseRentalChainEventPayload(row.payload_json)
+        }));
+    }
+
     function getHousingContextForCharacter(characterId) {
         const binding = getBinding(characterId);
         if (!binding) return null;
@@ -647,6 +872,7 @@ module.exports = function initSocialHousingDb(db) {
                 rent_due_day: Number(binding.rent_due_day || 7),
                 rent_due_at: Number(binding.rent_due_at || 0),
                 rent_last_paid_at: Number(binding.rent_last_paid_at || 0),
+                housing_started_at: Number(binding.housing_started_at || 0),
                 deposit_paid: Number(binding.deposit_paid || 0),
                 missed_rent_count: Number(binding.missed_rent_count || 0)
             },
@@ -667,11 +893,11 @@ module.exports = function initSocialHousingDb(db) {
                 missed_rent_count = 0,
                 updated_at = ?
             WHERE character_id = ?
-        `).run(paidAt, paidAt + dueDays * 24 * 60 * 60 * 1000, Date.now(), characterId);
+        `).run(paidAt, getNextRentCollectionAt(paidAt + dueDays * DAY_MS, { includeCurrentDay: true }), Date.now(), characterId);
         return getBinding(characterId);
     }
 
-    function markRentOverdue(characterId, retryAt = Date.now() + 24 * 60 * 60 * 1000) {
+    function markRentOverdue(characterId, retryAt = getNextRentCollectionAt(Date.now(), { includeCurrentDay: false })) {
         const binding = getBinding(characterId);
         if (!binding) return null;
         db.prepare(`
@@ -686,6 +912,7 @@ module.exports = function initSocialHousingDb(db) {
     }
 
     function getDueRentBindings(now = Date.now()) {
+        if (!isRentCollectionDay(now)) return [];
         return db.prepare(`
             SELECT b.*, h.name AS housing_name, h.emoji AS housing_emoji, h.weekly_rent AS home_weekly_rent
             FROM social_housing_bindings b
@@ -713,11 +940,19 @@ module.exports = function initSocialHousingDb(db) {
         markRentPaid,
         markRentOverdue,
         getDueRentBindings,
+        getNextRentCollectionAt,
         getAgencyConfig,
         saveAgencyConfig,
         addAgencyAd,
         getAgencyAds,
         getAgencyAdById,
-        deleteAgencyAd
+        deleteAgencyAd,
+        createRentalChain,
+        getRentalChain,
+        getRentalChains,
+        updateRentalChain,
+        markRentalChainFailed,
+        appendRentalChainEvent,
+        getRentalChainEvents
     };
 };

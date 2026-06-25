@@ -23,7 +23,7 @@ ChatPulse 是一个本地优先的 AI 社交模拟应用，前端使用 React，
 ### 1. 克隆仓库
 
 ```bash
-git clone https://github.com/NANA3333333/ChatPluse.git
+git clone https://github.com/NANA3333333/ChatPulse.git
 cd ChatPulse
 ```
 

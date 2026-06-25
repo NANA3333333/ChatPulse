@@ -59,6 +59,7 @@ export default function AdminDashboard({ apiUrl }) {
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
     const [busyUserId, setBusyUserId] = useState('');
+    const [busyInviteCode, setBusyInviteCode] = useState('');
     const [copiedCode, setCopiedCode] = useState('');
     const [announcementMsg, setAnnouncementMsg] = useState('');
     const [userQuery, setUserQuery] = useState('');
@@ -204,6 +205,27 @@ export default function AdminDashboard({ apiUrl }) {
         }
     };
 
+    const handleRenewInvite = async (code) => {
+        setBusyInviteCode(code);
+        try {
+            const res = await fetch(`${cleanApiUrl}/api/admin/invites/${code}/renew`, {
+                method: 'POST',
+                headers: authHeaders,
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || '续期邀请码失败');
+            if (data.invite) {
+                setInviteCodes((prev) => prev.map((item) => item.code === code ? data.invite : item));
+            } else {
+                await fetchInvites();
+            }
+        } catch (e) {
+            showActionError(setError, '续期邀请码失败', e?.message);
+        } finally {
+            setBusyInviteCode('');
+        }
+    };
+
     const handlePostAnnouncement = async () => {
         if (!announcementMsg.trim()) return;
         setLoading(true);
@@ -228,6 +250,21 @@ export default function AdminDashboard({ apiUrl }) {
         navigator.clipboard.writeText(code);
         setCopiedCode(code);
         setTimeout(() => setCopiedCode(''), 1500);
+    };
+
+    const formatInviteExpiry = (invite) => {
+        const expiresAt = Number(invite?.expires_at || 0);
+        if (!expiresAt) return '不过期';
+        const dateText = new Date(expiresAt).toLocaleDateString();
+        if (invite.expired) return `${dateText}（已过期）`;
+        const days = Number(invite.remaining_days || 0);
+        return `${dateText}（剩 ${days} 天）`;
+    };
+
+    const formatInviteUsage = (invite) => {
+        const maxUses = Number(invite?.max_uses || 0);
+        const useCount = Number(invite?.use_count || 0);
+        return maxUses > 0 ? `${useCount}/${maxUses}` : `${useCount}/不限`;
     };
 
     if (!isAdmin) {
@@ -266,10 +303,22 @@ export default function AdminDashboard({ apiUrl }) {
                         <div key={invite.code} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 12, borderRadius: 8, border: '1px solid var(--card-border)' }}>
                             <div>
                                 <div style={{ fontWeight: 700 }}>{invite.code}</div>
-                                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>状态：{invite.status || 'active'}</div>
+                                <div style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+                                    <span>状态：{invite.expired ? '已过期' : (invite.status || 'active')}</span>
+                                    <span>有效期：{formatInviteExpiry(invite)}</span>
+                                    <span>使用：{formatInviteUsage(invite)}</span>
+                                </div>
                             </div>
                             <div style={{ display: 'flex', gap: 12 }}>
                                 <button onClick={() => copyToClipboard(invite.code)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>{copiedCode === invite.code ? <Ban size={18} /> : <Copy size={18} />}</button>
+                                <button
+                                    onClick={() => handleRenewInvite(invite.code)}
+                                    disabled={busyInviteCode === invite.code}
+                                    title="续期 30 天"
+                                    style={{ background: 'none', border: 'none', cursor: busyInviteCode === invite.code ? 'wait' : 'pointer', color: 'var(--primary)', opacity: busyInviteCode === invite.code ? 0.6 : 1 }}
+                                >
+                                    <RefreshCw size={18} />
+                                </button>
                                 <button onClick={() => handleRevokeInvite(invite.code)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)' }}><Trash2 size={18} /></button>
                             </div>
                         </div>

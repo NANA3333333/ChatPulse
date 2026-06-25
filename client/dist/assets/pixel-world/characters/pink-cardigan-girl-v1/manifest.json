@@ -1,0 +1,27 @@
+{
+  "id": "pink-cardigan-girl-v1",
+  "displayName": "Pink Cardigan Girl",
+  "source": "source/pink-cardigan-girl-v1-sheet.png",
+  "frameSize": {
+    "width": 64,
+    "height": 80
+  },
+  "anchor": {
+    "x": 32,
+    "y": 72
+  },
+  "directions": [
+    "front",
+    "back",
+    "left",
+    "right"
+  ],
+  "frames": [
+    "idle",
+    "step_a",
+    "passing",
+    "step_b"
+  ],
+  "recommendedFps": 8,
+  "notes": "Transparent PNG frames sliced from a 4x4 source sheet; aligned for the looping commercial street stage."
+}

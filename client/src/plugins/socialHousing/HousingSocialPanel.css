@@ -1,0 +1,1063 @@
+.housing-panel,
+.housing-panel * {
+  box-sizing: border-box;
+}
+
+.housing-panel {
+  --housing-page-bg: linear-gradient(180deg, rgba(255, 251, 254, 0.96), rgba(241, 246, 255, 0.82));
+  --housing-card-bg: rgba(255, 255, 255, 0.84);
+  --housing-card-bg-strong: #fff;
+  --housing-input-bg: rgba(255, 255, 255, 0.9);
+  --housing-tint: rgba(248, 242, 248, 0.86);
+  --housing-blue-tint: rgba(241, 246, 255, 0.92);
+  --housing-pink-tint: rgba(255, 243, 248, 0.92);
+  --housing-ink: var(--ink-strong, #293041);
+  --housing-muted: var(--ink-soft, #70748a);
+  --housing-faint: #9aa0b3;
+  --housing-blue: var(--accent-color, #7b9fe0);
+  --housing-blue-strong: #5a7fcc;
+  --housing-pink: var(--accent, #e8a0bf);
+  --housing-lilac: #c4a0e8;
+  --housing-line: var(--line-soft, rgba(123, 159, 224, 0.22));
+  --housing-line-pink: var(--line-pink, rgba(232, 160, 191, 0.28));
+  --housing-shadow: var(--shadow-soft, 0 12px 32px rgba(123, 159, 224, 0.12));
+  color: var(--housing-ink);
+}
+
+.housing-panel input:focus,
+.housing-panel select:focus,
+.housing-panel textarea:focus {
+  outline: none;
+  border-color: #60a5fa !important;
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.18);
+}
+
+.housing-section {
+  min-width: 0;
+}
+
+.housing-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.housing-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 850;
+}
+
+.housing-section-title svg {
+  color: #2563eb;
+}
+
+.housing-section-extra {
+  color: #64748b;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.housing-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.housing-stat-card {
+  display: grid;
+  gap: 8px;
+  min-height: 86px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.housing-stat-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.housing-stat-value {
+  font-size: 25px;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.housing-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.housing-pill span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.housing-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: #334155;
+  background: #f8fafc;
+  font-size: 13px;
+  font-weight: 760;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+
+.housing-action-btn:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+}
+
+.housing-action-btn:disabled {
+  cursor: not-allowed;
+}
+
+.housing-action-btn--primary {
+  background: #dbeafe;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+}
+
+.housing-action-btn--info {
+  background: #e0f2fe;
+  color: #0369a1;
+  border-color: #bae6fd;
+}
+
+.housing-action-btn--warning {
+  background: #ffedd5;
+  color: #c2410c;
+  border-color: #fed7aa;
+}
+
+.housing-action-btn--success {
+  background: #dcfce7;
+  color: #166534;
+  border-color: #bbf7d0;
+}
+
+.housing-action-btn--danger {
+  background: #fee2e2;
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+
+.housing-action-btn--violet {
+  background: #ede9fe;
+  color: #6d28d9;
+  border-color: #ddd6fe;
+}
+
+.housing-action-btn--neutral {
+  background: #f1f5f9;
+  color: #475569;
+  border-color: #e2e8f0;
+}
+
+.housing-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.housing-field > span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.housing-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 14px;
+  align-items: start;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.housing-command-card,
+.housing-chain-card,
+.housing-character-card,
+.housing-summary-card,
+.housing-empty-card {
+  min-width: 0;
+  background: #fff;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.housing-command-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.housing-command-grid,
+.housing-selected-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.housing-selected-person {
+  display: grid;
+  gap: 9px;
+  padding: 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.housing-selected-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 850;
+}
+
+.housing-selected-meta,
+.housing-card-actions,
+.housing-character-facts,
+.housing-character-actions,
+.housing-command-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.housing-selected-note,
+.housing-command-empty,
+.housing-command-hint {
+  color: var(--housing-muted, #64748b);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.housing-command-empty,
+.housing-command-hint {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--housing-line, #e2e8f0);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.housing-command-hint {
+  background: rgba(241, 246, 255, 0.68);
+}
+
+.housing-card-kicker {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.housing-summary-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.housing-summary-card.is-compact {
+  padding: 14px;
+}
+
+.housing-summary-card.is-empty {
+  min-height: 120px;
+  align-items: center;
+  justify-items: center;
+}
+
+.housing-summary-head,
+.housing-chain-top,
+.housing-character-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.housing-home-title {
+  min-width: 0;
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.housing-home-desc {
+  display: -webkit-box;
+  min-height: 42px;
+  overflow: hidden;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.housing-home-money {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.housing-home-money span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 9px 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.housing-home-money strong {
+  color: #172033;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.housing-score-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.housing-score-row {
+  display: grid;
+  gap: 4px;
+}
+
+.housing-score-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.housing-score-track {
+  height: 6px;
+  overflow: hidden;
+  background: #edf2f7;
+  border-radius: 999px;
+}
+
+.housing-score-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.housing-chain-list,
+.housing-character-list {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.housing-chain-card {
+  display: grid;
+  gap: 11px;
+  overflow: hidden;
+  padding: 16px;
+}
+
+.housing-chain-kicker {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.housing-chain-title-wrap {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.housing-chain-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.housing-chain-title span {
+  color: #94a3b8;
+}
+
+.housing-chain-progress {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.housing-chain-step {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.housing-chain-step span {
+  height: 5px;
+  background: #e2e8f0;
+  border-radius: 999px;
+}
+
+.housing-chain-step em {
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.housing-chain-step.is-active span {
+  background: #93c5fd;
+}
+
+.housing-chain-step.is-current span {
+  background: #2563eb;
+}
+
+.housing-chain-step.is-current em {
+  color: #1d4ed8;
+}
+
+.housing-chain-error {
+  padding: 10px 12px;
+  color: #be123c;
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.housing-chain-detail {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  padding-top: 10px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.housing-chain-detail-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  color: #1d4ed8;
+  background: #f8fbff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.housing-chain-detail-toggle:hover {
+  background: #eff6ff;
+}
+
+.housing-chain-detail-toggle-main,
+.housing-chain-detail-toggle-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.housing-chain-detail-toggle-main {
+  min-width: 0;
+  color: #1e3a8a;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.housing-chain-detail-toggle-main > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.housing-chain-detail-toggle-main em {
+  flex: 0 0 auto;
+  color: #64748b;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 750;
+}
+
+.housing-chain-detail-toggle-action {
+  flex: 0 0 auto;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.housing-chain-detail-preview {
+  display: -webkit-box;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 10px 11px;
+  color: #64748b;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.housing-dialogue-panel {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.housing-dialogue-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.housing-dialogue-scroll {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+  max-height: 330px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+}
+
+.housing-dialogue-line {
+  display: grid;
+  grid-template-columns: minmax(42px, auto) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+}
+
+.housing-dialogue-line span {
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.housing-dialogue-line.is-agent span {
+  color: #c2410c;
+}
+
+.housing-dialogue-line p {
+  min-width: 0;
+  margin: 0;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.housing-chain-note,
+.housing-chain-notes {
+  min-width: 0;
+  max-width: 100%;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.housing-chain-notes {
+  display: grid;
+  gap: 6px;
+}
+
+.housing-chain-notes div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.housing-chain-notes strong {
+  color: #334155;
+}
+
+.housing-chain-notice {
+  padding: 10px 12px;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.housing-chain-notice.is-error {
+  color: #be123c;
+  background: #fff1f2;
+  border-color: #fecdd3;
+}
+
+.housing-character-card {
+  display: grid;
+  gap: 13px;
+  padding: 16px;
+}
+
+.housing-character-main {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+
+.housing-character-avatar {
+  display: grid;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  font-size: 18px;
+  font-weight: 850;
+}
+
+.housing-character-name {
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 850;
+}
+
+.housing-character-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 5px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.housing-character-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.housing-binding-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.8fr) minmax(0, 0.7fr) minmax(0, 0.7fr) minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.housing-home-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+  gap: 12px;
+}
+
+.housing-agency-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 14px;
+  align-items: start;
+  min-width: 0;
+}
+
+.housing-agency-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.housing-ad-style-row {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.housing-empty-card {
+  padding: 16px;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.housing-muted {
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+/* Soft candy polish layer */
+.housing-panel input,
+.housing-panel select,
+.housing-panel textarea {
+  border-color: var(--housing-line) !important;
+  background: var(--housing-input-bg) !important;
+  color: var(--housing-ink);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.housing-panel input::placeholder,
+.housing-panel textarea::placeholder {
+  color: var(--housing-faint);
+}
+
+.housing-panel input:focus,
+.housing-panel select:focus,
+.housing-panel textarea:focus {
+  border-color: var(--housing-blue) !important;
+  box-shadow: var(--focus-ring, 0 0 0 3px rgba(155, 181, 232, 0.24));
+}
+
+.housing-section {
+  color: var(--housing-ink);
+}
+
+.housing-section-head {
+  padding: 0 2px;
+}
+
+.housing-section-title {
+  color: var(--housing-ink);
+  font-size: 15px;
+  letter-spacing: 0;
+}
+
+.housing-section-title svg {
+  color: var(--housing-blue);
+}
+
+.housing-section-extra,
+.housing-card-kicker,
+.housing-chain-kicker,
+.housing-muted {
+  color: var(--housing-muted);
+}
+
+.housing-command-card,
+.housing-chain-card,
+.housing-character-card,
+.housing-summary-card,
+.housing-empty-card,
+.housing-stat-card {
+  border-color: var(--housing-line);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 251, 254, 0.86)),
+    var(--housing-card-bg);
+  box-shadow: var(--housing-shadow);
+}
+
+.housing-stat-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.housing-stat-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(90deg, var(--housing-blue), var(--housing-lilac), var(--housing-pink));
+  opacity: 0.62;
+}
+
+.housing-stat-meta {
+  color: var(--housing-muted);
+}
+
+.housing-stat-value,
+.housing-home-title,
+.housing-selected-name,
+.housing-character-name,
+.housing-chain-title {
+  color: var(--housing-ink);
+}
+
+.housing-pill {
+  border-color: rgba(123, 159, 224, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.56);
+}
+
+.housing-action-btn {
+  border-color: var(--housing-line);
+  background: rgba(255, 255, 255, 0.72);
+  color: #596175;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.72) inset;
+}
+
+.housing-action-btn:not(:disabled):hover {
+  border-color: rgba(123, 159, 224, 0.34);
+  box-shadow: 0 10px 22px rgba(123, 159, 224, 0.14);
+}
+
+.housing-action-btn--primary {
+  color: #4f72c5;
+  background: linear-gradient(135deg, rgba(241, 246, 255, 0.96), rgba(247, 240, 255, 0.9));
+  border-color: rgba(123, 159, 224, 0.3);
+}
+
+.housing-action-btn--info {
+  color: #4777ad;
+  background: var(--housing-blue-tint);
+  border-color: rgba(123, 159, 224, 0.28);
+}
+
+.housing-action-btn--warning {
+  color: #be6b3d;
+  background: #fff7ed;
+  border-color: rgba(251, 191, 36, 0.28);
+}
+
+.housing-action-btn--success {
+  color: #3c8b6a;
+  background: #effaf4;
+  border-color: rgba(107, 212, 160, 0.28);
+}
+
+.housing-action-btn--danger {
+  color: #c65370;
+  background: #fff3f8;
+  border-color: rgba(232, 160, 191, 0.34);
+}
+
+.housing-action-btn--violet {
+  color: #7561bd;
+  background: #f7f0ff;
+  border-color: rgba(196, 160, 232, 0.3);
+}
+
+.housing-action-btn--neutral {
+  color: var(--housing-muted);
+  background: rgba(255, 255, 255, 0.72);
+  border-color: var(--housing-line);
+}
+
+.housing-selected-person,
+.housing-home-money span,
+.housing-chain-detail-preview,
+.housing-dialogue-scroll,
+.housing-chain-notes {
+  border-color: var(--housing-line);
+  background: rgba(248, 242, 248, 0.56);
+}
+
+.housing-chain-notes {
+  padding: 10px;
+  border: 1px solid var(--housing-line);
+  border-radius: 8px;
+}
+
+.housing-home-desc,
+.housing-character-meta,
+.housing-chain-note,
+.housing-chain-notes {
+  color: var(--housing-muted);
+}
+
+.housing-home-money strong {
+  color: var(--housing-ink);
+}
+
+.housing-score-track,
+.housing-chain-step span {
+  background: rgba(123, 159, 224, 0.16);
+}
+
+.housing-chain-step.is-active span {
+  background: linear-gradient(90deg, rgba(155, 181, 232, 0.9), rgba(196, 160, 232, 0.78));
+}
+
+.housing-chain-step.is-current span {
+  background: linear-gradient(90deg, var(--housing-blue), var(--housing-pink));
+}
+
+.housing-chain-step.is-current em {
+  color: var(--housing-blue-strong);
+}
+
+.housing-chain-error {
+  color: #b9445a;
+  background: #fff3f8;
+  border-color: var(--housing-line-pink);
+}
+
+.housing-chain-detail {
+  border-color: var(--housing-line);
+}
+
+.housing-chain-detail-toggle {
+  color: var(--housing-blue-strong);
+  border-color: var(--housing-line);
+  background: linear-gradient(135deg, var(--housing-blue-tint), var(--housing-pink-tint));
+}
+
+.housing-chain-detail-toggle:hover {
+  background: linear-gradient(135deg, #edf4ff, #fff0f7);
+}
+
+.housing-chain-detail-toggle-main {
+  color: var(--housing-ink);
+}
+
+.housing-chain-detail-toggle-action {
+  color: var(--housing-blue-strong);
+}
+
+.housing-dialogue-scroll {
+  padding: 10px;
+  border: 1px solid var(--housing-line);
+  border-radius: 8px;
+}
+
+.housing-dialogue-line {
+  padding: 2px 0;
+}
+
+.housing-dialogue-line span {
+  color: var(--housing-blue-strong);
+}
+
+.housing-dialogue-line.is-agent span {
+  color: #c06a86;
+}
+
+.housing-dialogue-line p {
+  color: #555d72;
+}
+
+.housing-character-avatar {
+  color: var(--housing-blue-strong);
+  background: linear-gradient(135deg, var(--housing-blue-tint), var(--housing-pink-tint));
+  border-color: var(--housing-line);
+}
+
+.housing-empty-card {
+  color: var(--housing-muted);
+}
+
+.housing-chain-notice {
+  color: var(--housing-blue-strong);
+  background: var(--housing-blue-tint);
+  border-color: rgba(123, 159, 224, 0.28);
+}
+
+.housing-chain-notice.is-error {
+  color: #b9445a;
+  background: #fff3f8;
+  border-color: var(--housing-line-pink);
+}
+
+@media (max-width: 980px) {
+  .housing-workbench,
+  .housing-agency-grid,
+  .housing-selected-grid,
+  .housing-command-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .housing-agency-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .housing-binding-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .housing-panel {
+    padding: 16px !important;
+  }
+
+  .housing-section-head,
+  .housing-summary-head,
+  .housing-chain-top,
+  .housing-character-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .housing-binding-grid,
+  .housing-home-money {
+    grid-template-columns: 1fr;
+  }
+
+  .housing-ad-style-row {
+    flex-direction: column;
+  }
+
+  .housing-chain-progress {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .housing-action-btn {
+    transition: none;
+  }
+
+  .housing-action-btn:not(:disabled):hover {
+    transform: none;
+  }
+}

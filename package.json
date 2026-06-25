@@ -24,14 +24,14 @@
   "devDependencies": {},
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/NANA3333333/ChatPluse.git"
+    "url": "git+https://github.com/NANA3333333/ChatPulse.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/NANA3333333/ChatPluse/issues"
+    "url": "https://github.com/NANA3333333/ChatPulse/issues"
   },
-  "homepage": "https://github.com/NANA3333333/ChatPluse#readme"
+  "homepage": "https://github.com/NANA3333333/ChatPulse#readme"
 }

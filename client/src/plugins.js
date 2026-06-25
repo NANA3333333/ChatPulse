@@ -29,8 +29,8 @@ export const plugins = [
   },
   {
     id: 'housing_social',
-    name_en: 'Housing & Social',
-    name_zh: '\u4f4f\u623f\u4e0e\u793e\u4ea4',
+    name_en: 'Housing',
+    name_zh: '\u4f4f\u623f\u7cfb\u7edf',
     icon: Building2,
     component: HousingSocialPanel,
     color: '#f97316',

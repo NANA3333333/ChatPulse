@@ -1,3 +1,5 @@
+const net = require('net');
+
 const MCP_TASK_KINDS = new Set(['web_search', 'private_web_search', 'city_web_search', 'fetch_url']);
 const MCP_SEARCH_PROVIDERS = new Set(['auto', 'duckduckgo', 'duckduckgo_instant_answer', 'serper', 'tavily', 'brave', 'bing']);
 const MAX_MCP_TITLE_LENGTH = 160;
@@ -22,6 +24,48 @@ function cleanText(value, maxLength = 2000) {
     return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
 }
 
+function normalizeHostname(value) {
+    return String(value || '').trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+}
+
+function isPrivateIpv4(hostname) {
+    const parts = hostname.split('.').map(part => Number(part));
+    if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+    const [a, b] = parts;
+    return a === 0
+        || a === 10
+        || a === 127
+        || (a === 100 && b >= 64 && b <= 127)
+        || (a === 169 && b === 254)
+        || (a === 172 && b >= 16 && b <= 31)
+        || (a === 192 && b === 168)
+        || (a === 198 && (b === 18 || b === 19))
+        || a >= 224;
+}
+
+function isPrivateIpv6(hostname) {
+    const clean = normalizeHostname(hostname);
+    return clean === '::'
+        || clean === '::1'
+        || clean.startsWith('fc')
+        || clean.startsWith('fd')
+        || clean.startsWith('fe80:')
+        || clean.startsWith('::ffff:127.')
+        || clean.startsWith('::ffff:10.')
+        || clean.startsWith('::ffff:192.168.')
+        || /^::ffff:172\.(1[6-9]|2\d|3[01])\./.test(clean);
+}
+
+function isBlockedMcpFetchHost(hostname) {
+    const clean = normalizeHostname(hostname);
+    if (!clean) return true;
+    if (clean === 'localhost' || clean.endsWith('.localhost') || clean.endsWith('.local')) return true;
+    const ipVersion = net.isIP(clean);
+    if (ipVersion === 4) return isPrivateIpv4(clean);
+    if (ipVersion === 6) return isPrivateIpv6(clean);
+    return false;
+}
+
 function normalizeMcpProvider(value, fallback = 'auto') {
     const provider = String(value || fallback).trim() || fallback;
     if (!MCP_SEARCH_PROVIDERS.has(provider)) reject('Invalid web search provider');
@@ -37,6 +81,9 @@ function normalizeMcpHttpUrl(value, label = 'URL') {
     }
     if (!['http:', 'https:'].includes(parsed.protocol)) {
         reject(`${label} must be http or https`);
+    }
+    if (isBlockedMcpFetchHost(parsed.hostname)) {
+        reject(`${label} host is not allowed`);
     }
     return parsed.toString();
 }

@@ -80,6 +80,30 @@ function registerCoreCityRoutes(app, deps) {
             }
 
             rawDb.prepare('UPDATE city_logs SET content = ? WHERE id = ?').run(nextContent, logId);
+            const messageId = normalizeCityRowId(req.body?.messageId || 0);
+            if (messageId) {
+                rawDb.prepare(`
+                    UPDATE messages
+                    SET content = ?
+                    WHERE id = ?
+                      AND character_id = ?
+                      AND role = 'character'
+                      AND (content = ? OR content LIKE '【商业街输出折叠】%')
+                `).run(nextContent, messageId, char.id, originalContent);
+            } else {
+                rawDb.prepare(`
+                    UPDATE messages
+                    SET content = ?
+                    WHERE id = (
+                        SELECT id FROM messages
+                        WHERE character_id = ?
+                          AND role = 'character'
+                          AND content = ?
+                        ORDER BY id DESC
+                        LIMIT 1
+                    )
+                `).run(nextContent, char.id, originalContent);
+            }
             let questReview = null;
             if (typeof handleQuestLifecycleAfterAction === 'function') {
                 try {

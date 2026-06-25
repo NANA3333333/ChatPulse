@@ -6,6 +6,7 @@ const { callLLM } = require('./llm');
 const { getUserDb } = require('./db');
 const { buildUniversalContext } = require('./contextBuilder');
 const qdrant = require('./qdrant');
+const { getExpiredForgettingMemoryRows } = require('./memoryMaintenanceService');
 
 const LOCAL_EMBEDDING_MODEL = process.env.LOCAL_EMBEDDING_MODEL || 'Xenova/bge-m3';
 const LOCAL_EMBEDDING_DIM = Number(process.env.LOCAL_EMBEDDING_DIM || 1024);
@@ -47,7 +48,10 @@ const activeEmbeddingJobs = new Map();
 let globalWsClientsResolver = null;
 const activeSweepJobs = new Set();
 const sweepPoolCooldowns = new Map();
+const sweepPoolAuthFailureCooldowns = new Map();
 const SWEEP_COOLDOWN_MS = 10 * 1000;
+const SWEEP_AUTH_FAILURE_COOLDOWN_MS = 30 * 60 * 1000;
+const EXPIRED_FORGETTING_PURGE_INTERVAL_MS = 10 * 60 * 1000;
 function setWsClientsResolver(resolver) {
     globalWsClientsResolver = resolver;
 }
@@ -319,6 +323,8 @@ function getMemory(userId) {
     if (memoryCache.has(cacheKey)) return memoryCache.get(cacheKey);
 
     const getDb = () => getUserDb(userId);
+    let lastExpiredForgettingPurgeAt = 0;
+    let expiredForgettingPurgePromise = null;
 
     function parseLooseJson(value, fallback = null) {
         if (value == null || value === '') return fallback;
@@ -908,6 +914,28 @@ ${contextLine}
         };
     }
 
+    function buildMemoryConfigFingerprint(config = {}) {
+        return crypto
+            .createHash('sha256')
+            .update([
+                String(config.endpoint || '').trim(),
+                String(config.model || '').trim(),
+                String(config.key || '').trim()
+            ].join('\n'))
+            .digest('hex');
+    }
+
+    function isNonRetryableMemoryModelError(error) {
+        const text = [
+            error?.message,
+            error?.payload?.raw_response,
+            error?.payload?.error,
+            error?.response?.status,
+            error?.status
+        ].filter(Boolean).join('\n');
+        return /(401|403|unauthorized|forbidden|invalid\s*(api\s*)?key|invalid_key|permission|auth)/i.test(text);
+    }
+
     function recordMemoryDebug(character, direction, payload, meta = {}) {
         if (!character || character.llm_debug_capture !== 1) return;
         const db = getDb();
@@ -1372,6 +1400,151 @@ ${contextLine}
             card_count: allCards.length,
             target_group_count: targetGroupKeys.size
         };
+    }
+
+    function buildMemoryDeletionTargets(db, rows = []) {
+        const targetsByMemoryId = new Map();
+        const ids = Array.from(new Set((rows || [])
+            .map(row => Number(row?.id || 0))
+            .filter(id => id > 0)));
+
+        for (const row of rows || []) {
+            const memoryId = Number(row?.id || 0);
+            if (!memoryId) continue;
+            const characterId = String(row?.character_id || '').trim();
+            if (!characterId) continue;
+            targetsByMemoryId.set(memoryId, new Map([
+                [characterId, { characterId, previousRow: { ...row } }]
+            ]));
+        }
+
+        const rawDb = typeof db?.getRawDb === 'function' ? db.getRawDb() : null;
+        if (!rawDb || ids.length === 0) return targetsByMemoryId;
+
+        try {
+            const placeholders = ids.map(() => '?').join(',');
+            const bindings = rawDb.prepare(`
+                SELECT memory_id, character_id, character_name
+                FROM external_memory_role_bindings
+                WHERE memory_id IN (${placeholders})
+            `).all(...ids);
+            const rowsById = new Map((rows || []).map(row => [Number(row?.id || 0), row]));
+            for (const binding of bindings || []) {
+                const memoryId = Number(binding.memory_id || 0);
+                const characterId = String(binding.character_id || '').trim();
+                if (!memoryId || !characterId) continue;
+                const sourceRow = rowsById.get(memoryId) || {};
+                const targets = targetsByMemoryId.get(memoryId) || new Map();
+                targets.set(characterId, {
+                    characterId,
+                    previousRow: {
+                        ...sourceRow,
+                        shared_binding: 1,
+                        bound_character_id: characterId,
+                        bound_character_name: String(binding.character_name || '')
+                    }
+                });
+                targetsByMemoryId.set(memoryId, targets);
+            }
+        } catch (e) {
+            console.warn('[Memory] Failed to read external memory role bindings for auto-forget:', e.message);
+        }
+
+        return targetsByMemoryId;
+    }
+
+    async function purgeExpiredForgettingMemories(options = {}) {
+        const now = Date.now();
+        const force = options.force === true;
+        const minIntervalMs = Math.max(60 * 1000, Number(options.minIntervalMs || EXPIRED_FORGETTING_PURGE_INTERVAL_MS) || EXPIRED_FORGETTING_PURGE_INTERVAL_MS);
+        if (!force && now - lastExpiredForgettingPurgeAt < minIntervalMs) {
+            return {
+                success: true,
+                skipped: true,
+                reason: 'cooldown',
+                deleted: 0,
+                next_allowed_at: lastExpiredForgettingPurgeAt + minIntervalMs
+            };
+        }
+        if (expiredForgettingPurgePromise) {
+            return expiredForgettingPurgePromise;
+        }
+
+        expiredForgettingPurgePromise = (async () => {
+            lastExpiredForgettingPurgeAt = now;
+            const db = getDb();
+            const rawDb = typeof db?.getRawDb === 'function' ? db.getRawDb() : null;
+            const rows = getExpiredForgettingMemoryRows(rawDb, {
+                now,
+                limit: options.limit || 200
+            });
+            if (rows.length === 0) {
+                return { success: true, deleted: 0, ids: [], character_ids: [], index_deleted: true };
+            }
+
+            const targetsByMemoryId = buildMemoryDeletionTargets(db, rows);
+            const idsByCharacter = new Map();
+            const previousRowsByCharacter = new Map();
+            for (const [memoryId, targets] of targetsByMemoryId.entries()) {
+                for (const target of targets.values()) {
+                    const characterId = String(target.characterId || '').trim();
+                    if (!characterId) continue;
+                    if (!idsByCharacter.has(characterId)) idsByCharacter.set(characterId, []);
+                    if (!previousRowsByCharacter.has(characterId)) previousRowsByCharacter.set(characterId, []);
+                    idsByCharacter.get(characterId).push(memoryId);
+                    previousRowsByCharacter.get(characterId).push(target.previousRow || rows.find(row => Number(row.id || 0) === memoryId));
+                }
+            }
+
+            const indexResults = [];
+            for (const [characterId, memoryIds] of idsByCharacter.entries()) {
+                const result = await deleteMemoryIndexEntries(characterId, memoryIds);
+                indexResults.push({ character_id: characterId, ...result });
+                if (Array.isArray(result?.errors) && result.errors.length > 0) {
+                    console.warn(`[Memory] Auto-forget index delete warning for ${characterId}: ${result.errors.join('; ')}`);
+                }
+            }
+
+            let deleted = 0;
+            for (const row of rows) {
+                db.deleteMemory(row.id);
+                deleted += 1;
+            }
+
+            for (const [characterId, memoryIds] of idsByCharacter.entries()) {
+                const refreshResult = await refreshMemoryIndexEntries(characterId, memoryIds, {
+                    previousRows: previousRowsByCharacter.get(characterId) || []
+                });
+                indexResults.push({ character_id: characterId, refresh: refreshResult });
+            }
+
+            if (globalWsClientsResolver && idsByCharacter.size > 0) {
+                const wsClients = globalWsClientsResolver(userId);
+                if (wsClients) {
+                    for (const characterId of idsByCharacter.keys()) {
+                        const payload = JSON.stringify({ type: 'memory_update', characterId });
+                        wsClients.forEach(c => {
+                            if (c.readyState === 1) c.send(payload);
+                        });
+                    }
+                }
+            }
+
+            return {
+                success: true,
+                deleted,
+                ids: rows.map(row => row.id),
+                character_ids: Array.from(idsByCharacter.keys()),
+                index_deleted: indexResults.every(result => !Array.isArray(result.errors) || result.errors.length === 0),
+                index_results: indexResults
+            };
+        })();
+
+        try {
+            return await expiredForgettingPurgePromise;
+        } finally {
+            expiredForgettingPurgePromise = null;
+        }
     }
 
     async function ensureSearchIndexReady(characterId, onTrace = null) {
@@ -3640,9 +3813,27 @@ Output exactly in this JSON format (and nothing else):
             };
         }
 
+        const memoryConfig = resolveMemoryModelConfig(character);
+        const memoryConfigFingerprint = buildMemoryConfigFingerprint(memoryConfig);
+        const authFailureCooldown = sweepPoolAuthFailureCooldowns.get(poolCooldownKey);
+        if (authFailureCooldown) {
+            const cooldownUntil = Number(authFailureCooldown.until || 0);
+            if (cooldownUntil > now && authFailureCooldown.fingerprint === memoryConfigFingerprint) {
+                return {
+                    status: 'cooldown',
+                    savedCount: 0,
+                    pool: sweepPool,
+                    error: authFailureCooldown.error || 'Memory sweep model auth failed recently.',
+                    remainingSeconds: Math.ceil((cooldownUntil - now) / 1000)
+                };
+            }
+            if (cooldownUntil <= now || authFailureCooldown.fingerprint !== memoryConfigFingerprint) {
+                sweepPoolAuthFailureCooldowns.delete(poolCooldownKey);
+            }
+        }
+
         activeSweepJobs.add(sweepKey);
         sweepPoolCooldowns.set(poolCooldownKey, now);
-        const memoryConfig = resolveMemoryModelConfig(character);
         updateSweepStatus(character.id, {
             sweep_last_run_at: now,
             sweep_last_error: '',
@@ -3849,6 +4040,13 @@ Output exactly in this JSON format (and nothing else):
             console.log(`[Memory] ${meta.label} sweep completed for ${character.name}, saved ${savedCount} memories across ${totalBatches} batch(es).`);
             return { status: 'done', savedCount, pool: sweepPool, consumedCount: activityEntries.length };
         } catch (e) {
+            if (isNonRetryableMemoryModelError(e)) {
+                sweepPoolAuthFailureCooldowns.set(poolCooldownKey, {
+                    until: Date.now() + SWEEP_AUTH_FAILURE_COOLDOWN_MS,
+                    fingerprint: memoryConfigFingerprint,
+                    error: e.message || 'Memory sweep model auth failed.'
+                });
+            }
             updateSweepStatus(character.id, {
                 sweep_last_error: e.message || 'Memory sweep failed.',
                 sweep_last_saved_count: 0
@@ -4013,6 +4211,7 @@ Output exactly in this JSON format (and nothing else):
         updateGroupConversationDigest,
         aggregateDailyMemories,
         sweepOverflowMemories,
+        purgeExpiredForgettingMemories,
         saveExtractedMemory,
         getEmbeddingDebugStatus
     };

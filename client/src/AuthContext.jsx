@@ -19,6 +19,12 @@ export function useAuth() {
     return useContext(AuthContext);
 }
 
+function buildAuthUrl(apiUrl, path) {
+    const cleanApiUrl = String(apiUrl || '/api').replace(/\/+$/, '');
+    const apiBase = cleanApiUrl.endsWith('/api') ? cleanApiUrl : `${cleanApiUrl}/api`;
+    return `${apiBase}${path}`;
+}
+
 export function AuthProvider({ children }) {
     const [token, setToken] = useState(localStorage.getItem('cp_token'));
     const [user, setUser] = useState(() => readStoredUser());
@@ -35,7 +41,24 @@ export function AuthProvider({ children }) {
         localStorage.setItem('cp_user', JSON.stringify(nextUser));
     };
 
-    const logout = () => {
+    const logout = async (apiUrl) => {
+        const currentToken = localStorage.getItem('cp_token');
+        if (currentToken) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 1500);
+            try {
+                await fetch(buildAuthUrl(apiUrl, '/auth/logout'), {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${currentToken}` },
+                    keepalive: true,
+                    signal: controller.signal
+                });
+            } catch {
+                // Local state still needs to be cleared even if the network request is interrupted.
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        }
         setToken(null);
         setUser(null);
         localStorage.removeItem('cp_token');

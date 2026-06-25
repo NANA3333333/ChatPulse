@@ -1,0 +1,218 @@
+{
+  "concept": "source/commercial-street-concept.png",
+  "sourceStyle": "original generated cozy pastel pixel commercial street",
+  "assets": [
+    {
+      "id": "building_blue_cafe",
+      "type": "building",
+      "path": "sprites/building_blue_cafe.png",
+      "size": [
+        844,
+        980
+      ],
+      "sourceCleanPath": "source/blue-cafe-clean-source.png"
+    },
+    {
+      "id": "building_green_convenience",
+      "type": "building",
+      "path": "sprites/building_green_convenience.png",
+      "size": [
+        1061,
+        913
+      ],
+      "sourceCleanPath": "source/green-convenience-structure-source.png"
+    },
+    {
+      "id": "building_pink_shop",
+      "type": "building",
+      "path": "sprites/building_pink_shop.png",
+      "size": [
+        802,
+        893
+      ],
+      "sourceCleanPath": "source/pink-shop-clean-source.png"
+    },
+    {
+      "id": "prop_bench",
+      "type": "prop",
+      "path": "sprites/prop_bench.png",
+      "size": [
+        259,
+        193
+      ],
+      "bbox": [
+        1045,
+        257,
+        1284,
+        430
+      ]
+    },
+    {
+      "id": "prop_bicycle",
+      "type": "prop",
+      "path": "sprites/prop_bicycle.png",
+      "size": [
+        321,
+        219
+      ],
+      "bbox": [
+        805,
+        599,
+        1106,
+        798
+      ]
+    },
+    {
+      "id": "prop_cafe_table",
+      "type": "prop",
+      "path": "sprites/prop_cafe_table.png",
+      "size": [
+        282,
+        334
+      ],
+      "bbox": [
+        62,
+        495,
+        324,
+        809
+      ]
+    },
+    {
+      "id": "prop_chalkboard",
+      "type": "prop",
+      "path": "sprites/prop_chalkboard.png",
+      "size": [
+        186,
+        219
+      ],
+      "bbox": [
+        1465,
+        604,
+        1631,
+        803
+      ]
+    },
+    {
+      "id": "prop_flower_box",
+      "type": "prop",
+      "path": "sprites/prop_flower_box.png",
+      "size": [
+        301,
+        207
+      ],
+      "bbox": [
+        1373,
+        247,
+        1654,
+        434
+      ]
+    },
+    {
+      "id": "prop_fruit_stall",
+      "type": "prop",
+      "path": "sprites/prop_fruit_stall.png",
+      "size": [
+        350,
+        285
+      ],
+      "bbox": [
+        401,
+        544,
+        731,
+        809
+      ]
+    },
+    {
+      "id": "prop_led_24h",
+      "type": "prop",
+      "path": "sprites/prop_led_24h.png",
+      "sourcePath": "sprites/prop_led_24h.png",
+      "sourceGeneratedPath": "source/led-24h-generated-source.png",
+      "size": [
+        553,
+        1173
+      ]
+    },
+    {
+      "id": "prop_mailbox",
+      "type": "prop",
+      "path": "sprites/prop_mailbox.png",
+      "size": [
+        125,
+        247
+      ],
+      "bbox": [
+        1230,
+        571,
+        1335,
+        798
+      ]
+    },
+    {
+      "id": "prop_street_lamp",
+      "type": "prop",
+      "path": "sprites/prop_street_lamp.png",
+      "size": [
+        132,
+        393
+      ],
+      "bbox": [
+        840,
+        57,
+        952,
+        430
+      ]
+    },
+    {
+      "id": "prop_tree_cherry",
+      "type": "prop",
+      "path": "sprites/prop_tree_cherry.png",
+      "size": [
+        303,
+        373
+      ],
+      "bbox": [
+        422,
+        77,
+        705,
+        430
+      ]
+    },
+    {
+      "id": "prop_tree_green",
+      "type": "prop",
+      "path": "sprites/prop_tree_green.png",
+      "size": [
+        279,
+        374
+      ],
+      "bbox": [
+        61,
+        77,
+        320,
+        431
+      ]
+    },
+    {
+      "id": "prop_vending_machine",
+      "type": "prop",
+      "path": "sprites/prop_vending_machine.png",
+      "sourcePath": "sprites/prop_vending_machine.png",
+      "sourceGeneratedPath": "source/vending-machine-generated-source.png",
+      "size": [
+        433,
+        1058
+      ]
+    },
+    {
+      "id": "street_props_sheet",
+      "type": "sheet",
+      "path": "sprites/street_props_sheet.png",
+      "size": [
+        1717,
+        916
+      ]
+    }
+  ],
+  "atlas": "commercial-asset-atlas.png"
+}

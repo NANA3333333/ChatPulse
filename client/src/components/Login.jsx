@@ -1,6 +1,58 @@
 import React, { useState } from 'react';
 import { useAuth } from '../AuthContext';
-import { MessageCircle, RotateCcw, ShieldCheck, Sparkles } from 'lucide-react';
+
+const PIXEL_ASSET_BASE = '/assets/ui/login-pixel';
+const WORDMARK_SLICES = [
+    ['C', 'chatpulse-wordmark-slice-0-c.png'],
+    ['h', 'chatpulse-wordmark-slice-1-h.png'],
+    ['a', 'chatpulse-wordmark-slice-2-a.png'],
+    ['t', 'chatpulse-wordmark-slice-3-t.png'],
+    ['P', 'chatpulse-wordmark-slice-4-p.png'],
+    ['u', 'chatpulse-wordmark-slice-5-u.png'],
+    ['l', 'chatpulse-wordmark-slice-6-l.png'],
+    ['s', 'chatpulse-wordmark-slice-7-s.png'],
+    ['e', 'chatpulse-wordmark-slice-8-e.png'],
+];
+
+const pixelAsset = (fileName) => `${PIXEL_ASSET_BASE}/${fileName}`;
+
+function PixelText({ fileName, text, className = '' }) {
+    return (
+        <>
+            <img className={className} src={pixelAsset(fileName)} alt="" aria-hidden="true" />
+            <span className="sr-only">{text}</span>
+        </>
+    );
+}
+
+function PixelWordmark() {
+    return (
+        <span className="login-wordmark-main" aria-label="ChatPulse" role="img">
+            {WORDMARK_SLICES.map(([letter, fileName], index) => (
+                <span
+                    key={`${letter}-${index}`}
+                    className="login-wordmark-letter"
+                    aria-hidden="true"
+                    style={{ '--letter-index': index }}
+                >
+                    <img
+                        className="login-wordmark-letter-img"
+                        src={pixelAsset(`${fileName}?v=preview-sliced-20260625`)}
+                        alt=""
+                    />
+                </span>
+            ))}
+        </span>
+    );
+}
+
+function ChatPulseMark() {
+    return (
+        <div className="login-logo" aria-hidden="true">
+            <img className="login-logo-image" src={pixelAsset('chatpulse-bubble-preview.png?v=preview-crop-20260625')} alt="" />
+        </div>
+    );
+}
 
 function Login({ apiUrl }) {
     const { login } = useAuth();
@@ -10,17 +62,6 @@ function Login({ apiUrl }) {
     const [inviteCode, setInviteCode] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
-
-    const handleResetLocalState = () => {
-        [
-            'cp_custom_css',
-            'cp_theme_config',
-            'cp_theme',
-            'cp_avatar',
-        ].forEach((key) => localStorage.removeItem(key));
-
-        window.location.reload();
-    };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -54,123 +95,138 @@ function Login({ apiUrl }) {
 
     return (
         <div className="login-container">
-            <div className="login-shell">
-                <aside className="login-brand-panel" aria-hidden="true">
-                    <div className="login-brand-mark">
-                        <MessageCircle size={34} />
-                    </div>
-                    <div>
-                        <p className="login-eyebrow">ChatPulse</p>
-                        <h1>让每段对话继续生长</h1>
-                    </div>
-                    <div className="login-preview-card">
-                        <div className="login-preview-top">
-                            <span></span>
-                            <span></span>
-                            <span></span>
-                        </div>
-                        <div className="login-preview-row">
-                            <div className="login-preview-avatar"></div>
-                            <div className="login-preview-bubble wide"></div>
-                        </div>
-                        <div className="login-preview-row reverse">
-                            <div className="login-preview-bubble short"></div>
-                        </div>
-                        <div className="login-preview-pulse">
-                            <Sparkles size={16} />
-                            <span>Pulse ready</span>
-                        </div>
-                    </div>
-                </aside>
+            <main className="login-layout">
+                <section className="login-brand-panel" aria-label="ChatPulse">
+                    <ChatPulseMark />
+                    <PixelWordmark />
+                </section>
 
-                <main className="login-glass-panel">
-                    <div className="login-header">
-                        <div className="login-logo">
-                            <MessageCircle size={32} />
-                        </div>
-                        <h1>ChatPulse</h1>
-                        <p className="login-subtitle">Immersive AI social simulation.</p>
-                    </div>
-
-                    <div className="login-mode-switch" role="tablist" aria-label="Authentication mode">
-                        <button
-                            type="button"
-                            className={!isRegistering ? 'active' : ''}
-                            onClick={() => { setIsRegistering(false); setError(''); }}
-                        >
-                            登录
-                        </button>
-                        <button
-                            type="button"
-                            className={isRegistering ? 'active' : ''}
-                            onClick={() => { setIsRegistering(true); setError(''); }}
-                        >
-                            注册
-                        </button>
-                    </div>
-
-                    <form className="login-form" onSubmit={handleSubmit}>
-                        {!isRegistering && (
-                            <div className="login-note">
-                                <ShieldCheck size={16} />
-                                <span>请使用管理员提供的账号登录。首次部署请先在服务器环境中设置管理员密码。</span>
-                            </div>
-                        )}
-                        <div className="input-group">
-                            <label>账号 (Username)</label>
-                            <input
-                                type="text"
-                                required
-                                autoFocus
-                                autoComplete="username"
-                                value={username}
-                                onChange={(e) => setUsername(e.target.value.trim())}
-                                placeholder="输入你的账号"
-                            />
-                        </div>
-                        <div className="input-group">
-                            <label>密码 (Password)</label>
-                            <input
-                                type="password"
-                                required
-                                autoComplete={isRegistering ? 'new-password' : 'current-password'}
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                placeholder="输入密码"
-                            />
-                        </div>
-
-                        {isRegistering && (
-                            <div className="input-group">
-                                <label>邀请码 (Invite Code)</label>
-                                <input
-                                    type="text"
-                                    value={inviteCode}
-                                    onChange={(e) => setInviteCode(e.target.value.trim())}
-                                    placeholder="输入邀请码"
-                                    required
+                <section className={`login-card ${isRegistering ? 'is-registering' : ''}`}>
+                    <div className="login-card-inner">
+                        <div className="login-mode-switch" role="tablist" aria-label="Authentication mode">
+                            <button
+                                type="button"
+                                role="tab"
+                                aria-selected={!isRegistering}
+                                className={!isRegistering ? 'active' : ''}
+                                onClick={() => { setIsRegistering(false); setError(''); }}
+                            >
+                                <PixelText
+                                    fileName={!isRegistering ? 'text-login-soft-active.png' : 'text-login-soft-idle.png'}
+                                    text="登录"
+                                    className="login-tab-text-img"
                                 />
+                            </button>
+                            <button
+                                type="button"
+                                role="tab"
+                                aria-selected={isRegistering}
+                                className={isRegistering ? 'active' : ''}
+                                onClick={() => { setIsRegistering(true); setError(''); }}
+                            >
+                                <PixelText
+                                    fileName={isRegistering ? 'text-register-soft-active.png' : 'text-register-soft-idle.png'}
+                                    text="注册"
+                                    className="login-tab-text-img"
+                                />
+                            </button>
+                        </div>
+
+                        <form className="login-form" onSubmit={handleSubmit}>
+                            <div className="input-group">
+                                <label htmlFor="login-username">
+                                    <PixelText fileName="label-account.png" text="账号" className="login-label-img" />
+                                </label>
+                                <div className="login-input-shell is-account">
+                                    <input
+                                        id="login-username"
+                                        type="text"
+                                        required
+                                        autoComplete="username"
+                                        value={username}
+                                        onChange={(e) => setUsername(e.target.value.trim())}
+                                        placeholder="输入你的账号"
+                                    />
+                                    <span className="login-placeholder-img" aria-hidden="true">
+                                        <img src={pixelAsset('placeholder-account.png')} alt="" />
+                                    </span>
+                                </div>
                             </div>
-                        )}
+                            <div className="input-group">
+                                <label htmlFor="login-password">
+                                    <PixelText fileName="label-password.png" text="密码" className="login-label-img" />
+                                </label>
+                                <div className="login-input-shell is-password">
+                                    <input
+                                        id="login-password"
+                                        type="password"
+                                        required
+                                        autoComplete={isRegistering ? 'new-password' : 'current-password'}
+                                        value={password}
+                                        onChange={(e) => setPassword(e.target.value)}
+                                        placeholder="输入密码"
+                                    />
+                                    <span className="login-placeholder-img" aria-hidden="true">
+                                        <img src={pixelAsset('placeholder-password.png')} alt="" />
+                                    </span>
+                                </div>
+                            </div>
 
-                        {error && <div className="login-error">{error}</div>}
+                            {isRegistering && (
+                                <div className="input-group">
+                                    <label htmlFor="login-invite">
+                                        <PixelText fileName="label-invite.png" text="邀请码" className="login-label-img" />
+                                        <PixelText
+                                            fileName="hint-required.png"
+                                            text="注册时必填"
+                                            className="login-hint-img"
+                                        />
+                                    </label>
+                                    <div className="login-input-shell is-invite">
+                                        <input
+                                            id="login-invite"
+                                            type="text"
+                                            value={inviteCode}
+                                            onChange={(e) => setInviteCode(e.target.value.trim())}
+                                            placeholder="输入邀请码"
+                                            required
+                                        />
+                                        <span className="login-placeholder-img" aria-hidden="true">
+                                            <img src={pixelAsset('placeholder-invite.png')} alt="" />
+                                        </span>
+                                    </div>
+                                </div>
+                            )}
 
-                        <button type="submit" className="login-submit-btn" disabled={loading}>
-                            {loading ? <div className="btn-spinner"></div> : (isRegistering ? '注册 / Register' : '登录 / Login')}
-                        </button>
-                    </form>
+                            {error && <div className="login-error" role="alert">{error}</div>}
 
-                    <div className="login-footer">
-                        <button className="text-btn toggle-mode-btn" type="button" onClick={() => { setIsRegistering(!isRegistering); setError(''); }}>
-                            {isRegistering ? '已有账号？立即登录' : '没有账号？使用邀请码注册'}
-                        </button>
-                        <button className="text-btn reset-local-btn" type="button" onClick={handleResetLocalState}>
-                            <RotateCcw size={13} />
-                            <span>重置本地界面状态 / Reset Local UI State</span>
-                        </button>
+                            <button type="submit" className="login-submit-btn" disabled={loading} aria-busy={loading}>
+                                {loading ? (
+                                    <span className="login-loading-pips" aria-label="加载中">
+                                        <i></i>
+                                        <i></i>
+                                        <i></i>
+                                    </span>
+                                ) : (
+                                    <>
+                                        <PixelText
+                                            fileName={isRegistering ? 'button-register-pixel-white.png' : 'button-login-pixel-white.png'}
+                                            text={isRegistering ? '注册' : '登录'}
+                                            className="login-submit-text-img"
+                                        />
+                                        <span className="login-submit-pips" aria-hidden="true">
+                                            <i></i>
+                                            <i></i>
+                                            <i></i>
+                                        </span>
+                                    </>
+                                )}
+                            </button>
+                        </form>
+
                     </div>
-                </main>
-            </div>
+                </section>
+            </main>
         </div>
     );
 }

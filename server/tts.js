@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { normalizeServerFetchUrlResolved } = require('./httpGuards');
 
 const DATA_DIR = path.join(__dirname, '..', 'data', 'tts');
 const TTS_INTENT_REGEX = /\[TTS_INTENT:\s*([\s\S]*?)\]/i;
@@ -146,11 +147,11 @@ function parseTencentCredentials(value) {
     };
 }
 
-function resolveTencentEndpoint(endpoint = '') {
+async function resolveTencentEndpoint(endpoint = '') {
     const raw = String(endpoint || '').trim();
     if (!raw) return { url: 'https://tts.tencentcloudapi.com', host: 'tts.tencentcloudapi.com', region: 'ap-guangzhou' };
     if (/^https?:\/\//i.test(raw)) {
-        const url = new URL(raw);
+        const url = await normalizeServerFetchUrlResolved(raw, 'TTS endpoint');
         return { url: `${url.protocol}//${url.host}`, host: url.host, region: '' };
     }
     return { url: 'https://tts.tencentcloudapi.com', host: 'tts.tencentcloudapi.com', region: raw };
@@ -160,7 +161,7 @@ async function synthesizeTencent({ character, text, intent }) {
     const { secretId, secretKey } = parseTencentCredentials(character.tts_api_key);
     if (!secretId || !secretKey) throw new Error('腾讯云 TTS 需要粘贴 SecretId 和 SecretKey，可直接使用腾讯云弹窗里的两行格式。');
 
-    const endpoint = resolveTencentEndpoint(character.tts_endpoint);
+    const endpoint = await resolveTencentEndpoint(character.tts_endpoint);
     const timestamp = Math.floor(Date.now() / 1000);
     const date = new Date(timestamp * 1000).toISOString().slice(0, 10);
     const voiceType = Number(character.tts_voice || 101001);
@@ -212,7 +213,7 @@ async function synthesizeTencent({ character, text, intent }) {
     };
     if (endpoint.region) headers['X-TC-Region'] = endpoint.region;
 
-    const res = await fetch(endpoint.url, { method: 'POST', headers, body: payload });
+    const res = await fetch(endpoint.url, { method: 'POST', redirect: 'manual', headers, body: payload });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.Response?.Error) {
         const err = data.Response?.Error;
@@ -226,9 +227,10 @@ async function synthesizeTencent({ character, text, intent }) {
 async function synthesizeOpenAI({ character, text }) {
     const key = String(character.tts_api_key || '').trim();
     if (!key) throw new Error('OpenAI TTS 需要 API Key。');
-    const endpoint = String(character.tts_endpoint || 'https://api.openai.com/v1/audio/speech').trim();
+    const endpoint = (await normalizeServerFetchUrlResolved(character.tts_endpoint || 'https://api.openai.com/v1/audio/speech', 'TTS endpoint')).toString();
     const res = await fetch(endpoint, {
         method: 'POST',
+        redirect: 'manual',
         headers: {
             Authorization: `Bearer ${key}`,
             'Content-Type': 'application/json'
@@ -248,13 +250,13 @@ async function synthesizeOpenAI({ character, text }) {
 }
 
 async function synthesizeCustom({ character, text, intent }) {
-    const endpoint = String(character.tts_endpoint || '').trim();
-    if (!endpoint) throw new Error('自定义 TTS 需要填写 Endpoint。');
+    const endpoint = (await normalizeServerFetchUrlResolved(character.tts_endpoint || '', 'TTS endpoint')).toString();
     const headers = { 'Content-Type': 'application/json' };
     const key = String(character.tts_api_key || '').trim();
     if (key) headers.Authorization = key.startsWith('Bearer ') ? key : `Bearer ${key}`;
     const res = await fetch(endpoint, {
         method: 'POST',
+        redirect: 'manual',
         headers,
         body: JSON.stringify({
             text,

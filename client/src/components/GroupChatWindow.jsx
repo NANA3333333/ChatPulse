@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Send, Users, Smile, Paperclip, X, Settings, Trash2, UserMinus, ArrowRightLeft, Gift, ChevronLeft, Trash, UserPlus, Edit3 } from 'lucide-react';
+import AuthenticatedImage from './AuthenticatedImage';
 import { useLanguage } from '../LanguageContext';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 
@@ -40,84 +41,130 @@ const quickEmojis = [
 ];
 
 /* ─── Red Packet Send Modal ─── */
+function formatPacketMoney(value) {
+    const amount = Number(value || 0);
+    return Number.isFinite(amount) ? amount.toFixed(2) : '0.00';
+}
+
 function RedPacketModal({ group, apiUrl, onClose, userWallet }) {
     const { lang } = useLanguage();
     const [type, setType] = useState('lucky');
     const [amount, setAmount] = useState('');
     const [count, setCount] = useState(group?.members?.length || 3);
     const [note, setNote] = useState('');
+    const [sending, setSending] = useState(false);
+    const [sendError, setSendError] = useState('');
     const isFixed = type === 'fixed';
     const cnt = Math.max(1, parseInt(count) || 1);
     const amt = Math.max(0, parseFloat(amount) || 0);
     const totalCost = isFixed ? amt * cnt : amt;
+    const perPreview = cnt > 0 ? (isFixed ? amt : totalCost / cnt) : 0;
     const overBudget = totalCost > (userWallet ?? 100);
-    const isValid = amt > 0 && cnt > 0 && !overBudget;
+    const tooSmall = totalCost > 0 && Math.round(totalCost * 100) < cnt;
+    const isValid = amt > 0 && cnt > 0 && !overBudget && !tooSmall;
 
     const onSend = async () => {
-        if (!isValid) return;
+        if (!isValid || sending) return;
+        setSending(true);
+        setSendError('');
         try {
             const payload = isFixed
                 ? { type, count: cnt, per_amount: amt, total_amount: totalCost, note: note.trim() }
                 : { type, count: cnt, total_amount: totalCost, note: note.trim() };
 
-            await fetch(`${apiUrl}/groups/${group.id}/redpackets`, {
+            const res = await fetch(`${apiUrl}/groups/${group.id}/redpackets`, {
                 method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.success === false) throw new Error(data.error || (lang === 'en' ? 'Failed to send red packet' : '红包发送失败'));
             onClose();
-        } catch (e) { console.error(e); }
+        } catch (e) {
+            console.error(e);
+            setSendError(e.message || (lang === 'en' ? 'Failed to send red packet' : '红包发送失败'));
+        } finally {
+            setSending(false);
+        }
     };
 
     return (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-            <div style={{ width: '340px', borderRadius: '14px', overflow: 'hidden', boxShadow: '0 10px 40px rgba(0,0,0,0.3)', background: '#fff' }}>
-                <div style={{ background: 'linear-gradient(135deg,#d63031,#c0392b)', padding: '18px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span style={{ color: '#fff', fontWeight: '700', fontSize: '17px' }}>🧧 {lang === 'en' ? 'Send Red Packet' : '发送红包'}</span>
-                    <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#ffcccb', cursor: 'pointer', fontSize: '20px', lineHeight: 1 }}>×</button>
-                </div>
-                <div style={{ display: 'flex', borderBottom: '1px solid #f0f0f0' }}>
-                    {[['lucky', lang === 'en' ? '🎲 Lucky' : '🎲 拼手气'], ['fixed', lang === 'en' ? '📦 Regular' : '📦 普通']].map(([t, label]) => (
-                        <button key={t} onClick={() => setType(t)}
-                            style={{
-                                flex: 1, padding: '10px', border: 'none', cursor: 'pointer', fontWeight: type === t ? '700' : '400',
-                                background: type === t ? '#fff5f5' : '#fff', color: type === t ? '#c0392b' : '#666', borderBottom: type === t ? '2px solid #c0392b' : '2px solid transparent'
-                            }}>
-                            {label}
-                        </button>
-                    ))}
-                </div>
-                <div style={{ padding: '16px 20px' }}>
-                    <div style={{ marginBottom: '14px' }}>
-                        <label style={{ fontSize: '12px', color: '#999', display: 'block', marginBottom: '5px' }}>{lang === 'en' ? 'Number of packets' : '红包个数'}</label>
-                        <input type="number" min="1" value={count} onChange={e => setCount(e.target.value)} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #eee', fontSize: '16px', boxSizing: 'border-box' }} />
+        <div className="red-packet-overlay">
+            <section className="red-packet-modal" role="dialog" aria-modal="true" aria-label={lang === 'en' ? 'Send red packet' : '发送红包'}>
+                <header className="red-packet-modal__hero">
+                    <div className="red-packet-modal__title">
+                        <span className="red-packet-modal__icon"><Gift size={22} /></span>
+                        <div>
+                            <h3>{lang === 'en' ? 'Send Red Packet' : '发送红包'}</h3>
+                            <p>{group?.name || (lang === 'en' ? 'Group chat' : '群聊')}</p>
+                        </div>
                     </div>
-                    <div style={{ marginBottom: '14px' }}>
-                        <label style={{ fontSize: '12px', color: '#999', display: 'block', marginBottom: '5px' }}>
-                            {isFixed ? (lang === 'en' ? 'Amount per person (¥)' : '每人金额（元）') : (lang === 'en' ? 'Total amount (¥)' : '总金额（元）')}
+                    <button type="button" className="red-packet-modal__close" onClick={onClose} title={lang === 'en' ? 'Close' : '关闭'}>
+                        <X size={18} />
+                    </button>
+                </header>
+
+                <div className="red-packet-modal__body">
+                    <div className="red-packet-summary">
+                        <div>
+                            <span>{lang === 'en' ? 'Wallet' : '余额'}</span>
+                            <strong>¥{formatPacketMoney(userWallet)}</strong>
+                        </div>
+                        <div>
+                            <span>{lang === 'en' ? 'Cost' : '扣款'}</span>
+                            <strong className={overBudget ? 'is-danger' : ''}>¥{formatPacketMoney(totalCost)}</strong>
+                        </div>
+                        <div>
+                            <span>{lang === 'en' ? 'Approx.' : '约每份'}</span>
+                            <strong>¥{formatPacketMoney(perPreview)}</strong>
+                        </div>
+                    </div>
+
+                    <div className="red-packet-segmented" role="tablist" aria-label={lang === 'en' ? 'Red packet type' : '红包类型'}>
+                        {[
+                            ['lucky', lang === 'en' ? 'Lucky' : '拼手气'],
+                            ['fixed', lang === 'en' ? 'Regular' : '普通']
+                        ].map(([value, label]) => (
+                            <button
+                                key={value}
+                                type="button"
+                                className={type === value ? 'active' : ''}
+                                onClick={() => setType(value)}
+                            >
+                                {label}
+                            </button>
+                        ))}
+                    </div>
+
+                    <div className="red-packet-form-grid">
+                        <label>
+                            <span>{lang === 'en' ? 'Packets' : '个数'}</span>
+                            <input type="number" min="1" max="100" value={count} onChange={e => setCount(e.target.value)} />
                         </label>
-                        <input type="number" min="0.01" step="0.01" placeholder="¥" value={amount} onChange={e => setAmount(e.target.value)} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #eee', fontSize: '16px', boxSizing: 'border-box' }} />
+                        <label>
+                            <span>{isFixed ? (lang === 'en' ? 'Each' : '每份金额') : (lang === 'en' ? 'Total' : '总金额')}</span>
+                            <input type="number" min="0.01" step="0.01" inputMode="decimal" placeholder="0.00" value={amount} onChange={e => setAmount(e.target.value)} />
+                        </label>
                     </div>
-                    <div style={{ marginBottom: '16px' }}>
-                        <label style={{ fontSize: '12px', color: '#999', display: 'block', marginBottom: '5px' }}>{lang === 'en' ? 'Message (optional)' : '留言（可选）'}</label>
-                        <input type="text" placeholder={lang === 'en' ? 'Leave a message...' : '写点什么...'} value={note} onChange={e => setNote(e.target.value)} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #eee', fontSize: '14px', boxSizing: 'border-box' }} />
-                    </div>
-                    <div style={{ background: '#fafafa', borderRadius: '8px', padding: '10px 12px', marginBottom: '16px', fontSize: '13px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', color: '#555' }}>
-                            <span>{lang === 'en' ? 'Total cost:' : '合计：'}</span>
-                            <span style={{ fontWeight: '600', color: totalCost > 0 ? '#c0392b' : '#aaa' }}>¥{totalCost > 0 ? totalCost.toFixed(2) : '0.00'}</span>
+
+                    <label className="red-packet-note-field">
+                        <span>{lang === 'en' ? 'Message' : '留言'}</span>
+                        <input type="text" maxLength="80" placeholder={lang === 'en' ? 'Best wishes' : '恭喜发财，大吉大利'} value={note} onChange={e => setNote(e.target.value)} />
+                    </label>
+
+                    {(overBudget || tooSmall || sendError) && (
+                        <div className="red-packet-error">
+                            {sendError || (overBudget
+                                ? (lang === 'en' ? 'Insufficient balance.' : '余额不足。')
+                                : (lang === 'en' ? 'Each packet must be at least ¥0.01.' : '每个红包至少需要 ¥0.01。'))}
                         </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', color: '#aaa', marginTop: '4px' }}>
-                            <span>{lang === 'en' ? 'My wallet:' : '我的余额：'}</span>
-                            <span style={{ color: overBudget ? '#e53935' : 'var(--accent-color)' }}>¥{(userWallet ?? 0).toFixed(2)}</span>
-                        </div>
-                        {overBudget && <div style={{ color: '#e53935', fontSize: '12px', marginTop: '6px' }}>⚠️ {lang === 'en' ? 'Insufficient balance' : '余额不足'}</div>}
-                    </div>
-                    <button onClick={onSend} disabled={!isValid}
-                        style={{ width: '100%', padding: '13px', background: isValid ? 'linear-gradient(135deg,#d63031,#c0392b)' : '#ccc', color: '#fff', border: 'none', borderRadius: '10px', cursor: isValid ? 'pointer' : 'not-allowed', fontSize: '15px', fontWeight: '700' }}>
-                        {lang === 'en' ? '🧧 Send' : '🧧 塞钱进红包'}
+                    )}
+
+                    <button type="button" className="red-packet-submit" onClick={onSend} disabled={!isValid || sending}>
+                        <Gift size={18} />
+                        {sending ? (lang === 'en' ? 'Sending...' : '发送中...') : (lang === 'en' ? 'Send Red Packet' : '发红包')}
                     </button>
                 </div>
-            </div>
+            </section>
         </div>
     );
 }
@@ -127,6 +174,8 @@ function RedPacketCard({ packetId, apiUrl, groupId, resolveSender, claimEvent })
     const { lang } = useLanguage();
     const [pkt, setPkt] = useState(null);
     const [showDetail, setShowDetail] = useState(false);
+    const [claiming, setClaiming] = useState(false);
+    const [claimError, setClaimError] = useState('');
 
     const loadPkt = useCallback(async () => {
         try { const r = await fetch(`${apiUrl}/groups/${groupId}/redpackets/${packetId}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } }); setPkt(await r.json()); } catch (e) { console.error(e); }
@@ -141,64 +190,110 @@ function RedPacketCard({ packetId, apiUrl, groupId, resolveSender, claimEvent })
     }, [claimEvent, packetId, loadPkt]);
 
     const handleClaim = async () => {
+        if (claiming) return;
+        setClaiming(true);
+        setClaimError('');
         try {
-            await fetch(`${apiUrl}/groups/${groupId}/redpackets/${packetId}/claim`, {
+            const res = await fetch(`${apiUrl}/groups/${groupId}/redpackets/${packetId}/claim`, {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({})
             });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.success === false) throw new Error(data.error || (lang === 'en' ? 'Claim failed' : '领取失败'));
             loadPkt();
-        } catch (e) { console.error(e); }
+        } catch (e) {
+            console.error(e);
+            setClaimError(e.message || (lang === 'en' ? 'Claim failed' : '领取失败'));
+        } finally {
+            setClaiming(false);
+        }
     };
 
-    if (!pkt) return <div style={{ padding: '8px', color: '#aaa', fontSize: '13px' }}>🧧 Loading...</div>;
-    const isExpired = pkt.claims?.length >= pkt.count;
-    const userClaimed = pkt.claims?.some(c => c.claimer_id === 'user');
-
-    return (
-        <div style={{ background: 'linear-gradient(135deg, #fff5f5 0%, #ffe8e8 100%)', borderRadius: '12px', padding: '12px 15px', width: '220px', boxSizing: 'border-box', border: '1px solid #ffccbc', cursor: 'pointer' }}
-            onClick={() => setShowDetail(!showDetail)}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                <span style={{ fontSize: '24px' }}>🧧</span>
-                <div>
-                    <div style={{ fontWeight: '600', fontSize: '14px', color: '#c0392b' }}>{pkt.note || (lang === 'en' ? 'Red Packet' : '红包')}</div>
-                    <div style={{ fontSize: '11px', color: '#999' }}>
-                        {pkt.type === 'fixed' ? (lang === 'en' ? 'Regular' : '普通红包') : (lang === 'en' ? 'Lucky' : '拼手气红包')}
-                        {' · '}{pkt.claims?.length || 0}/{pkt.count}
-                    </div>
+    if (!pkt) {
+        return (
+            <div className="red-packet-card red-packet-card--loading">
+                <div className="red-packet-card__seal"><Gift size={20} /></div>
+                <div className="red-packet-card__main">
+                    <div className="red-packet-skeleton wide" />
+                    <div className="red-packet-skeleton short" />
                 </div>
             </div>
-            {!isExpired && !userClaimed && (
-                <button onClick={e => { e.stopPropagation(); handleClaim(); }}
-                    style={{ width: '100%', padding: '8px', background: '#fff0eb', color: '#e67e22', border: '1px solid #ffd4a8', borderRadius: '8px', cursor: 'pointer', fontWeight: '600', fontSize: '13px' }}>
-                    {lang === 'en' ? '🧧 Open' : '🧧 拆红包'}
-                </button>
-            )}
-            {(isExpired || userClaimed) && (
-                <div style={{ fontSize: '12px', color: '#999', textAlign: 'center' }}>
-                    {userClaimed ? (lang === 'en' ? '✅ Claimed' : '✅ 已领取') : (lang === 'en' ? 'All claimed' : '已抢完')}
-                </div>
-            )}
-            {showDetail && (
-                <div style={{ background: '#fff8f0', borderRadius: '10px', padding: '10px 12px', marginTop: '6px', border: '1px solid #ffe0b2' }}>
-                    <div style={{ fontSize: '12px', color: '#888', marginBottom: '6px', display: 'flex', justifyContent: 'space-between' }}>
-                        <span>{lang === 'en' ? 'Claims:' : '领取记录'}</span>
-                        <span>¥{pkt.total_amount?.toFixed(2)} {lang === 'en' ? 'total' : '总计'}</span>
+        );
+    }
+
+    const claims = Array.isArray(pkt.claims) ? pkt.claims : [];
+    const claimedCount = claims.length;
+    const totalCount = Number(pkt.count || 0);
+    const remainingCount = Number(pkt.remaining_count ?? Math.max(0, totalCount - claimedCount));
+    const isExpired = remainingCount <= 0 || claimedCount >= totalCount;
+    const userClaim = claims.find(c => c.claimer_id === 'user');
+    const userClaimed = !!userClaim;
+    const progress = totalCount > 0 ? Math.min(100, Math.max(0, (claimedCount / totalCount) * 100)) : 0;
+    const typeLabel = pkt.type === 'fixed'
+        ? (lang === 'en' ? 'Regular' : '普通')
+        : (lang === 'en' ? 'Lucky' : '拼手气');
+    const statusText = userClaimed
+        ? `${lang === 'en' ? 'Claimed' : '已领取'} ¥${formatPacketMoney(userClaim.amount)}`
+        : (isExpired ? (lang === 'en' ? 'All claimed' : '已抢完') : (lang === 'en' ? 'Ready' : '可领取'));
+
+    return (
+        <article className={`red-packet-card ${userClaimed ? 'is-claimed' : ''} ${isExpired ? 'is-empty' : ''}`}
+            onClick={() => setShowDetail(!showDetail)}>
+            <div className="red-packet-card__top">
+                <div className="red-packet-card__seal"><Gift size={21} /></div>
+                <div className="red-packet-card__main">
+                    <div className="red-packet-card__title">{pkt.note || (lang === 'en' ? 'Best wishes' : '恭喜发财')}</div>
+                    <div className="red-packet-card__meta">
+                        <span>{typeLabel}</span>
+                        <span>{claimedCount}/{totalCount}</span>
+                        <span>¥{formatPacketMoney(pkt.total_amount)}</span>
                     </div>
-                    {(!pkt.claims || pkt.claims.length === 0) && <div style={{ fontSize: '12px', color: '#bbb' }}>{lang === 'en' ? 'No one yet' : '暂无人领取'}</div>}
-                    {pkt.claims?.map((c, i) => {
-                        const s = resolveSender(c.claimer_id);
+                </div>
+                <div className="red-packet-card__status">{statusText}</div>
+            </div>
+
+            <div className="red-packet-card__progress" aria-hidden="true">
+                <span style={{ width: `${progress}%` }} />
+            </div>
+
+            <div className="red-packet-card__bottom">
+                <span>{remainingCount > 0 ? `${lang === 'en' ? 'Left' : '剩余'} ${remainingCount}` : (lang === 'en' ? 'Closed' : '已结束')}</span>
+                {!isExpired && !userClaimed ? (
+                    <button type="button" onClick={e => { e.stopPropagation(); handleClaim(); }} disabled={claiming}>
+                        {claiming ? (lang === 'en' ? 'Opening...' : '领取中...') : (lang === 'en' ? 'Open' : '领取')}
+                    </button>
+                ) : (
+                    <button type="button" className="ghost" onClick={e => { e.stopPropagation(); setShowDetail(!showDetail); }}>
+                        {showDetail ? (lang === 'en' ? 'Hide' : '收起') : (lang === 'en' ? 'Details' : '详情')}
+                    </button>
+                )}
+            </div>
+
+            {claimError && <div className="red-packet-card__error">{claimError}</div>}
+
+            {showDetail && (
+                <div className="red-packet-detail">
+                    <div className="red-packet-detail__head">
+                        <span>{lang === 'en' ? 'Claims' : '领取记录'}</span>
+                        <span>{lang === 'en' ? `${remainingCount} left` : `剩 ${remainingCount} 份`}</span>
+                    </div>
+                    {!claims.length && <div className="red-packet-detail__empty">{lang === 'en' ? 'No claims yet' : '暂无人领取'}</div>}
+                    {claims.map((c, i) => {
+                        const fallbackSender = resolveSender(c.claimer_id);
+                        const name = c.name || fallbackSender.name;
+                        const avatar = c.avatar || fallbackSender.avatar;
                         return (
-                            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                                <img src={s.avatar} alt="" style={{ width: 22, height: 22, borderRadius: '50%', objectFit: 'cover' }} />
-                                <span style={{ fontSize: '13px', flex: 1 }}>{s.name}</span>
-                                <span style={{ fontSize: '13px', color: '#c0392b', fontWeight: '600' }}>¥{c.amount?.toFixed(2)}</span>
+                            <div key={`${c.claimer_id}-${i}`} className="red-packet-detail__row">
+                                <AuthenticatedImage src={resolveAvatarUrl(avatar, apiUrl, name || 'User')} fallbackSrc={defaultAvatarUrl(name || 'User')} alt="" />
+                                <span>{name}</span>
+                                <strong>¥{formatPacketMoney(c.amount)}</strong>
                             </div>
                         );
                     })}
                 </div>
             )}
-        </div>
+        </article>
     );
 }
 
@@ -298,7 +393,7 @@ function GroupManageDrawer({ group, apiUrl, resolveSender, onClose, lang, allCon
                     const m = resolveSender(mid);
                     return (
                         <div key={mid} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '5px 0' }}>
-                            <img src={m.avatar} alt="" style={{ width: 30, height: 30, borderRadius: '50%', objectFit: 'cover' }} />
+                            <AuthenticatedImage src={m.avatar} fallbackSrc={defaultAvatarUrl(m.name || mid || 'User')} alt="" style={{ width: 30, height: 30, borderRadius: '50%', objectFit: 'cover' }} />
                             <span style={{ flex: 1, fontSize: '13px' }}>{m.name}</span>
                             {mid !== 'user' && (
                                 <button onClick={() => kickMember(mid)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', padding: '2px' }} title={lang === 'en' ? 'Remove member from group' : '将该成员踢出群聊'}>
@@ -324,7 +419,7 @@ function GroupManageDrawer({ group, apiUrl, resolveSender, onClose, lang, allCon
                                     style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 4px', cursor: 'pointer', borderRadius: '6px', transition: 'background 0.15s' }}
                                     onMouseEnter={e => e.currentTarget.style.background = '#f0f9eb'}
                                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                                    <img src={resolveAvatarUrl(c.avatar, apiUrl, c.name || c.id || 'User')} alt="" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }} />
+                                    <AuthenticatedImage src={resolveAvatarUrl(c.avatar, apiUrl, c.name || c.id || 'User')} fallbackSrc={defaultAvatarUrl(c.name || c.id || 'User')} alt="" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }} />
                                     <span style={{ fontSize: '13px', fontWeight: '500' }}>{c.name}</span>
                                 </div>
                             ))}
@@ -400,6 +495,8 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, incomingGrou
     const messagesEndRef = useRef(null);
     const fileInputRef = useRef(null);
     const textareaRef = useRef(null);
+    const processedIncomingGroupMessageIdsRef = useRef(new Set());
+    const deletedGroupMessageIdsRef = useRef(new Set());
     const [selectMode, setSelectMode] = useState(false);
     const [selectedIds, setSelectedIds] = useState(new Set());
 
@@ -416,7 +513,14 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, incomingGrou
 
     useEffect(() => {
         if (incomingGroupMessageQueue && incomingGroupMessageQueue.length > 0 && group?.id) {
-            const relevantMsgs = incomingGroupMessageQueue.filter(m => m.group_id === group.id);
+            const relevantMsgs = incomingGroupMessageQueue.filter((m) => {
+                if (!m || m.group_id !== group.id || !m.id) return false;
+                const messageId = `${group.id}:${m.id}`;
+                if (deletedGroupMessageIdsRef.current.has(messageId)) return false;
+                if (processedIncomingGroupMessageIdsRef.current.has(messageId)) return false;
+                processedIncomingGroupMessageIdsRef.current.add(messageId);
+                return true;
+            });
             if (relevantMsgs.length > 0) {
                 setMessages(prev => {
                     return normalizeGroupMessages([...prev, ...relevantMsgs]);
@@ -654,7 +758,7 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, incomingGrou
                                                 </div>
                                             </div>
                                         )}
-                                    <div className="message-avatar"><img src={resolveAvatarUrl(sender.avatar, apiUrl, sender.name || 'User')} style={{ objectFit: 'cover' }} alt="" /></div>
+                                    <div className="message-avatar"><AuthenticatedImage src={resolveAvatarUrl(sender.avatar, apiUrl, sender.name || 'User')} fallbackSrc={defaultAvatarUrl(sender.name || 'User')} style={{ objectFit: 'cover' }} alt="" /></div>
                                     <div className="message-content">
                                         {!isUser && <div style={{ fontSize: '12px', color: 'var(--accent-color)', marginBottom: '2px', fontWeight: '500' }}>{sender.name}</div>}
                                         <RedPacketCard packetId={parsed.packetId} apiUrl={apiUrl} groupId={group.id} isUser={isUser} resolveSender={resolveSender} claimEvent={redpacketClaimEvent} />
@@ -693,7 +797,7 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, incomingGrou
                                             </div>
                                         </div>
                                     )}
-                                    <div className="message-avatar"><img src={resolveAvatarUrl(sender.avatar, apiUrl, sender.name || 'User')} style={{ objectFit: 'cover' }} alt="" /></div>
+                                    <div className="message-avatar"><AuthenticatedImage src={resolveAvatarUrl(sender.avatar, apiUrl, sender.name || 'User')} fallbackSrc={defaultAvatarUrl(sender.name || 'User')} style={{ objectFit: 'cover' }} alt="" /></div>
                                     <div className="message-content">
                                         {!isUser && <div style={{ fontSize: '12px', color: 'var(--accent-color)', marginBottom: '2px', fontWeight: '500' }}>{sender.name}</div>}
                                         <div className="message-bubble transfer-bubble">
@@ -732,7 +836,7 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, incomingGrou
                                         </div>
                                     </div>
                                 )}
-                                <div className="message-avatar"><img src={resolveAvatarUrl(sender.avatar, apiUrl, sender.name || 'User')} style={{ objectFit: 'cover' }} alt="" /></div>
+                                <div className="message-avatar"><AuthenticatedImage src={resolveAvatarUrl(sender.avatar, apiUrl, sender.name || 'User')} fallbackSrc={defaultAvatarUrl(sender.name || 'User')} style={{ objectFit: 'cover' }} alt="" /></div>
                                 <div className="message-content">
                                     {!isUser && <div style={{ fontSize: '12px', color: 'var(--accent-color)', marginBottom: '2px', fontWeight: '500' }}>{sender.name}</div>}
                                     <div className="message-bubble">{msg.content}</div>
@@ -824,6 +928,7 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, incomingGrou
                                         });
                                         const data = await res.json();
                                         if (data.success) {
+                                            [...selectedIds].forEach(id => deletedGroupMessageIdsRef.current.add(`${group.id}:${id}`));
                                             setMessages(prev => prev.filter(m => !selectedIds.has(m.id)));
                                             setSelectedIds(new Set());
                                             setSelectMode(false);
@@ -872,7 +977,7 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, incomingGrou
                             <div className="mention-menu" style={{ position: 'absolute', bottom: '100%', left: 0, backgroundColor: '#fff', border: '1px solid #ddd', borderRadius: '8px', padding: '6px 0', width: '240px', maxHeight: '200px', overflowY: 'auto', boxShadow: '0 -4px 12px rgba(0,0,0,0.1)', zIndex: 100, marginBottom: '8px' }}>
                                 {availableMentions.map((m, i) => (
                                     <div key={m.id} onClick={() => handleMentionSelect(m)} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 15px', cursor: 'pointer', backgroundColor: i === mentionIndex ? '#f0f9eb' : 'transparent' }} onMouseEnter={() => setMentionIndex(i)}>
-                                        <img src={m.avatar} alt="" style={{ width: '28px', height: '28px', borderRadius: '50%', objectFit: 'cover' }} />
+                                        <AuthenticatedImage src={m.avatar} fallbackSrc={defaultAvatarUrl(m.name || 'User')} alt="" style={{ width: '28px', height: '28px', borderRadius: '50%', objectFit: 'cover' }} />
                                         <span style={{ fontSize: '14px', fontWeight: '500', color: i === mentionIndex ? 'var(--accent-color)' : '#333' }}>{m.name}</span>
                                     </div>
                                 ))}

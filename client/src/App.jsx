@@ -10,7 +10,8 @@ import { plugins } from './plugins';
 import { useLanguage } from './LanguageContext';
 import { useAuth } from './AuthContext';
 import Login from './components/Login';
-import { resolveAvatarUrl } from './utils/avatar';
+import AuthenticatedImage from './components/AuthenticatedImage';
+import { defaultAvatarUrl, resolveAvatarUrl } from './utils/avatar';
 
 // Allow VITE config if available, otherwise dynamically use the current host IP/Domain
 const PROTOCOL = window.location.protocol;
@@ -20,10 +21,56 @@ const defaultWsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
 const defaultWsHost = `${HOST}:8000`;
 const API_URL = import.meta.env.VITE_API_URL || `${defaultApiOrigin}/api`;
 const WS_URL = import.meta.env.VITE_WS_URL || `${defaultWsProtocol}//${defaultWsHost}`;
+const MODULE_LOAD_RETRY_BASE_MS = 800;
+const MODULE_LOAD_RETRY_MAX_MS = 5000;
+const MODULE_LOAD_AUTO_RELOAD_DELAY_MS = 500;
+const MODULE_LOAD_AUTO_RELOAD_PREFIX = 'chatpulse:auto-module-reload:';
+
+function isLikelyModuleLoadError(error) {
+  const message = String(error?.message || error || '');
+  return /Failed to fetch dynamically imported module|Importing a module script failed|Failed to load module script|error loading dynamically imported module|Loading chunk \d+ failed/i.test(message);
+}
+
+function getModuleLoadErrorSignature(error) {
+  const message = String(error?.message || error || 'Unknown error');
+  const assetUrl = message.match(/https?:\/\/[^\s)]+|\/assets\/[^\s)]+/i)?.[0];
+  return (assetUrl || message.slice(0, 180)).replace(/[^\w:./-]+/g, '_').slice(0, 220);
+}
+
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function lazyWithPreload(factory) {
-  const Component = lazy(factory);
-  Component.preload = factory;
+  let loadPromise = null;
+  const loadWithRetry = async (attempt = 0) => {
+    try {
+      return await factory();
+    } catch (error) {
+      if (!isLikelyModuleLoadError(error)) {
+        throw error;
+      }
+      const delay = Math.min(MODULE_LOAD_RETRY_MAX_MS, MODULE_LOAD_RETRY_BASE_MS * (attempt + 1));
+      console.warn(`[lazy] Module is still loading; retrying in ${delay}ms.`, error);
+      await wait(delay);
+      return loadWithRetry(attempt + 1);
+    }
+  };
+  const load = () => {
+    if (!loadPromise) {
+      loadPromise = loadWithRetry().catch((error) => {
+        loadPromise = null;
+        console.warn('[lazy] Failed to load module:', error);
+        throw error;
+      });
+    }
+    return loadPromise;
+  };
+  const Component = lazy(load);
+  Component.preload = () => load().catch((error) => {
+    console.warn('[lazy] Preload failed:', error);
+    return null;
+  });
   return Component;
 }
 
@@ -108,6 +155,199 @@ function DrawerFallback({ type = 'settings', contact, lang = 'zh', onClose }) {
       </div>
     </aside>
   );
+}
+
+class AppErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null, autoReloading: false };
+    this.autoReloadTimer = null;
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error, autoReloading: isLikelyModuleLoadError(error) };
+  }
+
+  componentDidCatch(error, info) {
+    console.error('[AppErrorBoundary] UI crashed:', error, info);
+    if (isLikelyModuleLoadError(error)) {
+      this.scheduleModuleAutoReload(error);
+    }
+  }
+
+  componentDidUpdate(prevProps) {
+    if (this.state.error && prevProps.resetKey !== this.props.resetKey) {
+      this.clearAutoReloadTimer();
+      this.setState({ error: null, autoReloading: false });
+    }
+  }
+
+  componentWillUnmount() {
+    this.clearAutoReloadTimer();
+  }
+
+  clearAutoReloadTimer = () => {
+    if (this.autoReloadTimer) {
+      clearTimeout(this.autoReloadTimer);
+      this.autoReloadTimer = null;
+    }
+  };
+
+  getAutoReloadStorageKey = (error) => {
+    const resetKey = String(this.props.resetKey || 'boundary');
+    return `${MODULE_LOAD_AUTO_RELOAD_PREFIX}${resetKey}:${getModuleLoadErrorSignature(error)}`;
+  };
+
+  scheduleModuleAutoReload = (error) => {
+    if (this.autoReloadTimer) return;
+    if (typeof window === 'undefined') {
+      this.setState({ autoReloading: false });
+      return;
+    }
+
+    let storage = null;
+    try {
+      storage = window.sessionStorage;
+    } catch (e) {
+      this.setState({ autoReloading: false });
+      return;
+    }
+    if (!storage) {
+      this.setState({ autoReloading: false });
+      return;
+    }
+
+    const storageKey = this.getAutoReloadStorageKey(error);
+    try {
+      if (storage.getItem(storageKey) === '1') {
+        this.setState({ autoReloading: false });
+        return;
+      }
+      storage.setItem(storageKey, '1');
+    } catch (e) {
+      this.setState({ autoReloading: false });
+      return;
+    }
+
+    this.setState({ autoReloading: true });
+    this.autoReloadTimer = window.setTimeout(() => {
+      this.autoReloadTimer = null;
+      window.location.reload();
+    }, MODULE_LOAD_AUTO_RELOAD_DELAY_MS);
+  };
+
+  retry = () => {
+    this.clearAutoReloadTimer();
+    this.setState({ error: null, autoReloading: false });
+  };
+
+  reload = () => {
+    this.clearAutoReloadTimer();
+    window.location.reload();
+  };
+
+  render() {
+    if (!this.state.error) return this.props.children;
+
+    const lang = this.props.lang || 'zh';
+    const isDrawer = this.props.variant === 'drawer';
+    const Wrapper = isDrawer ? 'aside' : 'div';
+
+    if (this.state.autoReloading) {
+      return (
+        <Wrapper
+          className={isDrawer ? 'memory-drawer drawer-loading-fallback' : 'panel-error-state panel-loading-state'}
+          style={{
+            width: isDrawer ? '360px' : '100%',
+            minWidth: 0,
+            flex: isDrawer ? '0 0 360px' : 1,
+            height: '100%',
+            boxSizing: 'border-box',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexDirection: 'column',
+            gap: '12px',
+            padding: '24px',
+            background: '#fff',
+            color: '#8a8f98',
+            borderLeft: isDrawer ? '1px solid var(--border-color, #eee)' : 'none'
+          }}
+        >
+          <div
+            aria-hidden="true"
+            style={{
+              width: '28px',
+              height: '28px',
+              border: '3px solid rgba(7, 193, 96, 0.18)',
+              borderTopColor: 'var(--accent-color, #07c160)',
+              borderRadius: '50%',
+              animation: 'spin 1s linear infinite'
+            }}
+          />
+          <p style={{ margin: 0, fontSize: '13px' }}>
+            {lang === 'en' ? 'Loading...' : '加载中...'}
+          </p>
+        </Wrapper>
+      );
+    }
+
+    const title = this.props.title || (lang === 'en' ? 'This panel failed to load' : '这个面板没有正常打开');
+    const message = lang === 'en'
+      ? 'The app caught this error, so the rest of the page can keep running.'
+      : '应用已经拦截住这次错误，其他区域可以继续使用。';
+    const detail = String(this.state.error?.message || this.state.error || 'Unknown error');
+
+    return (
+      <Wrapper
+        className={isDrawer ? 'memory-drawer drawer-error' : 'panel-error-state'}
+        style={{
+          width: isDrawer ? '360px' : '100%',
+          minWidth: 0,
+          flex: isDrawer ? '0 0 360px' : 1,
+          height: '100%',
+          boxSizing: 'border-box',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'center',
+          gap: '12px',
+          padding: '24px',
+          background: '#fff',
+          color: 'var(--text-primary)',
+          borderLeft: isDrawer ? '1px solid var(--border-color, #eee)' : 'none'
+        }}
+      >
+        <h3 style={{ margin: 0, fontSize: isDrawer ? '16px' : '20px' }}>{title}</h3>
+        <p style={{ margin: 0, color: '#7a7f87', lineHeight: 1.5, fontSize: '13px' }}>{message}</p>
+        <pre style={{
+          margin: 0,
+          maxHeight: '160px',
+          overflow: 'auto',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          border: '1px solid #eee',
+          borderRadius: '8px',
+          padding: '10px',
+          background: '#fafafa',
+          color: '#6b7280',
+          fontSize: '12px'
+        }}>{detail}</pre>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button type="button" className="memory-action-btn" onClick={this.retry}>
+            {lang === 'en' ? 'Try again' : '重试'}
+          </button>
+          <button type="button" className="memory-action-btn" onClick={this.reload}>
+            {lang === 'en' ? 'Refresh page' : '刷新页面'}
+          </button>
+          {isDrawer && this.props.onClose && (
+            <button type="button" className="memory-action-btn" onClick={this.props.onClose}>
+              {lang === 'en' ? 'Close' : '关闭'}
+            </button>
+          )}
+        </div>
+      </Wrapper>
+    );
+  }
 }
 
 function App() {
@@ -558,10 +798,10 @@ function App() {
           styleTag.id = 'chatpulse-custom-css';
           document.head.appendChild(styleTag);
         }
-        styleTag.innerHTML = userProfile.custom_css;
+        styleTag.textContent = userProfile.custom_css;
       } else {
         const styleTag = document.getElementById('chatpulse-custom-css');
-        if (styleTag) styleTag.innerHTML = '';
+        if (styleTag) styleTag.textContent = '';
       }
     }
   }, [userProfile]);
@@ -599,7 +839,7 @@ function App() {
       {/* 1. Very Left Sidebar (Navigation) */}
       <nav className="sidebar-nav">
         <div className="my-avatar" onClick={() => setActiveTab('settings')} style={{ cursor: 'pointer' }}>
-          <img src={resolveAvatarUrl(effectiveUser?.avatar, API_URL, effectiveUser?.name || 'User')} alt="Me" />
+          <AuthenticatedImage src={resolveAvatarUrl(effectiveUser?.avatar, API_URL, effectiveUser?.name || 'User')} fallbackSrc={defaultAvatarUrl(effectiveUser?.name || 'User')} alt="Me" />
         </div>
         <div className="nav-icons">
           <button className={`nav-icon ${activeTab === 'chats' ? 'active' : ''}`} onClick={() => setActiveTab('chats')} title={lang === 'en' ? 'Chats — View conversations' : '聊天 — 查看会话列表'}>
@@ -640,7 +880,7 @@ function App() {
               </button>
             );
           })}
-          <button className="nav-icon" onClick={logout} title={lang === 'en' ? 'Logout' : '退出登录'} style={{ color: '#ff4d4f' }}>
+          <button className="nav-icon" onClick={() => logout(API_URL)} title={lang === 'en' ? 'Logout' : '退出登录'} style={{ color: '#ff4d4f' }}>
             <LogOut size={24} />
           </button>
         </div>
@@ -691,10 +931,13 @@ function App() {
                     {g.members?.slice(0, 3).map((memberObj, idx) => {
                       const memberId = typeof memberObj === 'object' ? memberObj.member_id : memberObj;
                       const member = contacts.find(c => String(c.id) === String(memberId));
+                      const memberName = memberId === 'user'
+                        ? userProfile?.name || 'User'
+                        : member?.name || memberId || 'User';
                       const memberAvatar = memberId === 'user'
-                        ? resolveAvatarUrl(userProfile?.avatar, API_URL, userProfile?.name || 'User')
-                        : resolveAvatarUrl(member?.avatar, API_URL, member?.name || memberId || 'User');
-                      return <img key={idx} src={memberAvatar} alt="" style={{ width: g.members.length === 1 ? '42px' : '32px', height: g.members.length === 1 ? '42px' : '32px', borderRadius: '50%', marginLeft: idx > 0 ? '-12px' : '0', border: g.members.length === 1 ? 'none' : '2px solid #fff', zIndex: 10 - idx, objectFit: 'cover', backgroundColor: '#fff' }} />;
+                        ? resolveAvatarUrl(userProfile?.avatar, API_URL, memberName)
+                        : resolveAvatarUrl(member?.avatar, API_URL, memberName);
+                      return <AuthenticatedImage key={idx} src={memberAvatar} fallbackSrc={defaultAvatarUrl(memberName)} alt="" style={{ width: g.members.length === 1 ? '42px' : '32px', height: g.members.length === 1 ? '42px' : '32px', borderRadius: '50%', marginLeft: idx > 0 ? '-12px' : '0', border: g.members.length === 1 ? 'none' : '2px solid #fff', zIndex: 10 - idx, objectFit: 'cover', backgroundColor: '#fff' }} />;
                     })}
                     {g.members?.length > 3 && (
                       <div style={{ width: '32px', height: '32px', borderRadius: '50%', marginLeft: '-12px', border: '2px solid #fff', zIndex: 6, backgroundColor: '#f0f0f0', color: '#888', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 'bold', flexShrink: 0 }}>
@@ -727,7 +970,7 @@ function App() {
               {contacts.map(c => (
                 <div key={c.id} className="contact-item" onClick={() => { setActiveContactId(c.id); setActiveContactSnapshot(c); setActiveTab('chats'); }}>
                   <div className="contact-avatar">
-                    <img src={resolveAvatarUrl(c.avatar, API_URL, c.name || c.id || 'User')} alt={c.name} style={{ objectFit: 'cover' }} />
+                    <AuthenticatedImage src={resolveAvatarUrl(c.avatar, API_URL, c.name || c.id || 'User')} fallbackSrc={defaultAvatarUrl(c.name || c.id || 'User')} alt={c.name} style={{ objectFit: 'cover' }} />
                   </div>
                   <div className="contact-info" style={{ display: 'flex', alignItems: 'center' }}>
                     <span className="contact-name" style={{ fontSize: '16px' }}>{c.name}</span>
@@ -751,10 +994,13 @@ function App() {
                       {g.members?.slice(0, 3).map((memberObj, idx) => {
                         const memberId = typeof memberObj === 'object' ? memberObj.member_id : memberObj;
                         const member = contacts.find(c => String(c.id) === String(memberId));
+                        const memberName = memberId === 'user'
+                          ? userProfile?.name || 'User'
+                          : member?.name || memberId || 'User';
                         const memberAvatar = memberId === 'user'
-                          ? resolveAvatarUrl(userProfile?.avatar, API_URL, userProfile?.name || 'User')
-                          : resolveAvatarUrl(member?.avatar, API_URL, member?.name || memberId || 'User');
-                        return <img key={idx} src={memberAvatar} alt="" style={{ width: g.members.length === 1 ? '42px' : '32px', height: g.members.length === 1 ? '42px' : '32px', borderRadius: '50%', marginLeft: idx > 0 ? '-12px' : '0', border: g.members.length === 1 ? 'none' : '2px solid #fff', zIndex: 10 - idx, objectFit: 'cover', backgroundColor: '#fff' }} />;
+                          ? resolveAvatarUrl(userProfile?.avatar, API_URL, memberName)
+                          : resolveAvatarUrl(member?.avatar, API_URL, memberName);
+                        return <AuthenticatedImage key={idx} src={memberAvatar} fallbackSrc={defaultAvatarUrl(memberName)} alt="" style={{ width: g.members.length === 1 ? '42px' : '32px', height: g.members.length === 1 ? '42px' : '32px', borderRadius: '50%', marginLeft: idx > 0 ? '-12px' : '0', border: g.members.length === 1 ? 'none' : '2px solid #fff', zIndex: 10 - idx, objectFit: 'cover', backgroundColor: '#fff' }} />;
                       })}
                       {g.members?.length > 3 && (
                         <div style={{ width: '32px', height: '32px', borderRadius: '50%', marginLeft: '-12px', border: '2px solid #fff', zIndex: 6, backgroundColor: '#f0f0f0', color: '#888', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 'bold', flexShrink: 0 }}>
@@ -803,115 +1049,141 @@ function App() {
       {/* 3. Right Column (Chat Area / Content) — hidden on contacts tab */}
       {activeTab !== 'contacts' && (
         <div className="right-column" style={{ flexDirection: 'row', backgroundColor: activeTab === 'settings' ? '#f5f5f5' : '#fff' }}>
-          <Suspense fallback={<PanelFallback />}>
-            {(visiblePlugins.find(p => p.id === activeTab)) ? (() => {
-              const Plugin = visiblePlugins.find(p => p.id === activeTab);
-              const PluginComponent = Plugin.component;
-              return (
+          <AppErrorBoundary resetKey={`content:${activeTab}:${activeContactId || ''}:${activeGroupId || ''}`} lang={lang}>
+            <Suspense fallback={<PanelFallback />}>
+              {(visiblePlugins.find(p => p.id === activeTab)) ? (() => {
+                const Plugin = visiblePlugins.find(p => p.id === activeTab);
+                const PluginComponent = Plugin.component;
+                return (
+                  <div style={{ flex: 1, height: '100%', overflowY: 'auto', minWidth: 0, minHeight: 0 }}>
+                    <PluginComponent apiUrl={API_URL} userProfile={effectiveUser} />
+                  </div>
+                );
+              })() : activeTab === 'settings' ? (
                 <div style={{ flex: 1, height: '100%', overflowY: 'auto', minWidth: 0, minHeight: 0 }}>
-                  <PluginComponent apiUrl={API_URL} userProfile={effectiveUser} />
-                </div>
-              );
-            })() : activeTab === 'settings' ? (
-              <div style={{ flex: 1, height: '100%', overflowY: 'auto', minWidth: 0, minHeight: 0 }}>
-                <SettingsPanel
-                  apiUrl={API_URL}
-                  contacts={contacts}
-                  onCharactersUpdate={(event) => {
-                    if (event?.type === 'deleted') {
-                      removeDeletedContact(event.id);
-                    }
-                    fetchContacts(); // Refetch after create/update/delete
-                  }}
-                  onProfileUpdate={setUserProfile}
-                  onBack={() => setActiveTab('chats')}
-                />
-              </div>
-            ) : activeTab === 'discover' ? (
-              <div style={{ flex: 1, height: '100%', overflowY: 'auto', minWidth: 0, minHeight: 0 }}>
-                <MomentsFeed apiUrl={API_URL} userProfile={effectiveUser} onBack={() => setActiveTab('chats')} />
-              </div>
-            ) : activeTab === 'memory_library' ? (
-              <MemoryLibraryPanel apiUrl={API_URL} contacts={contacts} />
-            ) : activeContactId && activeTab === 'chats' ? (
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'row', height: '100%', minWidth: 0 }}>
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                  <ChatWindow
-                    contact={activeChatContact}
-                    allContacts={contacts}
-                    userAvatar={effectiveUser?.avatar}
+                  <SettingsPanel
                     apiUrl={API_URL}
-                    incomingMessageQueue={incomingMessageQueue}
-                    engineState={engineState}
-                    onToggleMemo={() => toggleChatDrawer('memo')}
-                    onToggleDiary={() => toggleChatDrawer('diary')}
-                    onToggleSettings={() => toggleChatDrawer('settings')}
-                    onPreloadMemo={() => preloadChatDrawer('memo')}
-                    onPreloadDiary={() => preloadChatDrawer('diary')}
-                    onPreloadSettings={() => preloadChatDrawer('settings')}
-                    onBack={() => { setActiveContactId(null); setActiveContactSnapshot(null); activeContactRef.current = null; }}
-                    onSwitchTab={setActiveTab}
-                    isGeneratingSchedule={generatingSchedules[activeContactId]}
-                    onMessagesChange={setHiddenMessagesCount}
+                    contacts={contacts}
+                    onCharactersUpdate={(event) => {
+                      if (event?.type === 'deleted') {
+                        removeDeletedContact(event.id);
+                      }
+                      fetchContacts(); // Refetch after create/update/delete
+                    }}
+                    onProfileUpdate={setUserProfile}
+                    onBack={() => setActiveTab('chats')}
                   />
                 </div>
-                {activeDrawer === 'memo' && (
-                  <Suspense fallback={<DrawerFallback type="memo" contact={activeChatContact} lang={lang} onClose={() => setActiveDrawer(null)} />}>
-                    <MemoTable
+              ) : activeTab === 'discover' ? (
+                <div style={{ flex: 1, height: '100%', overflowY: 'auto', minWidth: 0, minHeight: 0 }}>
+                  <MomentsFeed apiUrl={API_URL} userProfile={effectiveUser} onBack={() => setActiveTab('chats')} />
+                </div>
+              ) : activeTab === 'memory_library' ? (
+                <MemoryLibraryPanel apiUrl={API_URL} contacts={contacts} />
+              ) : activeContactId && activeTab === 'chats' ? (
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'row', height: '100%', minWidth: 0 }}>
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                    <ChatWindow
                       contact={activeChatContact}
+                      allContacts={contacts}
+                      userAvatar={effectiveUser?.avatar}
                       apiUrl={API_URL}
-                      onClose={() => setActiveDrawer(null)}
+                      incomingMessageQueue={incomingMessageQueue}
+                      engineState={engineState}
+                      onToggleMemo={() => toggleChatDrawer('memo')}
+                      onToggleDiary={() => toggleChatDrawer('diary')}
+                      onToggleSettings={() => toggleChatDrawer('settings')}
+                      onPreloadMemo={() => preloadChatDrawer('memo')}
+                      onPreloadDiary={() => preloadChatDrawer('diary')}
+                      onPreloadSettings={() => preloadChatDrawer('settings')}
+                      onBack={() => { setActiveContactId(null); setActiveContactSnapshot(null); activeContactRef.current = null; }}
+                      onSwitchTab={setActiveTab}
+                      isGeneratingSchedule={generatingSchedules[activeContactId]}
+                      onMessagesChange={setHiddenMessagesCount}
                     />
-                  </Suspense>
-                )}
-                {activeDrawer === 'diary' && (
-                  <Suspense fallback={<DrawerFallback type="diary" contact={activeChatContact} lang={lang} onClose={() => setActiveDrawer(null)} />}>
-                    <DiaryTable
-                      contact={activeChatContact}
-                      apiUrl={API_URL}
+                  </div>
+                  {activeDrawer === 'memo' && (
+                    <AppErrorBoundary
+                      variant="drawer"
+                      resetKey={`drawer:memo:${activeChatContact?.id || ''}`}
+                      lang={lang}
+                      title={`${activeChatContact?.name || (lang === 'en' ? 'Character' : '角色')} ${lang === 'en' ? "'s Memories" : '的记忆'}`}
                       onClose={() => setActiveDrawer(null)}
-                    />
-                  </Suspense>
-                )}
-                {activeDrawer === 'settings' && (
-                  <Suspense fallback={<DrawerFallback type="settings" contact={activeChatContact} lang={lang} onClose={() => setActiveDrawer(null)} />}>
-                    <ChatSettingsDrawer
-                      contact={activeChatContact}
-                      apiUrl={API_URL}
+                    >
+                      <Suspense fallback={<DrawerFallback type="memo" contact={activeChatContact} lang={lang} onClose={() => setActiveDrawer(null)} />}>
+                        <MemoTable
+                          contact={activeChatContact}
+                          apiUrl={API_URL}
+                          onClose={() => setActiveDrawer(null)}
+                        />
+                      </Suspense>
+                    </AppErrorBoundary>
+                  )}
+                  {activeDrawer === 'diary' && (
+                    <AppErrorBoundary
+                      variant="drawer"
+                      resetKey={`drawer:diary:${activeChatContact?.id || ''}`}
+                      lang={lang}
+                      title={`${activeChatContact?.name || (lang === 'en' ? 'Character' : '角色')} ${lang === 'en' ? "'s Diary" : '的日记'}`}
                       onClose={() => setActiveDrawer(null)}
-                      onClearHistory={() => {
-                        setActiveDrawer(null);
-                        fetchContacts(); // Re-pull character data so stats show as reset immediately
-                      }}
-                      isGeneratingSchedule={!!generatingSchedules[activeContactId]}
-                      messagesHideStateCount={hiddenMessagesCount}
-                    />
-                  </Suspense>
-                )}
-              </div>
-            ) : activeGroupId && activeTab === 'chats' ? (
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'row', height: '100%', minWidth: 0 }}>
-                <GroupChatWindow
-                  group={groups.find(g => g.id === activeGroupId)}
-                  apiUrl={API_URL}
-                  allContacts={contacts}
-                  userProfile={effectiveUser}
-                  incomingGroupMessageQueue={incomingGroupMessageQueue}
-                  typingIndicators={groupTyping[activeGroupId] || []}
-                  redpacketClaimEvent={redpacketClaimEvent}
-                  onBack={() => setActiveGroupId(null)}
-                  onGroupUpdated={(updatedGroup) => {
-                    setGroups(prev => prev.map(g => g.id === updatedGroup.id ? updatedGroup : g));
-                  }}
-                />
-              </div>
-            ) : (
-              <div className="empty-chat-state">
-                <MessageSquare size={64} className="empty-icon" />
-                <p>ChatPulse</p>
-              </div>
-            )}
-          </Suspense>
+                    >
+                      <Suspense fallback={<DrawerFallback type="diary" contact={activeChatContact} lang={lang} onClose={() => setActiveDrawer(null)} />}>
+                        <DiaryTable
+                          contact={activeChatContact}
+                          apiUrl={API_URL}
+                          onClose={() => setActiveDrawer(null)}
+                        />
+                      </Suspense>
+                    </AppErrorBoundary>
+                  )}
+                  {activeDrawer === 'settings' && (
+                    <AppErrorBoundary
+                      variant="drawer"
+                      resetKey={`drawer:settings:${activeChatContact?.id || ''}`}
+                      lang={lang}
+                      title={lang === 'en' ? 'Chat Settings' : '聊天设置'}
+                      onClose={() => setActiveDrawer(null)}
+                    >
+                      <Suspense fallback={<DrawerFallback type="settings" contact={activeChatContact} lang={lang} onClose={() => setActiveDrawer(null)} />}>
+                        <ChatSettingsDrawer
+                          contact={activeChatContact}
+                          apiUrl={API_URL}
+                          onClose={() => setActiveDrawer(null)}
+                          onClearHistory={() => {
+                            setActiveDrawer(null);
+                            fetchContacts(); // Re-pull character data so stats show as reset immediately
+                          }}
+                          isGeneratingSchedule={!!generatingSchedules[activeContactId]}
+                          messagesHideStateCount={hiddenMessagesCount}
+                        />
+                      </Suspense>
+                    </AppErrorBoundary>
+                  )}
+                </div>
+              ) : activeGroupId && activeTab === 'chats' ? (
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'row', height: '100%', minWidth: 0 }}>
+                  <GroupChatWindow
+                    group={groups.find(g => g.id === activeGroupId)}
+                    apiUrl={API_URL}
+                    allContacts={contacts}
+                    userProfile={effectiveUser}
+                    incomingGroupMessageQueue={incomingGroupMessageQueue}
+                    typingIndicators={groupTyping[activeGroupId] || []}
+                    redpacketClaimEvent={redpacketClaimEvent}
+                    onBack={() => setActiveGroupId(null)}
+                    onGroupUpdated={(updatedGroup) => {
+                      setGroups(prev => prev.map(g => g.id === updatedGroup.id ? updatedGroup : g));
+                    }}
+                  />
+                </div>
+              ) : (
+                <div className="empty-chat-state">
+                  <MessageSquare size={64} className="empty-icon" />
+                  <p>ChatPulse</p>
+                </div>
+              )}
+            </Suspense>
+          </AppErrorBoundary>
         </div>
       )}
 

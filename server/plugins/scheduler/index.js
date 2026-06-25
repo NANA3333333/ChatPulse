@@ -6,6 +6,7 @@ const {
     normalizeSchedulerTaskId,
     normalizeSchedulerTaskPayload
 } = require('./inputGuards');
+const { filterAutomationUsers } = require('../../automationActivity');
 
 function init(app, context) {
     const { authMiddleware, authDb, getUserDb, getEngine, getMemory } = context;
@@ -87,7 +88,7 @@ function init(app, context) {
             const currentHHMM = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
 
             const users = typeof authDb?.getAllUsers === 'function'
-                ? authDb.getAllUsers().filter(user => String(user.status || 'active') === 'active')
+                ? filterAutomationUsers(authDb.getAllUsers(), now.getTime())
                 : [];
             const userIds = users.map(user => user.id).filter(Boolean);
 
@@ -147,6 +148,20 @@ function init(app, context) {
                     }
                 }
 
+                if (memory.purgeExpiredForgettingMemories) {
+                    try {
+                        const result = await memory.purgeExpiredForgettingMemories({
+                            limit: 200,
+                            minIntervalMs: 10 * 60 * 1000
+                        });
+                        if (Number(result?.deleted || 0) > 0) {
+                            console.log(`[Scheduler] Auto-forgot ${result.deleted} expired memory row(s) for user ${userId}.`);
+                        }
+                    } catch (e) {
+                        console.error(`[Scheduler] Expired memory auto-forget failed for user ${userId}:`, e);
+                    }
+                }
+
                 // --- 2. Background System Sweep (Threshold Overflow Memory) ---
                 if (memory.sweepOverflowMemories) {
                     const allChars = userDb.getCharacters();
@@ -182,9 +197,11 @@ function init(app, context) {
                             ].filter(item => item.count >= sweepLimit);
 
                             for (const due of duePools) {
-                                console.log(`[Scheduler] ${due.pool} W pool reached for ${char.name}. private=${privateUnsummarizedCount}, group=${groupUnsummarizedCount}, city=${cityUnsummarizedCount}, limit=${sweepLimit}. Triggering ${due.pool} memory sweep.`);
+                                const triggerMessage = `[Scheduler] ${due.pool} W pool reached for ${char.name}. private=${privateUnsummarizedCount}, group=${groupUnsummarizedCount}, city=${cityUnsummarizedCount}, limit=${sweepLimit}. Triggering ${due.pool} memory sweep.`;
                                 try {
                                     const result = await memory.sweepOverflowMemories(char, { pool: due.pool });
+                                    if (result?.status === 'cooldown') continue;
+                                    console.log(triggerMessage);
                                     if (result?.status === 'failed') {
                                         console.error(`[Scheduler] ${due.pool} overflow sweep failed for ${char.name}:`, result.error || 'unknown error');
                                     }

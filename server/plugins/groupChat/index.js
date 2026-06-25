@@ -140,6 +140,69 @@ function initGroupChatPlugin(app, context) {
             .filter(Boolean)));
     }
 
+    function normalizeMentionName(value = '') {
+        return String(value || '').trim().toLowerCase().replace(/\s+/g, '');
+    }
+
+    function isAsciiMentionContinuation(char = '') {
+        return /[a-z0-9._-]/i.test(String(char || ''));
+    }
+
+    function readMentionTokenAfterAt(text = '', atIndex = -1) {
+        if (atIndex < 0) return '';
+        const tail = String(text || '').slice(atIndex + 1);
+        const match = tail.match(/^([^\s@,，。.!！？;；:：()（）[\]【】]+)/);
+        return normalizeMentionName(match?.[1] || '');
+    }
+
+    function resolveMentionedGroupCharacterIds(db, members = [], text = '', options = {}) {
+        const selfId = String(options.selfId || '').trim();
+        const rawText = String(text || '');
+        if (!rawText.includes('@')) return [];
+        const candidates = (Array.isArray(members) ? members : [])
+            .map(member => {
+                const memberId = String(member?.member_id || member || '').trim();
+                if (!memberId || memberId === 'user' || memberId === selfId) return null;
+                const char = db.getCharacter(memberId);
+                if (!char) return null;
+                const normalizedName = normalizeMentionName(char.name);
+                const normalizedId = normalizeMentionName(char.id);
+                if (!normalizedName && !normalizedId) return null;
+                return { id: char.id, normalizedName, normalizedId };
+            })
+            .filter(Boolean)
+            .sort((a, b) => Math.max(b.normalizedName.length, b.normalizedId.length) - Math.max(a.normalizedName.length, a.normalizedId.length));
+        if (candidates.length === 0) return [];
+
+        const mentioned = new Set();
+        const atMatches = [...rawText.matchAll(/@/g)];
+        for (const atMatch of atMatches) {
+            const atIndex = atMatch.index ?? -1;
+            const tail = rawText.slice(atIndex + 1, atIndex + 96);
+            const normalizedTail = normalizeMentionName(tail);
+            const exact = candidates.find(candidate => {
+                const aliases = [candidate.normalizedName, candidate.normalizedId].filter(Boolean);
+                return aliases.some(alias => normalizedTail.startsWith(alias) && !isAsciiMentionContinuation(normalizedTail[alias.length] || ''));
+            });
+            if (exact) {
+                mentioned.add(exact.id);
+                continue;
+            }
+
+            const token = readMentionTokenAfterAt(rawText, atIndex);
+            if (!token || token.length < 3) continue;
+            const prefixMatches = candidates.filter(candidate => {
+                const aliases = [candidate.normalizedName, candidate.normalizedId].filter(Boolean);
+                return aliases.some(alias => alias.startsWith(token));
+            });
+            if (prefixMatches.length === 1) {
+                mentioned.add(prefixMatches[0].id);
+            }
+        }
+
+        return Array.from(mentioned);
+    }
+
     function getInvalidGroupMemberIds(db, memberIds) {
         return memberIds.filter(memberId => memberId === 'user' || !db.getCharacter(memberId));
     }
@@ -436,7 +499,7 @@ function initGroupChatPlugin(app, context) {
             if (!group) return res.status(404).json({ error: 'Group not found' });
             engine.stopGroupProactiveTimer(group.id);
             db.deleteGroup(group.id);
-            clearGroupRuntimeState(group.id);
+            clearGroupRuntimeState(req.user.id, group.id);
             res.json({ success: true });
         } catch (e) {
             res.status(500).json({ error: e.message });
@@ -478,15 +541,21 @@ function initGroupChatPlugin(app, context) {
 
     // Group Chat Debounce System
     // When user sends multiple messages quickly, we wait until they stop, then fire ONE AI reply chain.
-    const groupDebounceTimers = {}; // { groupId: timeoutHandle }
+    const groupDebounceTimers = {}; // { userId:groupId: timeoutHandle }
     const groupReplyLock = {};
-    const groupInterrupt = {};     // { groupId: true } prevents overlapping chains
+    const groupInterrupt = {};     // { userId:groupId: true } prevents overlapping chains
     const pausedGroups = new Set(); // groups where AI replies are paused by user
     const noChainGroups = new Set(); // groups where AI-to-AI secondary @-mention chains are blocked
-    const groupPendingMentions = {}; // { groupId: { ids: Set, isAtAll: bool } } accumulates mentions across debounce resets
+    const groupPendingMentions = {}; // { userId:groupId: { ids: Set, isAtAll: bool } } accumulates mentions across debounce resets
 
-    function clearGroupRuntimeState(groupId) {
-        const id = String(groupId || '').trim();
+    function getGroupRuntimeKey(userId, groupId) {
+        const cleanUserId = String(userId || '').trim();
+        const cleanGroupId = String(groupId || '').trim();
+        return cleanUserId && cleanGroupId ? `${cleanUserId}:${cleanGroupId}` : '';
+    }
+
+    function clearGroupRuntimeState(userId, groupId) {
+        const id = getGroupRuntimeKey(userId, groupId);
         if (!id) return;
         pausedGroups.delete(id);
         noChainGroups.delete(id);
@@ -508,7 +577,7 @@ function initGroupChatPlugin(app, context) {
         try {
             const group = db.getGroup(req.params.id);
             if (!group) return res.status(404).json({ error: 'Group not found' });
-            const id = group.id;
+            const id = getGroupRuntimeKey(req.user.id, group.id);
             // Allow explicitly setting state from request body, otherwise fallback to toggle
             const requestedPause = req.body?.paused;
             const wantsPause = requestedPause !== undefined
@@ -518,11 +587,11 @@ function initGroupChatPlugin(app, context) {
             if (!wantsPause) {
                 pausedGroups.delete(id);
                 // Restart proactive timer if it was running
-                engine.scheduleGroupProactive(id, wsClients);
+                engine.scheduleGroupProactive(group.id, wsClients);
                 res.json({ paused: false });
             } else {
                 pausedGroups.add(id);
-                engine.stopGroupProactiveTimer(id);
+                engine.stopGroupProactiveTimer(group.id);
                 // Clear any pending debounce/chaining locks instantly
                 if (groupDebounceTimers[id]) { clearTimeout(groupDebounceTimers[id]); delete groupDebounceTimers[id]; }
                 delete groupReplyLock[id];
@@ -541,7 +610,7 @@ function initGroupChatPlugin(app, context) {
         try {
             const group = db.getGroup(req.params.id);
             if (!group) return res.status(404).json({ error: 'Group not found' });
-            res.json({ paused: pausedGroups.has(group.id) });
+            res.json({ paused: pausedGroups.has(getGroupRuntimeKey(req.user.id, group.id)) });
         } catch (e) {
             res.status(500).json({ error: e.message });
         }
@@ -556,7 +625,7 @@ function initGroupChatPlugin(app, context) {
         try {
             const group = db.getGroup(req.params.id);
             if (!group) return res.status(404).json({ error: 'Group not found' });
-            const id = group.id;
+            const id = getGroupRuntimeKey(req.user.id, group.id);
             if (noChainGroups.has(id)) {
                 noChainGroups.delete(id);
                 res.json({ noChain: false });
@@ -577,7 +646,7 @@ function initGroupChatPlugin(app, context) {
         try {
             const group = db.getGroup(req.params.id);
             if (!group) return res.status(404).json({ error: 'Group not found' });
-            res.json({ noChain: noChainGroups.has(group.id) });
+            res.json({ noChain: noChainGroups.has(getGroupRuntimeKey(req.user.id, group.id)) });
         } catch (e) {
             res.status(500).json({ error: e.message });
         }
@@ -587,31 +656,33 @@ function initGroupChatPlugin(app, context) {
         const db = getUserDb(userId);
         const engine = getEngine(userId);
         const memory = getMemory(userId);
+        const runtimeKey = getGroupRuntimeKey(userId, groupId);
+        if (!runtimeKey) return;
 
-        if (pausedGroups.has(groupId)) return; // AI replies paused by user
-        if (groupReplyLock[groupId]) {
+        if (pausedGroups.has(runtimeKey)) return; // AI replies paused by user
+        if (groupReplyLock[runtimeKey]) {
             // Already running! Put mentions back so they fire in the NEXT chain.
             if (mentionedIds.length > 0 || isAtAll) {
-                if (!groupPendingMentions[groupId]) groupPendingMentions[groupId] = { ids: new Set(), isAtAll: false };
-                mentionedIds.forEach(id => groupPendingMentions[groupId].ids.add(id));
-                if (isAtAll) groupPendingMentions[groupId].isAtAll = true;
+                if (!groupPendingMentions[runtimeKey]) groupPendingMentions[runtimeKey] = { ids: new Set(), isAtAll: false };
+                mentionedIds.forEach(id => groupPendingMentions[runtimeKey].ids.add(id));
+                if (isAtAll) groupPendingMentions[runtimeKey].isAtAll = true;
 
                 // Re-trigger debounce so they aren't lost indefinitely
-                if (!groupDebounceTimers[groupId]) {
-                    groupDebounceTimers[groupId] = setTimeout(() => {
-                        delete groupDebounceTimers[groupId];
-                        const pending = groupPendingMentions[groupId] || { ids: new Set(), isAtAll: false };
-                        delete groupPendingMentions[groupId];
+                if (!groupDebounceTimers[runtimeKey]) {
+                    groupDebounceTimers[runtimeKey] = setTimeout(() => {
+                        delete groupDebounceTimers[runtimeKey];
+                        const pending = groupPendingMentions[runtimeKey] || { ids: new Set(), isAtAll: false };
+                        delete groupPendingMentions[runtimeKey];
                         triggerGroupAIChain(userId, groupId, wsClients, Array.from(pending.ids), pending.isAtAll, false);
                     }, 4000);
                 }
             }
             return;
         }
-        groupReplyLock[groupId] = true;
+        groupReplyLock[runtimeKey] = true;
 
         const group = db.getGroup(groupId);
-        if (!group) { delete groupReplyLock[groupId]; return; }
+        if (!group) { delete groupReplyLock[runtimeKey]; return; }
 
         const charMembers = group.members.filter(m => m.member_id !== 'user');
         // Fisher-Yates shuffle
@@ -1012,30 +1083,13 @@ function initGroupChatPlugin(app, context) {
                                 const payload = JSON.stringify({ type: 'group_message', data: replyMsg });
                                 wsClients.forEach(c => { if (c.readyState === 1) c.send(payload); });
 
-                                // Detect @mentions in char's own reply and schedule secondary chain
-                                // Note: We use a more permissive regex because Chinese text often lacks spaces around @Name
-                                const charMentionMatches = [...cleanReply.matchAll(/@([^\s@,，。.!！？;；:：()（）[\]【】]+)/g)].map(m => m[1].toLowerCase());
-                                if (charMentionMatches.length > 0) {
-                                    const allGroupChars = group.members.filter(m => m.member_id !== 'user' && m.member_id !== char.id);
-                                    const secondaryIds = allGroupChars
-                                        .filter(m => {
-                                            const c = db.getCharacter(m.member_id);
-                                            if (!c) return false;
-                                            const cName = c.name.toLowerCase();
-                                            const cNameNoSpace = cName.replace(/\s+/g, '');
-                                            return charMentionMatches.some(n => {
-                                                const noSpace = n.replace(/\s+/g, '');
-                                                return cName.includes(n) || cNameNoSpace.includes(noSpace) || noSpace.includes(cNameNoSpace);
-                                            });
-                                        })
-                                        .map(m => m.member_id);
-                                    if (secondaryIds.length > 0) {
-                                        if (noChainGroups.has(groupId)) {
-                                            console.log('[GroupChat] ' + char.name + ' mentioned ' + secondaryIds.join(',') + ' - secondary chain BLOCKED (no-chain mode ON)');
-                                        } else {
-                                            console.log('[GroupChat] ' + char.name + ' mentioned ' + secondaryIds.join(',') + ' - queuing secondary reply after current chain');
-                                            pendingSecondaryChains.push(secondaryIds);
-                                        }
+                                const secondaryIds = resolveMentionedGroupCharacterIds(db, group.members, cleanReply, { selfId: char.id });
+                                if (secondaryIds.length > 0) {
+                                    if (noChainGroups.has(runtimeKey)) {
+                                        console.log('[GroupChat] ' + char.name + ' mentioned ' + secondaryIds.join(',') + ' - secondary chain BLOCKED (no-chain mode ON)');
+                                    } else {
+                                        console.log('[GroupChat] ' + char.name + ' mentioned ' + secondaryIds.join(',') + ' - queuing secondary reply after current chain');
+                                        pendingSecondaryChains.push(secondaryIds);
                                     }
                                 }
 
@@ -1095,7 +1149,7 @@ function initGroupChatPlugin(app, context) {
                     }
                 }
             } finally {
-                delete groupReplyLock[groupId];
+                delete groupReplyLock[runtimeKey];
 
                 // Fire secondary chains sequentially; preserve duplicate @mentions
                 // so the same char can reply multiple times if mentioned by different members
@@ -1209,21 +1263,8 @@ function initGroupChatPlugin(app, context) {
             // Parse @mentions from message content (user only can do @all)
             const allRef = /@(?:all|鍏ㄤ綋鎴愬憳)/i.test(content);
             const isAtAll = allRef; // only user (sender) can use @all
-            // Permissive regex for Chinese/no-space text
-            const mentionedNames = [...content.matchAll(/@([^\s@,，。.!！？;；:：()（）[\]【】]+)/g)].map(m => m[1].toLowerCase());
             const charMembers = group.members.filter(m => m.member_id !== 'user');
-            const mentionedIds = charMembers
-                .filter(m => {
-                    const c = db.getCharacter(m.member_id);
-                    if (!c) return false;
-                    const cName = c.name.toLowerCase();
-                    const cNameNoSpace = cName.replace(/\s+/g, '');
-                    return mentionedNames.some(n => {
-                        const noSpace = n.replace(/\s+/g, '');
-                        return cName.includes(n) || cNameNoSpace.includes(noSpace) || noSpace.includes(cNameNoSpace);
-                    });
-                })
-                .map(m => m.member_id);
+            const mentionedIds = resolveMentionedGroupCharacterIds(db, charMembers, content);
 
             for (const member of charMembers) {
                 const memberChar = db.getCharacter(member.member_id);
@@ -1260,23 +1301,24 @@ function initGroupChatPlugin(app, context) {
 
             // ACCUMULATE mentions across rapid user messages (fix: previous debounce lost earlier @mentions)
             const groupId = req.params.id;
-            if (!groupPendingMentions[groupId]) {
-                groupPendingMentions[groupId] = { ids: new Set(), isAtAll: false };
+            const runtimeKey = getGroupRuntimeKey(req.user.id, groupId);
+            if (!groupPendingMentions[runtimeKey]) {
+                groupPendingMentions[runtimeKey] = { ids: new Set(), isAtAll: false };
             }
-            mentionedIds.forEach(id => groupPendingMentions[groupId].ids.add(id));
-            if (isAtAll) groupPendingMentions[groupId].isAtAll = true;
+            mentionedIds.forEach(id => groupPendingMentions[runtimeKey].ids.add(id));
+            if (isAtAll) groupPendingMentions[runtimeKey].isAtAll = true;
 
             // Debounce: reset timer each time user sends a message; AI chain fires after LAST message.
-            if (groupDebounceTimers[groupId]) {
-                clearTimeout(groupDebounceTimers[groupId]);
+            if (groupDebounceTimers[runtimeKey]) {
+                clearTimeout(groupDebounceTimers[runtimeKey]);
             }
             // Mentions are time-sensitive: fire slightly faster than normal debounce
-            const hasMentions = groupPendingMentions[groupId].ids.size > 0 || groupPendingMentions[groupId].isAtAll;
+            const hasMentions = groupPendingMentions[runtimeKey].ids.size > 0 || groupPendingMentions[runtimeKey].isAtAll;
             const debounceDelay = hasMentions ? 1500 : 5000;
-            groupDebounceTimers[groupId] = setTimeout(() => {
-                delete groupDebounceTimers[groupId];
-                const pending = groupPendingMentions[groupId] || { ids: new Set(), isAtAll: false };
-                delete groupPendingMentions[groupId]; // consume accumulated mentions
+            groupDebounceTimers[runtimeKey] = setTimeout(() => {
+                delete groupDebounceTimers[runtimeKey];
+                const pending = groupPendingMentions[runtimeKey] || { ids: new Set(), isAtAll: false };
+                delete groupPendingMentions[runtimeKey]; // consume accumulated mentions
                 triggerGroupAIChain(req.user.id, groupId, wsClients, Array.from(pending.ids), pending.isAtAll);
             }, debounceDelay);
 

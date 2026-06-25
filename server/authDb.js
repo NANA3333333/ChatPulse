@@ -4,6 +4,12 @@ const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 
+const INVITE_DEFAULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const SESSION_DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const PASSWORD_MIN_LENGTH = 8;
+const MAX_FAILED_LOGINS = Math.max(1, Number(process.env.CP_MAX_FAILED_LOGINS || 8) || 8);
+const LOGIN_LOCK_MS = Math.max(60 * 1000, Number(process.env.CP_LOGIN_LOCK_MS || 15 * 60 * 1000) || 15 * 60 * 1000);
+
 const dataDir = path.join(__dirname, '..', 'data');
 if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
@@ -30,6 +36,30 @@ function initAuthDb() {
             status TEXT NOT NULL DEFAULT 'active',
             token_version INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            token_id TEXT NOT NULL UNIQUE,
+            user_agent TEXT DEFAULT '',
+            ip TEXT DEFAULT '',
+            created_at INTEGER NOT NULL,
+            last_seen_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            revoked_at INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active'
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id, status, expires_at);
+        CREATE TABLE IF NOT EXISTS auth_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT DEFAULT '',
+            username TEXT DEFAULT '',
+            event_type TEXT NOT NULL,
+            ip TEXT DEFAULT '',
+            user_agent TEXT DEFAULT '',
+            created_at INTEGER NOT NULL,
+            detail TEXT DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_auth_events_user_time ON auth_events(user_id, created_at DESC);
         CREATE TABLE IF NOT EXISTS invite_codes (
             code TEXT PRIMARY KEY,
             used_by TEXT,
@@ -68,6 +98,37 @@ function initAuthDb() {
     } catch (e) {
         // Column may already exist, ignore error
     }
+    try {
+        db.exec("ALTER TABLE users ADD COLUMN username_norm TEXT DEFAULT '';");
+    } catch (e) {
+        // Column may already exist, ignore error
+    }
+    try {
+        db.exec("ALTER TABLE users ADD COLUMN failed_login_count INTEGER NOT NULL DEFAULT 0;");
+    } catch (e) {
+        // Column may already exist, ignore error
+    }
+    try {
+        db.exec("ALTER TABLE users ADD COLUMN locked_until INTEGER NOT NULL DEFAULT 0;");
+    } catch (e) {
+        // Column may already exist, ignore error
+    }
+    try {
+        db.exec("ALTER TABLE users ADD COLUMN last_login_at INTEGER NOT NULL DEFAULT 0;");
+    } catch (e) {
+        // Column may already exist, ignore error
+    }
+    try {
+        db.exec("ALTER TABLE users ADD COLUMN password_updated_at INTEGER NOT NULL DEFAULT 0;");
+    } catch (e) {
+        // Column may already exist, ignore error
+    }
+    try {
+        db.prepare("UPDATE users SET username_norm = lower(username) WHERE COALESCE(username_norm, '') = ''").run();
+        db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_norm ON users(username_norm);');
+    } catch (e) {
+        console.warn('[AuthDB] Failed to ensure normalized username index:', e.message);
+    }
     const inviteColumns = [
         ["max_uses", "INTEGER NOT NULL DEFAULT 1"],
         ["use_count", "INTEGER NOT NULL DEFAULT 0"],
@@ -94,10 +155,10 @@ function initAuthDb() {
         }
         const id = generateId();
         const hash = bcrypt.hashSync(adminPw, 10);
-        db.prepare('INSERT INTO users (id, username, password_hash, created_at, role, status, token_version) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, 'Nana', hash, Date.now(), 'root', 'active', 0);
+        db.prepare('INSERT INTO users (id, username, username_norm, password_hash, created_at, role, status, token_version, password_updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, 'Nana', normalizeUsername('Nana').normalized, hash, Date.now(), 'root', 'active', 0, Date.now());
         console.log('[AuthDB] Root user Nana seeded successfully.');
     } else {
-        db.prepare('UPDATE users SET role = ?, status = COALESCE(status, ?), token_version = COALESCE(token_version, 0) WHERE username = ?').run('root', 'active', 'Nana');
+        db.prepare('UPDATE users SET role = ?, status = COALESCE(status, ?), token_version = COALESCE(token_version, 0), username_norm = ? WHERE username = ?').run('root', 'active', normalizeUsername('Nana').normalized, 'Nana');
     }
     console.log('[AuthDB] Master auth database initialized successfully.');
 }
@@ -107,15 +168,64 @@ function generateId() {
     return Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
 }
 
+function generateSecureId(prefix = '') {
+    const id = crypto.randomBytes(18).toString('base64url');
+    return prefix ? `${prefix}_${id}` : id;
+}
+
+function normalizeUsername(username) {
+    const display = String(username || '').trim();
+    const normalized = display.toLowerCase();
+    if (!display || display.length < 2 || display.length > 32) {
+        return { ok: false, error: 'Username must be 2-32 characters long' };
+    }
+    if (!/^[\p{L}\p{N}_@.-]+$/u.test(display)) {
+        return { ok: false, error: 'Username can only contain letters, numbers, _, @, ., or -' };
+    }
+    return { ok: true, display, normalized };
+}
+
+function validatePassword(password, label = 'Password') {
+    if (!password || String(password).length < PASSWORD_MIN_LENGTH) {
+        return `${label} must be at least ${PASSWORD_MIN_LENGTH} characters long`;
+    }
+    return '';
+}
+
+function cleanInviteCode(code) {
+    return String(code || '').trim().toUpperCase();
+}
+
+function recordAuthEvent(event = {}) {
+    try {
+        db.prepare(`
+            INSERT INTO auth_events (user_id, username, event_type, ip, user_agent, created_at, detail)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            String(event.userId || ''),
+            String(event.username || ''),
+            String(event.type || 'auth_event'),
+            String(event.ip || '').slice(0, 120),
+            String(event.userAgent || '').slice(0, 500),
+            Date.now(),
+            String(event.detail || '').slice(0, 1000)
+        );
+    } catch (e) {
+        console.warn('[AuthDB] Failed to record auth event:', e.message);
+    }
+}
+
 function createUser(username, password, inviteCode) {
     try {
-        // Password strength validation
-        if (!password || password.length < 5) {
-            return { success: false, error: 'Password must be at least 5 characters long' };
-        }
+        const normalizedUsername = normalizeUsername(username);
+        if (!normalizedUsername.ok) return { success: false, error: normalizedUsername.error };
 
-        if (!inviteCode) return { success: false, error: 'Invite code is required' };
-        const invite = db.prepare('SELECT code, status, use_count, max_uses, expires_at FROM invite_codes WHERE code = ?').get(inviteCode);
+        const passwordError = validatePassword(password);
+        if (passwordError) return { success: false, error: passwordError };
+
+        const cleanCode = cleanInviteCode(inviteCode);
+        if (!cleanCode) return { success: false, error: 'Invite code is required' };
+        const invite = db.prepare('SELECT code, status, use_count, max_uses, expires_at FROM invite_codes WHERE code = ?').get(cleanCode);
         if (!invite) return { success: false, error: 'Invalid invite code' };
         if (invite.status !== 'active') return { success: false, error: 'Invite code is not active' };
         if (invite.expires_at && Date.now() > invite.expires_at) return { success: false, error: 'Invite code has expired' };
@@ -126,7 +236,7 @@ function createUser(username, password, inviteCode) {
         const role = 'user';
 
         db.transaction(() => {
-            db.prepare('INSERT INTO users (id, username, password_hash, created_at, role, status, token_version) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, username, hash, Date.now(), role, 'active', 0);
+            db.prepare('INSERT INTO users (id, username, username_norm, password_hash, created_at, role, status, token_version, password_updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, normalizedUsername.display, normalizedUsername.normalized, hash, Date.now(), role, 'active', 0, Date.now());
             db.prepare(`
                 UPDATE invite_codes
                 SET used_by = CASE WHEN max_uses <= 1 THEN ? ELSE COALESCE(used_by, '') END,
@@ -136,28 +246,56 @@ function createUser(username, password, inviteCode) {
                         ELSE status
                     END
                 WHERE code = ?
-            `).run(username, inviteCode);
+            `).run(normalizedUsername.display, cleanCode);
         })();
 
-        return { success: true, user: { id, username, role, status: 'active', tokenVersion: 0 } };
+        recordAuthEvent({
+            userId: id,
+            username: normalizedUsername.display,
+            type: 'register',
+            detail: `invite:${cleanCode}`,
+        });
+        return { success: true, user: { id, username: normalizedUsername.display, role, status: 'active', tokenVersion: 0 } };
     } catch (e) {
-        if (e.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+        if (e.code === 'SQLITE_CONSTRAINT_UNIQUE' || e.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
             return { success: false, error: 'Username already exists' };
         }
         return { success: false, error: e.message };
     }
 }
 
-function verifyUser(username, password) {
-    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
-    if (!user) return { success: false, error: 'Invalid username or password' };
+function verifyUser(username, password, meta = {}) {
+    const normalizedUsername = normalizeUsername(username);
+    const lookup = normalizedUsername.ok ? normalizedUsername.normalized : String(username || '').trim().toLowerCase();
+    const user = db.prepare('SELECT * FROM users WHERE username_norm = ? OR lower(username) = ?').get(lookup, lookup);
+    const genericError = 'Invalid username or password';
+    if (!user) {
+        recordAuthEvent({ username, type: 'login_failed', ip: meta.ip, userAgent: meta.userAgent, detail: 'unknown_user' });
+        return { success: false, error: genericError };
+    }
 
     if (user.status === 'banned') {
+        recordAuthEvent({ userId: user.id, username: user.username, type: 'login_blocked', ip: meta.ip, userAgent: meta.userAgent, detail: 'banned' });
         return { success: false, error: 'This account has been banned' };
     }
 
+    const now = Date.now();
+    if (Number(user.locked_until || 0) > now) {
+        recordAuthEvent({ userId: user.id, username: user.username, type: 'login_blocked', ip: meta.ip, userAgent: meta.userAgent, detail: 'locked' });
+        return { success: false, error: 'Too many failed login attempts. Please try again later.' };
+    }
+
     const isValid = bcrypt.compareSync(password, user.password_hash);
-    if (!isValid) return { success: false, error: 'Invalid username or password' };
+    if (!isValid) {
+        const failedCount = Number(user.failed_login_count || 0) + 1;
+        const lockedUntil = failedCount >= MAX_FAILED_LOGINS ? now + LOGIN_LOCK_MS : 0;
+        db.prepare('UPDATE users SET failed_login_count = ?, locked_until = ? WHERE id = ?').run(failedCount, lockedUntil, user.id);
+        recordAuthEvent({ userId: user.id, username: user.username, type: 'login_failed', ip: meta.ip, userAgent: meta.userAgent, detail: lockedUntil ? 'locked' : 'bad_password' });
+        return { success: false, error: lockedUntil ? 'Too many failed login attempts. Please try again later.' : genericError };
+    }
+
+    db.prepare('UPDATE users SET failed_login_count = 0, locked_until = 0, last_login_at = ? WHERE id = ?').run(now, user.id);
+    recordAuthEvent({ userId: user.id, username: user.username, type: 'login_success', ip: meta.ip, userAgent: meta.userAgent });
 
     return {
         success: true,
@@ -189,19 +327,24 @@ function updateOwnAccount(id, options = {}) {
     let tokenVersion = Number(user.token_version || 0);
 
     if (nextUsername && nextUsername !== user.username) {
-        const existing = db.prepare('SELECT id FROM users WHERE username = ? AND id <> ?').get(nextUsername, id);
+        const normalizedUsername = normalizeUsername(nextUsername);
+        if (!normalizedUsername.ok) return { success: false, error: normalizedUsername.error };
+        const existing = db.prepare('SELECT id FROM users WHERE username_norm = ? AND id <> ?').get(normalizedUsername.normalized, id);
         if (existing) return { success: false, error: 'Username already exists' };
         updates.push('username = ?');
-        values.push(nextUsername);
+        values.push(normalizedUsername.display);
+        updates.push('username_norm = ?');
+        values.push(normalizedUsername.normalized);
         tokenVersion += 1;
     }
 
     if (nextPassword) {
-        if (nextPassword.length < 5) {
-            return { success: false, error: 'New password must be at least 5 characters long' };
-        }
+        const passwordError = validatePassword(nextPassword, 'New password');
+        if (passwordError) return { success: false, error: passwordError };
         updates.push('password_hash = ?');
         values.push(bcrypt.hashSync(nextPassword, 10));
+        updates.push('password_updated_at = ?');
+        values.push(Date.now());
         tokenVersion += 1;
     }
 
@@ -245,7 +388,8 @@ function generateInviteCode(options = {}) {
     const code = crypto.randomBytes(9).toString('base64url').substring(0, 12).toUpperCase();
     const createdAt = Date.now();
     const maxUses = normalizeInviteMaxUses(options.maxUses);
-    const expiresAt = normalizeInviteExpiresAt(options.expiresAt);
+    const defaultExpiresAt = createdAt + INVITE_DEFAULT_TTL_MS;
+    const expiresAt = normalizeInviteExpiresAt(options.expiresAt, defaultExpiresAt);
     const note = String(options.note || '').trim();
     const createdBy = String(options.createdBy || '').trim();
     db.prepare(`
@@ -255,26 +399,45 @@ function generateInviteCode(options = {}) {
     return code;
 }
 
+function normalizeInviteRow(row) {
+    if (!row) return row;
+    const expiresAt = Number(row.expires_at || 0);
+    const now = Date.now();
+    const maxUses = Number(row.max_uses || 1);
+    const useCount = Number(row.use_count || 0);
+    return {
+        ...row,
+        max_uses: maxUses,
+        use_count: useCount,
+        expires_at: expiresAt,
+        expired: !!(expiresAt && now > expiresAt),
+        remaining_uses: Math.max(0, maxUses - useCount),
+        remaining_ms: expiresAt ? Math.max(0, expiresAt - now) : 0,
+        remaining_days: expiresAt ? Math.max(0, Math.ceil((expiresAt - now) / (24 * 60 * 60 * 1000))) : null,
+        usage_label: `${useCount}/${maxUses}`
+    };
+}
+
 function getInviteCodes() {
     return db.prepare(`
         SELECT code, used_by, created_at, max_uses, use_count, expires_at, note, created_by, status
         FROM invite_codes
         ORDER BY created_at DESC
-    `).all();
+    `).all().map(normalizeInviteRow);
 }
 
 function getInviteCode(code) {
-    const cleanCode = String(code || '').trim();
+    const cleanCode = cleanInviteCode(code);
     if (!cleanCode) return null;
-    return db.prepare(`
+    return normalizeInviteRow(db.prepare(`
         SELECT code, used_by, created_at, max_uses, use_count, expires_at, note, created_by, status
         FROM invite_codes
         WHERE code = ?
-    `).get(cleanCode) || null;
+    `).get(cleanCode) || null);
 }
 
 function getAllUsers() {
-    return db.prepare('SELECT id, username, created_at, last_active_at, role, status, token_version FROM users ORDER BY created_at DESC').all();
+    return db.prepare('SELECT id, username, created_at, last_active_at, last_login_at, failed_login_count, locked_until, password_updated_at, role, status, token_version FROM users ORDER BY created_at DESC').all();
 }
 
 function isAdminRole(role) {
@@ -325,12 +488,16 @@ function bumpTokenVersion(id) {
 function resetPassword(id, newPassword) {
     const cleanId = normalizeUserId(id);
     if (!cleanId) return 0;
+    const passwordError = validatePassword(newPassword);
+    if (passwordError) {
+        throw new AuthValidationError(passwordError);
+    }
     const passwordHash = bcrypt.hashSync(newPassword, 10);
-    return db.prepare('UPDATE users SET password_hash = ?, token_version = COALESCE(token_version, 0) + 1 WHERE id = ?').run(passwordHash, cleanId).changes || 0;
+    return db.prepare('UPDATE users SET password_hash = ?, token_version = COALESCE(token_version, 0) + 1, password_updated_at = ? WHERE id = ?').run(passwordHash, Date.now(), cleanId).changes || 0;
 }
 
 function deleteInviteCode(code) {
-    const cleanCode = String(code || '').trim();
+    const cleanCode = cleanInviteCode(code);
     if (!cleanCode) return 0;
     return db.prepare('DELETE FROM invite_codes WHERE code = ?').run(cleanCode).changes || 0;
 }
@@ -377,7 +544,7 @@ function normalizeInviteStatus(value) {
 }
 
 function updateInviteCode(code, data = {}) {
-    const cleanCode = String(code || '').trim();
+    const cleanCode = cleanInviteCode(code);
     if (!cleanCode) return 0;
     const fields = [];
     const values = [];
@@ -402,6 +569,98 @@ function updateInviteCode(code, data = {}) {
     return db.prepare(`UPDATE invite_codes SET ${fields.join(', ')} WHERE code = ?`).run(...values).changes || 0;
 }
 
+function renewInviteCode(code) {
+    const cleanCode = cleanInviteCode(code);
+    if (!cleanCode) return { success: false, error: 'Invite code not found', statusCode: 404 };
+    const invite = getInviteCode(cleanCode);
+    if (!invite) return { success: false, error: 'Invite code not found', statusCode: 404 };
+    if ((invite.use_count || 0) >= (invite.max_uses || 1)) {
+        return { success: false, error: 'Invite code has reached its usage limit', statusCode: 400 };
+    }
+    const base = Number(invite.expires_at || 0) > Date.now() ? Number(invite.expires_at || 0) : Date.now();
+    const nextExpiresAt = base + INVITE_DEFAULT_TTL_MS;
+    db.prepare("UPDATE invite_codes SET expires_at = ?, status = CASE WHEN status = 'used' THEN 'active' ELSE status END WHERE code = ?").run(nextExpiresAt, cleanCode);
+    return { success: true, invite: getInviteCode(cleanCode) };
+}
+
+function createSession(userId, meta = {}) {
+    const user = getUserById(userId);
+    if (!user) throw new Error('User not found');
+    const now = Date.now();
+    const sessionId = generateSecureId('sess');
+    const tokenId = generateSecureId('tok');
+    const expiresAt = now + SESSION_DEFAULT_TTL_MS;
+    db.prepare(`
+        INSERT INTO user_sessions (id, user_id, token_id, user_agent, ip, created_at, last_seen_at, expires_at, revoked_at, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'active')
+    `).run(
+        sessionId,
+        userId,
+        tokenId,
+        String(meta.userAgent || '').slice(0, 500),
+        String(meta.ip || '').slice(0, 120),
+        now,
+        now,
+        expiresAt
+    );
+    recordAuthEvent({ userId, username: user.username, type: 'session_created', ip: meta.ip, userAgent: meta.userAgent, detail: sessionId });
+    return { sessionId, tokenId, expiresAt };
+}
+
+function verifySession(userId, sessionId, tokenId) {
+    const cleanUserId = normalizeUserId(userId);
+    const cleanSessionId = String(sessionId || '').trim();
+    const cleanTokenId = String(tokenId || '').trim();
+    if (!cleanUserId || !cleanSessionId || !cleanTokenId) return false;
+    const row = db.prepare(`
+        SELECT id, expires_at, revoked_at, status
+        FROM user_sessions
+        WHERE id = ? AND user_id = ? AND token_id = ?
+    `).get(cleanSessionId, cleanUserId, cleanTokenId);
+    if (!row) return false;
+    if (row.status !== 'active' || Number(row.revoked_at || 0) > 0 || Number(row.expires_at || 0) <= Date.now()) return false;
+    try {
+        db.prepare('UPDATE user_sessions SET last_seen_at = ? WHERE id = ?').run(Date.now(), cleanSessionId);
+    } catch (e) { }
+    return true;
+}
+
+function revokeSession(userId, sessionId) {
+    const cleanUserId = normalizeUserId(userId);
+    const cleanSessionId = String(sessionId || '').trim();
+    if (!cleanUserId || !cleanSessionId) return 0;
+    return db.prepare(`
+        UPDATE user_sessions
+        SET status = 'revoked', revoked_at = ?
+        WHERE id = ? AND user_id = ? AND status = 'active'
+    `).run(Date.now(), cleanSessionId, cleanUserId).changes || 0;
+}
+
+function revokeUserSessions(userId) {
+    const cleanUserId = normalizeUserId(userId);
+    if (!cleanUserId) return 0;
+    return db.prepare(`
+        UPDATE user_sessions
+        SET status = 'revoked', revoked_at = ?
+        WHERE user_id = ? AND status = 'active'
+    `).run(Date.now(), cleanUserId).changes || 0;
+}
+
+function getUserSessions(userId) {
+    const cleanUserId = normalizeUserId(userId);
+    if (!cleanUserId) return [];
+    const now = Date.now();
+    return db.prepare(`
+        SELECT id, user_agent, ip, created_at, last_seen_at, expires_at, revoked_at, status
+        FROM user_sessions
+        WHERE user_id = ?
+        ORDER BY last_seen_at DESC, created_at DESC
+    `).all(cleanUserId).map(row => ({
+        ...row,
+        active: row.status === 'active' && Number(row.revoked_at || 0) === 0 && Number(row.expires_at || 0) > now
+    }));
+}
+
 function getLatestAnnouncement() {
     return db.prepare('SELECT content, created_at FROM announcements ORDER BY created_at DESC LIMIT 1').get();
 }
@@ -417,6 +676,7 @@ module.exports = {
     updateOwnAccount,
     getUserById,
     generateInviteCode,
+    renewInviteCode,
     getInviteCodes,
     getInviteCode,
     getAllUsers,
@@ -426,6 +686,12 @@ module.exports = {
     setUserRole,
     bumpTokenVersion,
     resetPassword,
+    createSession,
+    verifySession,
+    revokeSession,
+    revokeUserSessions,
+    getUserSessions,
+    recordAuthEvent,
     deleteInviteCode,
     updateInviteCode,
     getLatestAnnouncement,

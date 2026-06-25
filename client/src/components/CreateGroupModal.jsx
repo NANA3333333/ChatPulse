@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { X, CheckCircle2, Search } from 'lucide-react';
+import AuthenticatedImage from './AuthenticatedImage';
 import { useLanguage } from '../LanguageContext';
-import { resolveAvatarUrl } from '../utils/avatar';
+import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 
 function CreateGroupModal({ apiUrl, contacts, onClose, onCreate }) {
     const { lang } = useLanguage();
@@ -84,7 +85,7 @@ function CreateGroupModal({ apiUrl, contacts, onClose, onCreate }) {
                                     borderRadius: '6px'
                                 }}
                             >
-                                <img src={resolveAvatarUrl(c.avatar, apiUrl, c.name || c.id || 'User')} alt={c.name} style={{ width: '36px', height: '36px', borderRadius: '50%', marginRight: '10px', objectFit: 'cover' }} />
+                                <AuthenticatedImage src={resolveAvatarUrl(c.avatar, apiUrl, c.name || c.id || 'User')} fallbackSrc={defaultAvatarUrl(c.name || c.id || 'User')} alt={c.name} style={{ width: '36px', height: '36px', borderRadius: '50%', marginRight: '10px', objectFit: 'cover' }} />
                                 <div style={{ flex: 1, fontWeight: '500', fontSize: '14px' }}>{c.name}</div>
                                 {selectedIds.includes(c.id) && <CheckCircle2 size={18} color="var(--accent-color)" />}
                             </div>

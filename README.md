@@ -156,8 +156,8 @@ ChatPulse 是一个本地优先的 AI 社交模拟应用。它把私聊、群聊
 ### 安装
 
 ```bash
-git clone https://github.com/NANA3333333/ChatPluse.git
-cd ChatPluse
+git clone https://github.com/NANA3333333/ChatPulse.git
+cd ChatPulse
 npm run setup
 ```
 

@@ -3,6 +3,7 @@ import MessageBubble from './MessageBubble';
 import InputBar from './InputBar';
 import TransferModal from './TransferModal';
 import RecommendModal from './RecommendModal';
+import AuthenticatedImage from './AuthenticatedImage';
 import { Send, Smile, Paperclip, Bell, Users, ShieldBan, Trash, BookOpen, Brain, MoreHorizontal, UserPlus, Gift, Heart, UserMinus, ShieldAlert, BadgeInfo, ChevronLeft } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
@@ -207,6 +208,8 @@ function ChatWindow({
     const [selectedIds, setSelectedIds] = useState(new Set());
     const PAGE_SIZE = 100;
     const prevBlockedRef = useRef(false);
+    const processedIncomingMessageIdsRef = useRef(new Set());
+    const deletedMessageIdsRef = useRef(new Set());
     const messagesEndRef = useRef(null);
     // contactRef keeps the current contact ID stable inside async callbacks
     const contactRef = useRef(contact);
@@ -325,7 +328,14 @@ function ChatWindow({
     // Handle new incoming WS messages Queue
     useEffect(() => {
         if (incomingMessageQueue && incomingMessageQueue.length > 0 && contact?.id) {
-            const relevantMsgs = incomingMessageQueue.filter(m => m.character_id === contact.id);
+            const relevantMsgs = incomingMessageQueue.filter((m) => {
+                if (!m || m.character_id !== contact.id || !m.id) return false;
+                const messageId = `${contact.id}:${m.id}`;
+                if (deletedMessageIdsRef.current.has(messageId)) return false;
+                if (processedIncomingMessageIdsRef.current.has(messageId)) return false;
+                processedIncomingMessageIdsRef.current.add(messageId);
+                return true;
+            });
             if (relevantMsgs.length > 0) {
                 setMessages(prev => normalizeMessages([...prev, ...relevantMsgs]));
             }
@@ -492,10 +502,11 @@ function ChatWindow({
                     <button className="mobile-back-btn" onClick={onBack} title="Back">
                         <ChevronLeft size={24} />
                     </button>
-                    <img
+                    <AuthenticatedImage
                         src={resolveAvatarUrl(contact.avatar, apiUrl, contact.name || contact.id || 'User')}
                         alt={contact.name}
                         style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover' }}
+                        fallbackSrc={defaultAvatarUrl(contact.name || contact.id || 'User')}
                     />
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
                         <span style={{ fontSize: '16px', fontWeight: '600', color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{contact.name}</span>
@@ -610,24 +621,6 @@ function ChatWindow({
                         </React.Fragment>
                     );
                 })}
-                {engineState?.[contact.id]?.countdownMs > 0 && engineState?.[contact.id]?.isBlocked !== 1 && (
-                    <div className="message-wrapper character" style={{ marginTop: '10px', opacity: 0.7, transition: 'opacity 0.2s' }}>
-                        <div className="message-avatar">
-                            <img
-                                src={resolveAvatarUrl(contact.avatar, apiUrl, contact.name || contact.id || 'User')}
-                                style={{ objectFit: 'cover' }}
-                                alt="Avatar"
-                                onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatarUrl(contact.name || contact.id || 'User'); }}
-                            />
-                        </div>
-                        <div className="message-content">
-                            <div className="message-bubble" style={{ fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <span style={{ display: 'inline-block', width: '12px', height: '12px', boxSizing: 'border-box', border: '2px solid #ddd', borderTopColor: '#888', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></span>
-                                <span>{t('Thinking')} {Math.ceil(engineState[contact.id].countdownMs / 1000)}s</span>
-                            </div>
-                        </div>
-                    </div>
-                )}
                 <div ref={messagesEndRef} />
             </div>
 
@@ -668,14 +661,20 @@ function ChatWindow({
                                     : `\u786E\u5B9A\u6C38\u4E45\u5220\u9664 ${selectedIds.size} \u6761\u6D88\u606F\u5417\uFF1F`; 
                                 if (!confirm(confirmMsg)) return;
                                 try {
+                                    const deletingContactId = contactRef.current?.id;
                                     const res = await fetch(`${apiUrl}/messages/batch-delete`, {
                                         method: 'POST',
                                         headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`, 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ characterId: contactRef.current?.id, messageIds: [...selectedIds] })
+                                        body: JSON.stringify({ characterId: deletingContactId, messageIds: [...selectedIds] })
                                     });
                                     const data = await res.json();
                                     if (data.success) {
-                                        setMessages(prev => prev.filter(m => !selectedIds.has(m.id)));
+                                        [...selectedIds].forEach(id => deletedMessageIdsRef.current.add(`${deletingContactId}:${id}`));
+                                        setMessages(prev => (
+                                            contactRef.current?.id === deletingContactId
+                                                ? prev.filter(m => !selectedIds.has(m.id))
+                                                : prev
+                                        ));
                                         setSelectedIds(new Set());
                                         setSelectMode(false);
                                     }

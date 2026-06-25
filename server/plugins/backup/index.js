@@ -15,9 +15,28 @@ module.exports = function (app, pluginContext) {
     const publicRoot = path.resolve(__dirname, '..', '..', 'public');
     const uploadsRoot = path.resolve(uploadsDir);
 
-    const toUploadRelativePath = (value) => {
+    const toScopedMediaUploadRelativePath = (value, userId) => {
+        const raw = String(value || '').trim();
+        const marker = '/api/media/uploads/';
+        const markerIdx = raw.indexOf(marker);
+        if (markerIdx < 0) return null;
+        const encodedFilename = raw.slice(markerIdx + marker.length).split(/[?#]/, 1)[0];
+        if (!encodedFilename) return null;
+        let filename = encodedFilename;
+        try {
+            filename = decodeURIComponent(encodedFilename);
+        } catch (e) {
+            return null;
+        }
+        if (!filename || filename.includes('\0') || filename.includes('/') || filename.includes('\\') || filename !== path.posix.basename(filename)) return null;
+        return path.join('uploads', 'users', String(userId || 'default'), filename);
+    };
+
+    const toUploadRelativePath = (value, userId = '') => {
         const raw = String(value || '').trim();
         if (!raw) return null;
+        const scopedMediaPath = toScopedMediaUploadRelativePath(raw, userId);
+        if (scopedMediaPath) return scopedMediaPath;
         const marker = '/uploads/';
         const markerIdx = raw.indexOf(marker);
         let rel = null;
@@ -52,13 +71,13 @@ module.exports = function (app, pluginContext) {
         return fullPath;
     };
 
-    const collectUploadReferences = (userDb, sql, mapper = (row) => Object.values(row || {})) => {
+    const collectUploadReferences = (userDb, sql, mapper = (row) => Object.values(row || {}), userId = '') => {
         const refs = new Set();
         try {
             const rows = userDb.prepare(sql).all();
             for (const row of rows) {
                 for (const value of mapper(row)) {
-                    const relPath = toUploadRelativePath(value);
+                    const relPath = toUploadRelativePath(value, userId);
                     if (relPath) refs.add(relPath);
                 }
             }
@@ -66,14 +85,14 @@ module.exports = function (app, pluginContext) {
         return refs;
     };
 
-    const getReferencedUploadsForUser = (dbInstance) => {
+    const getReferencedUploadsForUser = (dbInstance, userId) => {
         const rawDb = typeof dbInstance?.getRawDb === 'function' ? dbInstance.getRawDb() : null;
         if (!rawDb) return [];
         return Array.from(new Set([
-            ...collectUploadReferences(rawDb, 'SELECT avatar, banner FROM user_profile'),
-            ...collectUploadReferences(rawDb, 'SELECT avatar FROM characters'),
-            ...collectUploadReferences(rawDb, 'SELECT avatar FROM group_chats'),
-            ...collectUploadReferences(rawDb, 'SELECT image_url FROM moments'),
+            ...collectUploadReferences(rawDb, 'SELECT avatar, banner FROM user_profile', undefined, userId),
+            ...collectUploadReferences(rawDb, 'SELECT avatar FROM characters', undefined, userId),
+            ...collectUploadReferences(rawDb, 'SELECT avatar FROM group_chats', undefined, userId),
+            ...collectUploadReferences(rawDb, 'SELECT image_url FROM moments', undefined, userId),
         ]));
     };
 
@@ -157,7 +176,7 @@ module.exports = function (app, pluginContext) {
             archive.file(backupPath, { name: 'chatpulse.db' });
 
             // Add only the current user's referenced upload files.
-            for (const relPath of getReferencedUploadsForUser(db)) {
+            for (const relPath of getReferencedUploadsForUser(db, userId)) {
                 const fullPath = resolveUploadReferencePath(relPath);
                 if (!fullPath) continue;
                 if (!fs.existsSync(fullPath)) continue;
@@ -182,20 +201,27 @@ module.exports = function (app, pluginContext) {
                 await memory.wipeIndex(c.id);
             }
 
-            req.db.close();
             const dbPath = req.db.getDbPath();
-            if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
-
             const { userDbCache } = require('../../db');
-            userDbCache.delete(userId);
-            clearMemoryCache(userId);
-
-            // Also clear engine cache so stale DB references are purged
             const { engineCache } = require('../../engine');
+
+            // Stop workers and cached handles before removing the underlying DB files.
+            closeSchedulerDb(userId);
             const oldEngine = engineCache.get(userId);
             if (oldEngine && typeof oldEngine.stopAllTimers === 'function') {
                 oldEngine.stopAllTimers();
             }
+            req.db.close();
+            userDbCache.delete(userId);
+            clearMemoryCache(userId);
+
+            removeFileIfExists(dbPath);
+            removeFileIfExists(`${dbPath}-wal`);
+            removeFileIfExists(`${dbPath}-shm`);
+            removeDirectoryIfExists(path.join(uploadsDir, 'users', String(userId)));
+            removeDirectoryIfExists(path.join(__dirname, '..', '..', 'data', 'tts', String(userId)));
+
+            // Also clear engine cache so stale DB references are purged
             engineCache.delete(userId);
 
             res.json({ success: true });
@@ -206,10 +232,12 @@ module.exports = function (app, pluginContext) {
 
     // ─── IMPORT DATABASE (supports .zip or raw .db) ──────────────────────
     app.post('/api/system/import', authMiddleware, upload.single('db_file'), async (req, res) => {
+        let uploadedPath = req.file?.path || '';
+        let extractedDir = null;
+        let importCompleted = false;
         try {
             if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-            const uploadedPath = req.file.path;
             const userId = req.user.id;
             const memory = getMemory(userId);
             const isZip = req.file.originalname.toLowerCase().endsWith('.zip') ||
@@ -218,7 +246,6 @@ module.exports = function (app, pluginContext) {
             const { engineCache } = require('../../engine');
 
             let dbFilePath = uploadedPath; // For raw .db, use directly
-            let extractedDir = null;
 
             if (isZip) {
                 // Extract zip to a temp directory
@@ -250,7 +277,7 @@ module.exports = function (app, pluginContext) {
                 return res.status(400).json({ error: 'Uploaded file is not a valid SQLite Database.' });
             }
 
-            const currentUploadRefs = getReferencedUploadsForUser(req.db);
+            const currentUploadRefs = getReferencedUploadsForUser(req.db, userId);
 
             // Wipe existing memory indexes
             const characters = req.db.getCharacters();
@@ -283,11 +310,12 @@ module.exports = function (app, pluginContext) {
             fs.copyFileSync(dbFilePath, dbPath);
 
             // Restore uploads from zip if present. Keep the shared temp dir untouched.
+            removeScopedUserUploads(userId);
             if (isZip && extractedDir) {
                 const extractedUploads = path.join(extractedDir, 'uploads');
                 if (fs.existsSync(extractedUploads)) {
                     removeReferencedUploads(currentUploadRefs);
-                    copyDirRecursive(extractedUploads, uploadsDir);
+                    restoreBackupUploadsForUser(extractedUploads, userId);
                     console.log('[Backup] Restored upload files (avatars, images) from backup.');
                 }
             }
@@ -305,6 +333,7 @@ module.exports = function (app, pluginContext) {
 
             // Clean up temp files only after rebuild finishes.
             cleanupTemp(uploadedPath, extractedDir);
+            importCompleted = true;
 
             res.json({
                 success: true,
@@ -312,15 +341,24 @@ module.exports = function (app, pluginContext) {
                 rebuiltMemoryIndexes: restoredCharacters.length
             });
         } catch (e) {
+            if (!importCompleted) cleanupTemp(uploadedPath, extractedDir);
             console.error('[Backup] Import error:', e);
             res.status(500).json({ error: e.message });
         }
     });
 
     // ─── Helpers ─────────────────────────────────────────────────────────
-    function cleanupTemp(filePath, dirPath) {
+    function removeFileIfExists(filePath) {
         try { if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (e) { }
+    }
+
+    function removeDirectoryIfExists(dirPath) {
         try { if (dirPath && fs.existsSync(dirPath)) fs.rmSync(dirPath, { recursive: true, force: true }); } catch (e) { }
+    }
+
+    function cleanupTemp(filePath, dirPath) {
+        removeFileIfExists(filePath);
+        removeDirectoryIfExists(dirPath);
     }
 
     function removeReferencedUploads(relPaths = []) {
@@ -339,6 +377,12 @@ module.exports = function (app, pluginContext) {
         if (!fs.existsSync(tempUploadsDir)) {
             fs.mkdirSync(tempUploadsDir, { recursive: true });
         }
+    }
+
+    function removeScopedUserUploads(userId) {
+        const userUploadDir = path.join(uploadsDir, 'users', String(userId || 'default'));
+        if (userUploadDir === uploadsDir || userUploadDir.startsWith(tempUploadsDir + path.sep)) return;
+        removeDirectoryIfExists(userUploadDir);
     }
 
     function resolveSafeZipEntryPath(outputDir, entryPath) {
@@ -394,6 +438,38 @@ module.exports = function (app, pluginContext) {
                 copyDirRecursive(srcPath, destPath);
             } else {
                 fs.copyFileSync(srcPath, destPath);
+            }
+        }
+    }
+
+    function restoreBackupUploadsForUser(extractedUploads, targetUserId) {
+        if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+        const entries = fs.readdirSync(extractedUploads, { withFileTypes: true });
+        for (const entry of entries) {
+            if (entry.name === 'temp') continue;
+            const srcPath = path.join(extractedUploads, entry.name);
+            if (entry.name === 'users' && entry.isDirectory()) {
+                restoreScopedUserUploads(srcPath, targetUserId);
+                continue;
+            }
+            const destPath = path.join(uploadsDir, entry.name);
+            if (entry.isDirectory()) {
+                copyDirRecursive(srcPath, destPath);
+            } else {
+                fs.copyFileSync(srcPath, destPath);
+            }
+        }
+    }
+
+    function restoreScopedUserUploads(extractedUsersDir, targetUserId) {
+        const targetUserDir = path.join(uploadsDir, 'users', String(targetUserId || 'default'));
+        if (!fs.existsSync(targetUserDir)) fs.mkdirSync(targetUserDir, { recursive: true });
+        const entries = fs.readdirSync(extractedUsersDir, { withFileTypes: true });
+        for (const entry of entries) {
+            if (entry.name === 'temp') continue;
+            const srcPath = path.join(extractedUsersDir, entry.name);
+            if (entry.isDirectory()) {
+                copyDirRecursive(srcPath, targetUserDir);
             }
         }
     }

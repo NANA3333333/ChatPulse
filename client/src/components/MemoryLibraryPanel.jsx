@@ -392,6 +392,7 @@ function MemoryEntryRow({ item, mode = 'category', onRescue, onCharacterClick, o
     } else if (mode === 'forgetting' && item.forgetting_stage === 'expired' && item.grace_expires_at) {
         forgettingTimeLabel = `缓冲已截止 ${formatDateTime(item.grace_expires_at)}`;
     }
+    const deleteActionLabel = mode === 'forgetting' && item.forgetting_stage === 'expired' ? '遗忘' : '删除';
     return (
         <div className={`memory-entry-row ${mode}`}>
             <div className="memory-entry-main">
@@ -432,7 +433,7 @@ function MemoryEntryRow({ item, mode = 'category', onRescue, onCharacterClick, o
                     <Edit2 size={14} /> 编辑
                 </button>
                 <button className="memory-lib-button compact danger" onClick={() => onDelete?.({ type: isNewMemory ? 'new' : 'legacy', item, ids: isNewMemory ? sourceIds : [item.representative_id || item.id] })} disabled={isDeleting}>
-                    <Trash2 size={14} /> {isDeleting ? '删除中' : '删除'}
+                    <Trash2 size={14} /> {isDeleting ? `${deleteActionLabel}中` : deleteActionLabel}
                 </button>
             </div>
         </div>
@@ -1942,9 +1943,14 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
         const label = type === 'new'
             ? `这条新版记忆的 ${safeIds.length} 条承载卡片`
             : `#${item?.id || safeIds[0]}`;
-        if (!window.confirm(`确定删除 ${label} 吗？删除后会从记忆库和 RAG 索引里移除。`)) return;
+        const isManualForget = item?.forgetting_stage === 'expired';
+        const actionText = isManualForget ? '彻底遗忘' : '删除';
+        const confirmText = isManualForget
+            ? `确定彻底遗忘 ${label} 吗？它已经过遗忘缓冲期，操作后会从记忆库和 RAG 索引里移除。`
+            : `确定删除 ${label} 吗？删除后会从记忆库和 RAG 索引里移除。`;
+        if (!window.confirm(confirmText)) return;
         setDeletingIds(prev => Array.from(new Set([...prev, ...safeIds])));
-        setNotice(`正在彻底删除 ${formatNumber(safeIds.length)} 条承载卡片和对应 RAG 索引...`);
+        setNotice(`正在${actionText} ${formatNumber(safeIds.length)} 条承载卡片和对应 RAG 索引...`);
         try {
             const res = await fetch(`${apiUrl}/memories/bulk`, {
                 method: 'DELETE',
@@ -1956,10 +1962,10 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
             const indexWarning = data.index_deleted === false
                 ? '；但当前向量索引服务不可用，索引残留会在下次索引修复/重建时清理'
                 : '，并移除对应 RAG 索引';
-            setNotice(`已彻底删除 ${formatNumber(data.deleted || 0)} / ${formatNumber(safeIds.length)} 条承载卡片${indexWarning}。列表正在刷新。`);
+            setNotice(`已${actionText} ${formatNumber(data.deleted || 0)} / ${formatNumber(safeIds.length)} 条承载卡片${indexWarning}。列表正在刷新。`);
             await loadData();
         } catch (e) {
-            alert(`删除记忆失败：${e.message}`);
+            alert(`${actionText}记忆失败：${e.message}`);
         } finally {
             setDeletingIds(prev => prev.filter(id => !safeIds.includes(Number(id))));
         }
