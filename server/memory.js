@@ -382,7 +382,7 @@ function getMemory(userId) {
                 ? '- 当前输入是 group_chat：每行可见说话人就是主语；群友的“我/I”只属于该群友，不能合并成 User。'
                 : sourceContext === 'private_chat'
                     ? `- 当前输入是 private_chat："User:" 行属于真实用户，"${characterName}:" 行属于 ${characterName}；每行里的“我/I”只属于该行说话人。`
-                    : `- 当前输入可能混合 private_chat / group_chat / commercial_street / moment：必须先按来源前缀判断主语，再写记忆。`;
+                    : `- 当前输入可能混合 private_chat / group_chat / commercial_street：必须先按来源前缀判断主语，再写记忆。`;
         return `SUBJECT / PERSON RULES (hard):
 - "User"、"用户"、"Nana" 只表示真实用户；"${characterName}"、"当前角色"、"角色" 表示这个角色本人。
 ${contextLine}
@@ -1732,7 +1732,6 @@ ${contextLine}
         ['便利店', 'convenience store', 'store'],
         ['公园', 'park'],
         ['群聊', 'group chat', 'group'],
-        ['朋友圈', 'moment', 'moments'],
         ['日记', 'diary'],
         ['密码', 'password'],
         ['红包', '转账', 'red packet', 'transfer'],
@@ -3319,15 +3318,6 @@ ${deltaText}`;
             });
         }
 
-        const moments = db.getMomentsSince(character.id, sinceMs);
-        moments.forEach((m) => {
-            const author = m.character_id === 'user' ? 'User' : (db.getCharacter(m.character_id)?.name || m.character_id);
-            activityEntries.push({
-                timestamp: m.created_at || m.timestamp || 0,
-                text: `[Moment][moment] ${author}: ${m.content}`
-            });
-        });
-
         try {
             const initCityDb = require('./plugins/city/cityDb');
             const cityDb = initCityDb(typeof db.getRawDb === 'function' ? db.getRawDb() : db);
@@ -3361,7 +3351,7 @@ ${universalResult?.preamble || ''}
 
 [Current Task]
 You are a memory aggregation assistant. Analyze batch ${batchIndex + 1} of ${totalBatches} from ${character.name}'s daily activity log over the past ${hoursAgo} hours.
-This chunk may include private chats with User, group chats, social media moments, and city activities.
+This chunk may include private chats with User, group chats, and city activities.
 Identify noteworthy events, facts, relationship developments, preferences, plans, emotional shifts, or recurring themes worth remembering long-term.
 Return a structured JSON ARRAY of memory objects.
 
@@ -3383,7 +3373,7 @@ IMPORTANT:
   - "active" for currently relevant but more temporary memories
   - "ambient" for lower-priority fragments
 - Treat repeated confessions, direct affection, explicit "I like/love you", relationship confirmation, or clear emotional demands toward the character as key relationship nodes. These should usually be stored as "memory_focus": "relationship" and "memory_tier": "core".
-- Choose "source_context" and "scene_tag" from the source prefix: private_chat, group_chat, commercial_street, moment, diary, external_app, or unknown.
+- Choose "source_context" and "scene_tag" from the source prefix: private_chat, group_chat, commercial_street, diary, external_app, or unknown.
 - For city/commercial-street logs, output source_context="commercial_street" and scene_tag="commercial_street"; do not rewrite the character's city action as a User action.
 
 Importance scale:
@@ -3413,8 +3403,8 @@ Output exactly in this JSON format (and nothing else):
     "items": ["..."],
     "emotion": "...",
     "importance": <number 1-10>,
-    "source_context": "private_chat | group_chat | commercial_street | moment | diary | external_app | unknown",
-    "scene_tag": "private_chat | group_chat | commercial_street | moment | diary | external_app | unknown"
+    "source_context": "private_chat | group_chat | commercial_street | diary | external_app | unknown",
+    "scene_tag": "private_chat | group_chat | commercial_street | diary | external_app | unknown"
   }
 ]`;
 
@@ -3491,19 +3481,7 @@ Output exactly in this JSON format (and nothing else):
             }
         }
 
-        // 3. Moments
-        const moments = db.getMomentsSince(character.id, sinceMs);
-        if (moments.length > 0) {
-            moments.forEach((m) => {
-                const author = m.character_id === 'user' ? 'User' : (db.getCharacter(m.character_id)?.name || m.character_id);
-                activityEntries.push({
-                    timestamp: m.created_at || m.timestamp || 0,
-                    text: `[Moment][moment] ${author}: ${m.content}`
-                });
-            });
-        }
-
-        // 4. City Logs
+        // 3. City Logs
         try {
             const initCityDb = require('./plugins/city/cityDb');
             const cityDb = initCityDb(typeof db.getRawDb === 'function' ? db.getRawDb() : db);
@@ -3538,7 +3516,7 @@ ${universalResult?.preamble || ''}
 
 [当前特殊任务]：
 You are a memory aggregation assistant. Analyze the following daily activity log of ${character.name} from the past ${hoursAgo} hours.
-This includes private chats with User, group chats, social media moments, and personal city activities.
+This includes private chats with User, group chats, and personal city activities.
 Identify noteworthy events, facts, relationship developments, or emotional shifts worth remembering long-term.
 Return a structured JSON ARRAY of memory objects.
 
@@ -3551,7 +3529,7 @@ IMPORTANT: Even these count as valid memories:
 - New information shared
 - Jokes, teasing, or tone shifts
 - Routine city activity logs should usually be skipped unless they affect emotion, relationships, scarcity, safety, or future plans.
-- Choose "source_context" and "scene_tag" from the source prefix: private_chat, group_chat, commercial_street, moment, diary, external_app, or unknown.
+- Choose "source_context" and "scene_tag" from the source prefix: private_chat, group_chat, commercial_street, diary, external_app, or unknown.
 - For city/commercial-street logs, output source_context="commercial_street" and scene_tag="commercial_street"; do not rewrite the character's city action as a User action.
 
 Importance scale:
@@ -3569,9 +3547,6 @@ ${privateText}
 
 [Group Chats]
 ${groupText}
-
-[Moments (Social Media)]
-${momentText}
 
 [City Activities]
 ${cityText}
@@ -3591,8 +3566,8 @@ Output exactly in this JSON format (and nothing else):
     "items": ["..."],
     "emotion": "...",
     "importance": <number 1-10>,
-    "source_context": "private_chat | group_chat | commercial_street | moment | diary | external_app | unknown",
-    "scene_tag": "private_chat | group_chat | commercial_street | moment | diary | external_app | unknown"
+    "source_context": "private_chat | group_chat | commercial_street | diary | external_app | unknown",
+    "scene_tag": "private_chat | group_chat | commercial_street | diary | external_app | unknown"
   }
 ]
 `;

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { X, CheckCircle2, Search } from 'lucide-react';
-import AuthenticatedImage from './AuthenticatedImage';
+import AvatarWithFrame from './AvatarWithFrame';
 import { useLanguage } from '../LanguageContext';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 
@@ -42,8 +42,8 @@ function CreateGroupModal({ apiUrl, contacts, onClose, onCreate }) {
     const filtered = contacts.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()));
 
     return (
-        <div className="modal-overlay">
-            <div className="modal-content" style={{ maxWidth: '420px', padding: 0 }}>
+        <div className="modal-overlay chat-modal-overlay create-group-modal-overlay">
+            <div className="modal-content chat-action-modal create-group-modal" style={{ maxWidth: '420px', padding: 0 }}>
                 <div style={{ padding: '15px 20px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ fontSize: '16px', fontWeight: '500' }}>
                         {lang === 'en' ? 'Create Group Chat' : '发起群聊'}
@@ -77,6 +77,7 @@ function CreateGroupModal({ apiUrl, contacts, onClose, onCreate }) {
                         {filtered.map(c => (
                             <div
                                 key={c.id}
+                                className={`chat-modal-list-row ${selectedIds.includes(c.id) ? 'is-selected' : ''}`}
                                 onClick={() => toggleSelect(c.id)}
                                 style={{
                                     display: 'flex', alignItems: 'center', padding: '8px',
@@ -85,7 +86,14 @@ function CreateGroupModal({ apiUrl, contacts, onClose, onCreate }) {
                                     borderRadius: '6px'
                                 }}
                             >
-                                <AuthenticatedImage src={resolveAvatarUrl(c.avatar, apiUrl, c.name || c.id || 'User')} fallbackSrc={defaultAvatarUrl(c.name || c.id || 'User')} alt={c.name} style={{ width: '36px', height: '36px', borderRadius: '50%', marginRight: '10px', objectFit: 'cover' }} />
+                                <AvatarWithFrame
+                                    size={36}
+                                    frame={c.avatar_frame}
+                                    src={resolveAvatarUrl(c.avatar, apiUrl, c.name || c.id || 'User')}
+                                    fallbackSrc={defaultAvatarUrl(c.name || c.id || 'User')}
+                                    alt={c.name}
+                                    style={{ marginRight: '10px' }}
+                                />
                                 <div style={{ flex: 1, fontWeight: '500', fontSize: '14px' }}>{c.name}</div>
                                 {selectedIds.includes(c.id) && <CheckCircle2 size={18} color="var(--accent-color)" />}
                             </div>

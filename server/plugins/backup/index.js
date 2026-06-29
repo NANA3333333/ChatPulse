@@ -92,7 +92,6 @@ module.exports = function (app, pluginContext) {
             ...collectUploadReferences(rawDb, 'SELECT avatar, banner FROM user_profile', undefined, userId),
             ...collectUploadReferences(rawDb, 'SELECT avatar FROM characters', undefined, userId),
             ...collectUploadReferences(rawDb, 'SELECT avatar FROM group_chats', undefined, userId),
-            ...collectUploadReferences(rawDb, 'SELECT image_url FROM moments', undefined, userId),
         ]));
     };
 

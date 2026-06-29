@@ -116,12 +116,12 @@ function AddCharacterModal({ isOpen, onClose, onAdd, apiUrl }) {
     };
 
     return (
-        <div className="modal-overlay" style={{
+        <div className="modal-overlay chat-modal-overlay add-character-modal-overlay" style={{
             position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
             backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex',
             justifyContent: 'center', alignItems: 'center', zIndex: 1000
         }}>
-            <div className="modal-content" style={{
+            <div className="modal-content chat-action-modal add-character-modal" style={{
                 backgroundColor: '#fff', padding: '20px', borderRadius: '8px',
                 width: '500px', maxWidth: '90%', maxHeight: '90vh', overflowY: 'auto'
             }}>

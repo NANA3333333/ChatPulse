@@ -40,11 +40,16 @@
     (function () {
       try {
         var url = new URL(window.location.href);
+        [
+          'cp_custom_css',
+          'cp_theme_config',
+          'cp_theme'
+        ].forEach(function (key) {
+          localStorage.removeItem(key);
+        });
+
         if (url.searchParams.get('resetLocalState') === '1') {
           [
-            'cp_custom_css',
-            'cp_theme_config',
-            'cp_theme',
             'cp_avatar',
             'pixelWorld.commercialStreetV2.layout'
           ].forEach(function (key) {
@@ -52,23 +57,6 @@
           });
           url.searchParams.delete('resetLocalState');
           window.history.replaceState({}, '', url.pathname + url.search + url.hash);
-        }
-
-        var theme = localStorage.getItem('cp_theme');
-        if (theme) document.documentElement.setAttribute('data-theme', theme);
-        var themeConfig = localStorage.getItem('cp_theme_config');
-        if (themeConfig) {
-          var config = JSON.parse(themeConfig);
-          for (var key in config) {
-            if (key.startsWith('--')) document.documentElement.style.setProperty(key, config[key]);
-          }
-        }
-        var customCss = localStorage.getItem('cp_custom_css');
-        if (customCss) {
-          var style = document.createElement('style');
-          style.id = 'chatpulse-custom-css';
-          style.innerHTML = customCss;
-          document.head.appendChild(style);
         }
       } catch (e) { }
     })();

@@ -41,7 +41,6 @@ const INTEGER_CONFIG_RANGES = {
     city_global_log_limit: [0, MAX_CITY_CONFIG_LOG_LIMIT],
     city_stranger_meet_prob: [0, 100],
     city_chat_probability: [0, 100],
-    city_moment_probability: [0, 100],
     city_diary_probability: [0, 100],
     mayor_interval_hours: [1, MAX_CITY_CONFIG_INTERVAL_HOURS],
     city_time_offset_days: [-MAX_CITY_CONFIG_TIME_OFFSET_DAYS, MAX_CITY_CONFIG_TIME_OFFSET_DAYS]

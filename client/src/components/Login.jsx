@@ -16,15 +16,6 @@ const WORDMARK_SLICES = [
 
 const pixelAsset = (fileName) => `${PIXEL_ASSET_BASE}/${fileName}`;
 
-function PixelText({ fileName, text, className = '' }) {
-    return (
-        <>
-            <img className={className} src={pixelAsset(fileName)} alt="" aria-hidden="true" />
-            <span className="sr-only">{text}</span>
-        </>
-    );
-}
-
 function PixelWordmark() {
     return (
         <span className="login-wordmark-main" aria-label="ChatPulse" role="img">
@@ -111,11 +102,7 @@ function Login({ apiUrl }) {
                                 className={!isRegistering ? 'active' : ''}
                                 onClick={() => { setIsRegistering(false); setError(''); }}
                             >
-                                <PixelText
-                                    fileName={!isRegistering ? 'text-login-soft-active.png' : 'text-login-soft-idle.png'}
-                                    text="登录"
-                                    className="login-tab-text-img"
-                                />
+                                <span className="login-tab-text">登录</span>
                             </button>
                             <button
                                 type="button"
@@ -124,18 +111,14 @@ function Login({ apiUrl }) {
                                 className={isRegistering ? 'active' : ''}
                                 onClick={() => { setIsRegistering(true); setError(''); }}
                             >
-                                <PixelText
-                                    fileName={isRegistering ? 'text-register-soft-active.png' : 'text-register-soft-idle.png'}
-                                    text="注册"
-                                    className="login-tab-text-img"
-                                />
+                                <span className="login-tab-text">注册</span>
                             </button>
                         </div>
 
                         <form className="login-form" onSubmit={handleSubmit}>
                             <div className="input-group">
                                 <label htmlFor="login-username">
-                                    <PixelText fileName="label-account.png" text="账号" className="login-label-img" />
+                                    <span className="login-label-text">账号</span>
                                 </label>
                                 <div className="login-input-shell is-account">
                                     <input
@@ -148,13 +131,13 @@ function Login({ apiUrl }) {
                                         placeholder="输入你的账号"
                                     />
                                     <span className="login-placeholder-img" aria-hidden="true">
-                                        <img src={pixelAsset('placeholder-account.png')} alt="" />
+                                        输入你的账号
                                     </span>
                                 </div>
                             </div>
                             <div className="input-group">
                                 <label htmlFor="login-password">
-                                    <PixelText fileName="label-password.png" text="密码" className="login-label-img" />
+                                    <span className="login-label-text">密码</span>
                                 </label>
                                 <div className="login-input-shell is-password">
                                     <input
@@ -167,7 +150,7 @@ function Login({ apiUrl }) {
                                         placeholder="输入密码"
                                     />
                                     <span className="login-placeholder-img" aria-hidden="true">
-                                        <img src={pixelAsset('placeholder-password.png')} alt="" />
+                                        输入密码
                                     </span>
                                 </div>
                             </div>
@@ -175,12 +158,8 @@ function Login({ apiUrl }) {
                             {isRegistering && (
                                 <div className="input-group">
                                     <label htmlFor="login-invite">
-                                        <PixelText fileName="label-invite.png" text="邀请码" className="login-label-img" />
-                                        <PixelText
-                                            fileName="hint-required.png"
-                                            text="注册时必填"
-                                            className="login-hint-img"
-                                        />
+                                        <span className="login-label-text">邀请码</span>
+                                        <span className="login-hint-text">注册时必填</span>
                                     </label>
                                     <div className="login-input-shell is-invite">
                                         <input
@@ -192,7 +171,7 @@ function Login({ apiUrl }) {
                                             required
                                         />
                                         <span className="login-placeholder-img" aria-hidden="true">
-                                            <img src={pixelAsset('placeholder-invite.png')} alt="" />
+                                            输入邀请码
                                         </span>
                                     </div>
                                 </div>
@@ -209,11 +188,9 @@ function Login({ apiUrl }) {
                                     </span>
                                 ) : (
                                     <>
-                                        <PixelText
-                                            fileName={isRegistering ? 'button-register-pixel-white.png' : 'button-login-pixel-white.png'}
-                                            text={isRegistering ? '注册' : '登录'}
-                                            className="login-submit-text-img"
-                                        />
+                                        <span className="login-submit-text">
+                                            {isRegistering ? '注册' : '登录'}
+                                        </span>
                                         <span className="login-submit-pips" aria-hidden="true">
                                             <i></i>
                                             <i></i>

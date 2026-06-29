@@ -176,7 +176,7 @@ async function buildPromptPair({ db, userId, group, char }) {
         '3. Output reply text only. Do not prefix your own name.',
         `4. Use @Name only if you want an immediate reply. Mentionable: @${userName}${mentionableNames ? ' / ' + mentionableNames : ''}`,
         '5. Red packet reactions stay in role.',
-        '6. Optional hidden tags: [CHAR_AFFINITY:id:+3], [REDPACKET_SEND:lucky|50|5|新年快乐], [MOMENT:内容], [MOMENT_LIKE:MomentID], [MOMENT_COMMENT:MomentID:评论内容]'
+        '6. Optional hidden tags: [CHAR_AFFINITY:id:+3], [REDPACKET_SEND:lucky|50|5|新年快乐]'
     ].join('\n');
 
     const groupConversationDigest = typeof db.getGroupConversationDigest === 'function'

@@ -2206,7 +2206,7 @@ function hasExternalMemorySourceSignal(row = {}) {
 
 function inferMemorySourceContext(row = {}) {
     const existing = String(row.source_context || '').trim();
-    if (existing === 'diary' || existing === 'moment') return 'unknown';
+    if (existing === 'diary') return 'unknown';
     if (existing === 'external_app') {
         return hasExternalMemorySourceSignal(row) ? 'external_app' : 'unknown';
     }
@@ -2225,13 +2225,13 @@ function inferMemorySourceContext(row = {}) {
     if (hasExternalMemorySourceSignal(row)) return 'external_app';
     if (ids.some(id => /^city:/i.test(id)) || /(商业街|city activity|商业街行动|商业街活动|街区|公告任务|工厂|厂区|工头|工服|领工钱|日结|仓储区|堆货区|签到处|便利店|餐厅|公园|长椅|回家|出租屋)/i.test(text)) return 'commercial_street';
     if (row.group_id || ids.some(id => /^group:/i.test(id)) || /(群聊|group_chat|group message)/i.test(text)) return 'group_chat';
-    if (ids.some(id => /^diary:/i.test(id) || /^moment:/i.test(id))) return 'unknown';
+    if (ids.some(id => /^diary:/i.test(id))) return 'unknown';
     return 'private_chat';
 }
 
 function inferMemorySceneTag(row = {}, context = inferMemorySourceContext(row)) {
     const existing = String(row.scene_tag || '').trim();
-    if (existing === 'diary' || existing === 'moment') return 'other';
+    if (existing === 'diary') return 'other';
     if (/^external_/i.test(existing) && context !== 'external_app') return 'other';
     if (existing === 'external_app' && context !== 'external_app') return 'other';
     if (MEMORY_SCENE_TAGS.has(existing)) return existing;

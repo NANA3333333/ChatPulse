@@ -57,18 +57,19 @@ test('settings backup download does not put auth tokens in URLs', () => {
     assert.match(settingsPanel, /Authorization['"]?\s*:\s*`Bearer \$\{localStorage\.getItem\('cp_token'\) \|\| ''\}`/, 'backup fetch must send the cp_token authorization header');
 });
 
-test('settings theme guide download sends auth headers', () => {
+test('retired theme editor surfaces are not exposed', () => {
     const settingsPanel = readRepoFile('client', 'src', 'components', 'SettingsPanel.jsx');
+    const app = readRepoFile('client', 'src', 'App.jsx');
+    const dbSource = readRepoFile('server', 'db.js');
 
-    assert.doesNotMatch(settingsPanel, /href=\{`\$\{apiUrl\}\/theme-guide`\}/, 'theme guide download must not use an unauthenticated anchor href');
-    assert.match(settingsPanel, /fetch\(`\$\{apiUrl\}\/theme-guide`,\s*\{[\s\S]*Authorization['"]?\s*:\s*`Bearer \$\{localStorage\.getItem\('cp_token'\) \|\| ''\}`/, 'theme guide fetch must send the cp_token authorization header');
-    assert.match(settingsPanel, /downloadAnchorNode\.download = 'chatpulse-theme-prompt\.txt'/, 'theme guide download filename should stay stable');
+    assert.doesNotMatch(settingsPanel, /Visual Theme Editor|主题样式编辑器|theme-guide|theme\/generate|handleSaveTheme|handleGenerateTheme/, 'settings should not expose the retired theme editor');
+    assert.doesNotMatch(app, /userProfile\.custom_css|userProfile\.theme_config|setAttribute\('data-theme', userProfile\.theme\)/, 'app should not apply user-driven theme overrides');
+    assert.doesNotMatch(dbSource, /allowedFields = \[[^\]]*theme[^\]]*\]/, 'profile updates should not accept retired theme fields');
 });
 
 test('social and drawer panels send auth to protected APIs', () => {
     const addCharacterModal = readRepoFile('client', 'src', 'components', 'AddCharacterModal.jsx');
     const createGroupModal = readRepoFile('client', 'src', 'components', 'CreateGroupModal.jsx');
-    const momentsFeed = readRepoFile('client', 'src', 'components', 'MomentsFeed.jsx');
     const diaryTable = readRepoFile('client', 'src', 'components', 'DiaryTable.jsx');
     const recommendModal = readRepoFile('client', 'src', 'components', 'RecommendModal.jsx');
     const chatSettingsDrawer = readRepoFile('client', 'src', 'components', 'ChatSettingsDrawer.jsx');
@@ -77,13 +78,6 @@ test('social and drawer panels send auth to protected APIs', () => {
     assert.match(addCharacterModal, /fetch\(`\$\{apiUrl\}\/characters\/generate`,\s*\{[\s\S]*headers: authJsonHeaders/, 'character generation should send auth and JSON headers');
     assert.match(addCharacterModal, /fetch\(`\$\{apiUrl\}\/models`,\s*\{[\s\S]*headers: authJsonHeaders/, 'add-character model lookup should send auth and JSON headers');
     assert.match(createGroupModal, /fetch\(`\$\{apiUrl\}\/groups`,\s*\{[\s\S]*headers: authJsonHeaders/, 'group creation should send auth and JSON headers');
-
-    assert.match(momentsFeed, /fetch\(`\$\{apiUrl\}\/characters`, \{ headers: authOnlyHeaders \}\)/, 'moments character preload should send auth');
-    assert.match(momentsFeed, /fetch\(`\$\{apiUrl\}\/moments`, \{ headers: authOnlyHeaders \}\)/, 'moments list should send auth');
-    assert.match(momentsFeed, /fetch\(`\$\{apiUrl\}\/moments`,\s*\{[\s\S]*headers: authJsonHeaders/, 'moment creation should send auth and JSON headers');
-    assert.match(momentsFeed, /fetch\(`\$\{apiUrl\}\/moments\/\$\{id\}\/like`,\s*\{[\s\S]*headers: authJsonHeaders/, 'moment likes should send auth and JSON headers');
-    assert.match(momentsFeed, /fetch\(`\$\{apiUrl\}\/moments\/\$\{momentId\}\/comment`,\s*\{[\s\S]*headers: authJsonHeaders/, 'moment comments should send auth and JSON headers');
-    assert.doesNotMatch(momentsFeed, /fetch\(`\$\{apiUrl\}\/moments`\)/, 'moments should not use naked protected fetch calls');
 
     assert.match(diaryTable, /fetch\(`\$\{apiUrl\}\/diaries\/\$\{contactId\}`,\s*\{\s*headers:\s*authOnlyHeaders,\s*signal:\s*controller\.signal\s*\}\)/, 'diary reads should send auth and allow cancellation');
     assert.match(diaryTable, /fetch\(`\$\{apiUrl\}\/diaries\/\$\{contactId\}\/unlock`,\s*\{[\s\S]*headers: authJsonHeaders/, 'diary unlock should send auth and JSON headers');
@@ -457,7 +451,6 @@ test('public mode CORS, rate limits, uploads, and queue stats are scoped for hos
 test('default user and character APIs redact user-owned API keys without wiping saved secrets', () => {
     const serverIndex = readRepoFile('server', 'index.js');
     const settingsPanel = readRepoFile('client', 'src', 'components', 'SettingsPanel.jsx');
-    const themePlugin = readRepoFile('server', 'plugins', 'theme', 'index.js');
     const memoryMaintenanceService = readRepoFile('server', 'memoryMaintenanceService.js');
 
     assert.match(serverIndex, /const CHARACTER_SECRET_FIELDS = \['api_key', 'memory_api_key', 'tts_api_key'\]/, 'character list should define redacted secret fields');
@@ -474,9 +467,6 @@ test('default user and character APIs redact user-owned API keys without wiping 
     assert.match(settingsPanel, /const getSecretPlaceholder[\s\S]*已保存：\$\{last4\}[\s\S]*留空保留，输入新 Key 替换/, 'settings editor should show saved-key state instead of a blank secret field');
     assert.match(settingsPanel, /const renderSecretStatus[\s\S]*markEditingSecretClear\(field\)/, 'settings editor should expose an explicit clear action for saved keys');
     assert.match(settingsPanel, /\/characters\/\$\{encodeURIComponent\(options\.characterId\)\}\/models/, 'settings editor should fetch models through the saved-character-key route when available');
-    assert.match(settingsPanel, /if \(!endpoint \|\| \(!key && !characterId\) \|\| !model\)/, 'theme generation should allow saved character keys without front-end plaintext');
-    assert.match(settingsPanel, /character_id: characterId/, 'theme generation should pass the selected character id for saved-key lookup');
-    assert.match(themePlugin, /const \{ query, character_id \} = req\.body[\s\S]*req\.db\.getCharacter\(character_id\)[\s\S]*api_key = api_key \|\| character\?\.api_key/, 'theme generation should resolve saved character keys server-side');
     assert.match(memoryMaintenanceService, /function redactMemoryMaintenanceSettings\(settings = \{\}\)[\s\S]*api_key: apiKey \? `••••\$\{apiKey\.slice\(-4\)\}` : ''/, 'memory maintenance settings should return a masked key');
     assert.match(memoryMaintenanceService, /isMaskedSecretInput\(safeBody\.api_key\)[\s\S]*delete safeBody\.api_key/, 'saving masked memory maintenance keys should preserve the stored value');
 });
@@ -700,13 +690,7 @@ test('private transfer routes validate ids and targets before wallet side effect
 test('interactive HTTP routes do not trust client-supplied actor ids', () => {
     const serverIndex = readRepoFile('server', 'index.js');
     const economyPlugin = readRepoFile('server', 'plugins', 'economy', 'index.js');
-    const momentsFeed = readRepoFile('client', 'src', 'components', 'MomentsFeed.jsx');
     const groupChatWindow = readRepoFile('client', 'src', 'components', 'GroupChatWindow.jsx');
-
-    assert.match(serverIndex, /db\.toggleLike\(moment\.id, 'user'\)/, 'moment likes should always use the authenticated user actor');
-    assert.match(serverIndex, /db\.addComment\(moment\.id, 'user', comment\)/, 'moment comments should always use the authenticated user actor');
-    assert.doesNotMatch(serverIndex, /const \{ liker_id \} = req\.body/, 'moment like route must not trust a request-body liker id');
-    assert.doesNotMatch(serverIndex, /const \{ author_id, content \} = req\.body/, 'moment comment route must not trust a request-body author id');
 
     assert.match(economyPlugin, /const claimer_id = 'user';[\s\S]*db\.claimTransfer\(transferId, claimer_id\)/, 'transfer claim should always use the authenticated user actor');
     assert.match(economyPlugin, /const refunder_id = 'user';[\s\S]*db\.refundTransfer\(tid, refunder_id\)/, 'transfer refund should always use the authenticated user actor');
@@ -715,59 +699,75 @@ test('interactive HTTP routes do not trust client-supplied actor ids', () => {
     assert.doesNotMatch(economyPlugin, /const \{ claimer_id = 'user' \} = req\.body/, 'economy routes must not trust request-body claimer ids');
     assert.doesNotMatch(economyPlugin, /const \{ sender_id = 'user'/, 'red packet creation must not trust request-body sender ids');
 
-    assert.doesNotMatch(momentsFeed, /liker_id: 'user'|author_id: 'user'/, 'moments UI should not send spoofable actor ids');
     assert.doesNotMatch(groupChatWindow, /claimer_id: 'user'/, 'red packet UI should not send spoofable actor ids');
 });
 
-test('moments routes validate ids and protect character-authored posts', () => {
+test('moments feature stays removed from active code paths', () => {
     const serverIndex = readRepoFile('server', 'index.js');
     const dbSource = readRepoFile('server', 'db.js');
     const engineSource = readRepoFile('server', 'engine.js');
     const groupChat = readRepoFile('server', 'plugins', 'groupChat', 'index.js');
+    const appSource = readRepoFile('client', 'src', 'App.jsx');
+    const settingsPanel = readRepoFile('client', 'src', 'components', 'SettingsPanel.jsx');
+    const chatSettingsDrawer = readRepoFile('client', 'src', 'components', 'ChatSettingsDrawer.jsx');
+    const memoTable = readRepoFile('client', 'src', 'components', 'MemoTable.jsx');
+    const languageContext = readRepoFile('client', 'src', 'LanguageContext.jsx');
+    const cleanupScript = readRepoFile('scripts', 'remove-moments-data.js');
 
-    assert.match(dbSource, /function normalizePositiveRowId\(value, label = 'id'\)/, 'shared social row ids should be normalized defensively');
-    assert.match(dbSource, /function getMoment\(momentId\)/, 'DB should expose a safe moment lookup helper');
-    assert.match(dbSource, /return db\.prepare\('SELECT \* FROM moments WHERE id = \? LIMIT 1'\)\.get\(id\) \|\| null/, 'moment lookup should use a normalized id');
-    assert.match(dbSource, /function addMoment\(characterId, content, imageUrl = null, visibility = 'all'\)[\s\S]*const authorId = String\(characterId \|\| ''\)\.trim\(\);[\s\S]*Moment author not found[\s\S]*Moment content required[\s\S]*\.run\(authorId, safeContent, imageUrl, visibility, Date\.now\(\)\)/, 'moment writes should reject ghost authors and blank or non-string content at the DB layer');
-    assert.match(dbSource, /function deleteMoment\(momentId\)[\s\S]*const info = db\.prepare\('DELETE FROM moments WHERE id = \?'\)\.run\(id\)[\s\S]*return info\.changes \|\| 0/, 'moment deletion should report whether a row was actually removed');
-    assert.match(dbSource, /function normalizeSocialActorId\(actorId, label = 'actor'\)[\s\S]*id !== 'user' && !getCharacter\(id\)[\s\S]*throw error[\s\S]*return id/, 'social actors should be limited to the user or real characters');
-    assert.match(dbSource, /function toggleLike\(momentId, likerId\)[\s\S]*SELECT id FROM moments WHERE id = \? LIMIT 1[\s\S]*Moment not found[\s\S]*const actorId = normalizeSocialActorId\(likerId, 'Moment liker'\)[\s\S]*\.run\(id, actorId, Date\.now\(\)\)/, 'likes should reject missing moments and ghost likers');
-    assert.doesNotMatch(dbSource, /INSERT INTO moment_likes\(moment_id,liker_id,timestamp\) VALUES\(\?,\?,\?\)'\)\.run\(id, likerId, Date\.now\(\)\)/, 'likes must not persist raw liker ids');
-    assert.match(dbSource, /function addComment\(momentId, authorId, content\)[\s\S]*SELECT id FROM moments WHERE id = \? LIMIT 1[\s\S]*Moment not found[\s\S]*const actorId = normalizeSocialActorId\(authorId, 'Moment comment author'\)[\s\S]*const comment = typeof content === 'string' \? content\.trim\(\) : '';[\s\S]*\.run\(id, actorId, comment, Date\.now\(\)\)/, 'comments should reject missing moments, ghost authors, and non-string content');
-    assert.doesNotMatch(dbSource, /const comment = String\(content \|\| ''\)\.trim\(\)/, 'comments must not coerce objects into [object Object] content');
+    assert.equal(
+        fs.existsSync(path.join(repoRoot, 'client', 'src', 'components', 'MomentsFeed.jsx')),
+        false,
+        'moments feed component should stay deleted'
+    );
+    assert.doesNotMatch(
+        serverIndex,
+        /\/api\/moments|moment_update|db\.addMoment|db\.getMoments|db\.toggleLike\(moment|db\.addComment\(moment/,
+        'server routes should not expose or broadcast moments'
+    );
+    assert.doesNotMatch(
+        dbSource,
+        /CREATE TABLE IF NOT EXISTS moments|moment_likes|moment_comments|function (?:getMoment|addMoment|deleteMoment|toggleLike|getLikesForMoment|addComment|getComments|getMoments|getCharacterMoments|clearMoments|clearMomentInteractions|getMomentsContextForChar)|moments_token_limit|moments_reaction_rate|last_moment_at/,
+        'active user DB schema and helpers should not recreate moments'
+    );
+    assert.doesNotMatch(
+        engineSource,
+        /db\.addMoment|db\.toggleLike|db\.addComment\(parseInt\(mCommentMatch|moment_update|validateGeneratedMomentInteractions/,
+        'private AI side effects should not write moments'
+    );
+    assert.doesNotMatch(
+        groupChat,
+        /db\.addMoment|db\.toggleLike|db\.addComment\(parseInt\(mCommentMatch|moment_update|validateGeneratedMomentInteractions|broadcastMomentUpdate/,
+        'group AI side effects should not write moments'
+    );
+    assert.doesNotMatch(
+        [appSource, settingsPanel, chatSettingsDrawer, memoTable, languageContext].join('\n'),
+        /MomentsFeed|\/moments|moment_update|朋友圈|Moments|No moments|moments_token_limit|moments_reaction_rate/,
+        'frontend should not expose moments UI, copy, or settings'
+    );
+    assert.match(cleanupScript, /moments-removal-\$\{stamp\}/, 'manual cleanup must create a timestamped backup folder');
+    assert.match(cleanupScript, /DELETE FROM scheduled_tasks WHERE action_type = 'moment'/, 'manual cleanup should remove old moment scheduler rows');
+    assert.match(cleanupScript, /DELETE FROM city_config WHERE key = 'city_moment_probability'/, 'manual cleanup should remove old city moments config');
+    assert.match(cleanupScript, /for \(const tableName of \['moment_likes', 'moment_comments', 'moments'\]\)[\s\S]*DROP TABLE/, 'manual cleanup should drop legacy moments tables');
+});
+
+test('diary routes validate ids and protect unlock writes', () => {
+    const serverIndex = readRepoFile('server', 'index.js');
+    const dbSource = readRepoFile('server', 'db.js');
+    const engineSource = readRepoFile('server', 'engine.js');
+
+    assert.match(dbSource, /function normalizePositiveRowId\(value, label = 'id'\)/, 'diary row ids should be normalized defensively');
     assert.match(dbSource, /function addDiary\(characterId, content, emotion = null\)[\s\S]*const authorId = String\(characterId \|\| ''\)\.trim\(\);[\s\S]*Diary author not found[\s\S]*Diary content required[\s\S]*\.run\(authorId, safeContent, emotion, Date\.now\(\)\)/, 'diary writes should reject ghost authors and blank or non-string content at the DB layer');
     assert.match(dbSource, /function deleteDiary\(diaryId\)[\s\S]*return info\.changes \|\| 0/, 'diary deletion should report whether a row was actually removed');
     assert.match(dbSource, /function unlockDiaries\(characterId\)[\s\S]*const authorId = String\(characterId \|\| ''\)\.trim\(\);[\s\S]*Diary author not found[\s\S]*UPDATE characters SET is_diary_unlocked = 1 WHERE id = \?'\)\.run\(authorId\)/, 'diary unlock writes should reject ghost authors instead of silently updating zero rows');
     assert.match(dbSource, /function setDiaryPassword\(characterId, password\)[\s\S]*const safePassword = typeof password === 'string' \? password\.trim\(\) : '';[\s\S]*Diary author not found[\s\S]*Diary password required[\s\S]*UPDATE characters SET diary_password = \? WHERE id = \?'\)\.run\(safePassword, authorId\)/, 'diary password writes should reject ghost authors and blank passwords');
     assert.match(dbSource, /function verifyAndUnlockDiary\(characterId, inputPassword\)[\s\S]*const authorId = String\(characterId \|\| ''\)\.trim\(\);[\s\S]*const password = typeof inputPassword === 'string' \? inputPassword\.trim\(\) : '';[\s\S]*if \(!password\) return \{ success: false, reason: 'No password provided\.' \};[\s\S]*if \(!authorId\) return \{ success: false, reason: 'Character not found\.' \};[\s\S]*WHERE id = \?'\)\.get\(authorId\)[\s\S]*WHERE id = \?'\)\.run\(authorId\)/, 'diary unlock verification should normalize character ids and reject non-string or blank passwords before writes');
 
-    assert.match(serverIndex, /const moment = db\.getMoment\(req\.params\.id\);[\s\S]*String\(moment\.character_id \|\| ''\) !== 'user'[\s\S]*Only user moments can be deleted here/, 'moment delete route should only delete user-authored moments');
-    assert.match(serverIndex, /app\.post\('\/api\/moments'[\s\S]*const momentContent = typeof content === 'string' \? content\.trim\(\) : '';[\s\S]*if \(!momentContent\) return res\.status\(400\)\.json\(\{ error: 'content required' \}\);[\s\S]*const imageUrl = typeof image_url === 'string' \? image_url\.trim\(\) : '';[\s\S]*db\.addMoment\('user', momentContent, imageUrl \|\| null\)/, 'user moment posts should reject non-string or blank content and store trimmed text');
-    assert.doesNotMatch(serverIndex, /db\.addMoment\('user', content, image_url \|\| null\)/, 'user moment posts must not pass raw body content to DB writes');
-    assert.match(serverIndex, /const deleted = db\.deleteMoment\(moment\.id\);[\s\S]*if \(!deleted\) return res\.status\(404\)/, 'moment delete route should not report success for missing rows');
-    assert.doesNotMatch(serverIndex, /db\.deleteMoment\(req\.params\.id\)/, 'moment delete route must not delete arbitrary raw route ids');
-    assert.match(serverIndex, /app\.get\('\/api\/moments\/:characterId'[\s\S]*const char = db\.getCharacter\(req\.params\.characterId\);[\s\S]*if \(!char\) return res\.status\(404\)\.json\(\{ error: 'Character not found' \}\)[\s\S]*if \(char && char\.is_blocked\) return res\.json\(\[\]\)/, 'character moment reads should reject missing characters while preserving blocked-character empty feeds');
-    assert.match(serverIndex, /const moment = db\.getMoment\(req\.params\.id\);[\s\S]*const liked = db\.toggleLike\(moment\.id, 'user'\)/, 'moment likes should validate the target before writing');
-    assert.doesNotMatch(serverIndex, /db\.toggleLike\(req\.params\.id, 'user'\)/, 'moment likes must not write against raw route ids');
-    assert.match(serverIndex, /const comment = String\(content \|\| ''\)\.trim\(\);[\s\S]*const moment = db\.getMoment\(req\.params\.id\);[\s\S]*db\.addComment\(moment\.id, 'user', comment\)/, 'moment comments should trim content and validate the target before writing');
-    assert.doesNotMatch(serverIndex, /db\.addComment\(req\.params\.id, 'user', content\)/, 'moment comments must not write against raw route ids');
     assert.match(serverIndex, /app\.get\('\/api\/diaries\/:characterId'[\s\S]*const char = db\.getCharacter\(req\.params\.characterId\);[\s\S]*if \(!char\) return res\.status\(404\)\.json\(\{ error: 'Character not found' \}\)[\s\S]*isUnlocked: char\.is_diary_unlocked === 1/, 'diary reads should reject missing characters instead of returning a locked empty diary');
     assert.match(serverIndex, /const deleted = db\.deleteDiary\(req\.params\.id\);[\s\S]*if \(!deleted\) return res\.status\(404\)\.json\(\{ error: 'Diary not found' \}\)/, 'diary deletes should not report success for missing rows');
     assert.match(serverIndex, /app\.post\('\/api\/diaries\/:characterId\/unlock'[\s\S]*const character = db\.getCharacter\(req\.params\.characterId\);[\s\S]*if \(!character\) return res\.status\(404\)\.json\(\{ error: 'Character not found' \}\)[\s\S]*const password = typeof req\.body\?\.password === 'string' \? req\.body\.password\.trim\(\) : '';[\s\S]*db\.verifyAndUnlockDiary\(character\.id, password\)/, 'diary unlock should reject missing characters and non-string passwords before verification');
     assert.doesNotMatch(serverIndex, /db\.verifyAndUnlockDiary\(req\.params\.characterId, password\)/, 'diary unlock must not verify raw ghost character ids');
-
-    assert.match(engineSource, /db\.addComment\(parseInt\(mCommentMatch\[1\], 10\), character\.id, mCommentMatch\[2\]\.trim\(\)\);[\s\S]*broadcastEvent\(wsClients, \{ type: 'moment_update' \}\)/, 'private AI moment comments should notify the moment feed through the websocket event channel');
-    assert.doesNotMatch(engineSource, /broadcastNewMessage\(wsClients, \{ type: 'moment_update' \}\)/, 'moment updates must not be wrapped as malformed new_message payloads');
     assert.match(engineSource, /const pw = diaryPwMatch\[1\]\.trim\(\);[\s\S]*console\.log\(`\[Engine\] \$\{charCheck\.name\} set a diary password\.`\);[\s\S]*db\.setDiaryPassword\(character\.id, pw\)/, 'private diary password tags should avoid logging the generated password value');
     assert.doesNotMatch(engineSource, /set a diary password: \$\{pw\}/, 'private diary password logs must not expose the generated password');
-    assert.match(engineSource, /function validateGeneratedMomentInteractions\(text\)[\s\S]*MOMENT_LIKE:[\s\S]*AI returned invalid moment like target[\s\S]*MOMENT_COMMENT:[\s\S]*AI returned invalid moment comment target/, 'private AI moment interactions should validate targets before writes');
-    assert.match(engineSource, /validateGeneratedMomentInteractions\(generatedText\);[\s\S]*\/\/ Check for self-scheduled timer tags like \[TIMER: 60\]/, 'private AI moment interaction validation should run before other tag side effects');
-    assert.match(groupChat, /function broadcastMomentUpdate\(wsClients\)[\s\S]*JSON\.stringify\(\{ type: 'moment_update' \}\)/, 'group AI moment side effects should have a shared moment update notifier');
-    assert.match(groupChat, /function validateGeneratedMomentInteractions\(db, text\)[\s\S]*Group AI returned invalid moment like target[\s\S]*Group AI returned invalid moment comment target/, 'group AI moment interactions should validate targets before writes');
-    assert.match(groupChat, /validateGeneratedMomentInteractions\(db, cleanReply\);[\s\S]*Parse \[CHAR_AFFINITY/, 'group AI moment interaction validation should run before group tag side effects');
-    assert.match(groupChat, /db\.addMoment\(char\.id, momentMatch\[1\]\.trim\(\)\);[\s\S]*broadcastMomentUpdate\(wsClients\)/, 'group AI moment posts should refresh the moment feed');
-    assert.match(groupChat, /db\.toggleLike\(parseInt\(mLikeMatch\[1\], 10\), char\.id\);[\s\S]*broadcastMomentUpdate\(wsClients\)/, 'group AI moment likes should refresh the moment feed');
-    assert.match(groupChat, /db\.addComment\(parseInt\(mCommentMatch\[1\], 10\), char\.id, mCommentMatch\[2\]\.trim\(\)\);[\s\S]*broadcastMomentUpdate\(wsClients\)/, 'group AI moment comments should refresh the moment feed');
 });
 
 test('red packet creation rejects invalid money and count values before wallet writes', () => {
@@ -832,14 +832,10 @@ test('user profile numeric settings are bounded before persistence', () => {
 
     assert.match(dbSource, /function normalizeUserProfilePatch\(data\)/, 'profile numeric normalization should be isolated from the update query');
     assert.match(dbSource, /normalizedData\.group_msg_limit = normalizeProfileInteger\(normalizedData\.group_msg_limit, 20, 1, 200\)/, 'group context limits should be bounded');
-    assert.match(dbSource, /normalizedData\.group_skip_rate = normalizeProfileNumber\(normalizedData\.group_skip_rate, 0, 0, 1\)/, 'group skip rates should stay in decimal probability bounds');
-    assert.match(dbSource, /normalizedData\.group_proactive_enabled = normalizeProfileBoolean\(normalizedData\.group_proactive_enabled, 0\)/, 'group proactive toggle should persist as a boolean flag');
-    assert.match(dbSource, /normalizedData\.group_interval_min = normalizeProfileInteger\(normalizedData\.group_interval_min, 10, 1, 1440\)/, 'group interval minimum should stay inside timer-safe bounds');
-    assert.match(dbSource, /normalizedData\.group_interval_max = normalizeProfileInteger\(normalizedData\.group_interval_max, 60, 1, 1440\)/, 'group interval maximum should stay inside timer-safe bounds');
-    assert.match(dbSource, /normalizedData\.group_interval_max = normalizedData\.group_interval_min/, 'profile updates should not persist max intervals lower than min intervals');
     assert.match(dbSource, /normalizedData\.wallet = \+normalizeProfileNumber\(normalizedData\.wallet, 0, 0, 1000000000\)\.toFixed\(2\)/, 'user wallet profile edits should reject negative and non-finite money');
     assert.match(dbSource, /normalizedData\.private_msg_limit_for_group = normalizeProfileInteger\(normalizedData\.private_msg_limit_for_group, 3, 0, 50\)/, 'private context limits should be bounded');
-    assert.match(dbSource, /normalizedData\.moments_token_limit = normalizeProfileInteger\(normalizedData\.moments_token_limit, 500, 0, 10000\)/, 'moments token limits should match UI bounds');
+    assert.doesNotMatch(dbSource, /moments_token_limit|moments_reaction_rate/, 'profile updates should not keep removed moments settings');
+    assert.doesNotMatch(dbSource, /const allowedFields = \[[^\]]*(group_skip_rate|jealousy_chance|group_proactive_enabled|group_interval_min|group_interval_max)/, 'retired group chat global controls should not be user profile update fields');
     assert.match(dbSource, /const normalizedData = normalizeUserProfilePatch\(data\)/, 'profile updates should use the normalized patch before persistence');
 });
 
@@ -1344,13 +1340,22 @@ test('group message reads reject missing groups and invalid limits', () => {
 
 test('group settings reject invalid numeric limits before persistence', () => {
     const groupChatPlugin = readRepoFile('server', 'plugins', 'groupChat', 'index.js');
+    const dbSource = readRepoFile('server', 'db.js');
 
     assert.match(groupChatPlugin, /function normalizeGroupIntegerSetting\(value, min, max\)/, 'group setting numeric validation should be centralized');
     assert.match(groupChatPlugin, /!Number\.isSafeInteger\(parsed\) \|\| parsed < min \|\| parsed > max/, 'group setting limits should reject NaN, Infinity, decimals, and out-of-range values');
+    assert.match(groupChatPlugin, /function normalizeGroupBooleanSetting\(value\)/, 'group proactive toggle should use centralized boolean validation');
     assert.match(groupChatPlugin, /const injectLimit = normalizeGroupIntegerSetting\(inject_limit, 0, 30\)/, 'group injection limit should match the frontend slider bounds');
     assert.match(groupChatPlugin, /return res\.status\(400\)\.json\(\{ error: 'Invalid inject limit' \}\)/, 'invalid group injection limits should return 400');
     assert.match(groupChatPlugin, /const contextLimit = normalizeGroupIntegerSetting\(context_msg_limit, 10, 200\)/, 'group context window should match the frontend slider bounds');
     assert.match(groupChatPlugin, /return res\.status\(400\)\.json\(\{ error: 'Invalid context message limit' \}\)/, 'invalid group context limits should return 400');
+    assert.match(groupChatPlugin, /const enabled = normalizeGroupBooleanSetting\(group_proactive_enabled\)/, 'group proactive toggle should be updated on the group route');
+    assert.match(groupChatPlugin, /const intervalMin = normalizeGroupIntegerSetting\(group_interval_min, 1, 1440\)/, 'group proactive minimum interval should be bounded');
+    assert.match(groupChatPlugin, /const intervalMax = normalizeGroupIntegerSetting\(group_interval_max, 1, 1440\)/, 'group proactive maximum interval should be bounded');
+    assert.match(groupChatPlugin, /nextIntervalMax < nextIntervalMin[\s\S]*Group proactive maximum interval cannot be lower than minimum interval/, 'group proactive intervals should reject inverted ranges');
+    assert.match(groupChatPlugin, /engine\.scheduleGroupProactive\(group\.id, wsClients\)/, 'updating group proactive settings should restart only that group timer');
+    assert.match(dbSource, /CREATE TABLE IF NOT EXISTS group_chats \([\s\S]*group_proactive_enabled INTEGER DEFAULT 0[\s\S]*group_interval_min INTEGER DEFAULT 10[\s\S]*group_interval_max INTEGER DEFAULT 60/, 'group proactive settings should live on group_chats');
+    assert.match(dbSource, /legacyGroupProactive[\s\S]*UPDATE group_chats[\s\S]*SET group_proactive_enabled = 1/, 'old global group proactive settings should migrate onto existing groups before retirement');
     assert.match(groupChatPlugin, /function normalizeGroupName\(value\)[\s\S]*typeof value !== 'string'[\s\S]*return value\.trim\(\)/, 'group name validation should reject non-string values instead of coercing objects');
     assert.match(groupChatPlugin, /const groupName = normalizeGroupName\(name\)/, 'group create and update routes should normalize names through the shared helper');
     assert.match(groupChatPlugin, /return res\.status\(400\)\.json\(\{ error: 'Invalid group name' \}\)/, 'invalid group names should return 400 during updates');
@@ -1366,7 +1371,7 @@ test('scheduler tasks validate time, action, character, and batch fields before 
     const inputGuards = readRepoFile('server', 'plugins', 'scheduler', 'inputGuards.js');
     const guards = require(path.join(repoRoot, 'server', 'plugins', 'scheduler', 'inputGuards.js'));
 
-    assert.match(inputGuards, /SCHEDULER_ACTION_TYPES = new Set\(\['chat', 'moment', 'diary', 'memory_aggregation'\]\)/, 'scheduler action types should be constrained to implemented actions');
+    assert.match(inputGuards, /SCHEDULER_ACTION_TYPES = new Set\(\['chat', 'diary', 'memory_aggregation'\]\)/, 'scheduler action types should be constrained to implemented actions');
     assert.match(inputGuards, /function normalizeSchedulerTaskPayload\(payload = \{\}\)/, 'scheduler task validation should be centralized');
     assert.match(inputGuards, /normalizeSchedulerBatchSize,/, 'scheduler runtime should be able to reuse batch size validation');
     assert.match(inputGuards, /function normalizeSchedulerTaskId\(value\)[\s\S]*!Number\.isSafeInteger\(parsed\) \|\| parsed <= 0/, 'scheduler route ids should be strict positive integers');
@@ -1631,7 +1636,7 @@ test('character relationship writes reject ghost endpoints and invalid generated
 test('group chat generated red packet markers reject loose numeric input', () => {
     const groupChat = readRepoFile('server', 'plugins', 'groupChat', 'index.js');
 
-    assert.match(groupChat, /const GROUP_HIDDEN_TAG_REGEX = \/\s*\\\[\(\?:CHAR_AFFINITY\|AFFINITY\|MOMENT/, 'group chat hidden tags should be centralized for visibility checks and stripping');
+    assert.match(groupChat, /const GROUP_HIDDEN_TAG_REGEX = \/\s*\\\[\(\?:CHAR_AFFINITY\|AFFINITY/, 'group chat hidden tags should be centralized for visibility checks and stripping');
     assert.match(groupChat, /function stripGroupHiddenTags\(text\)[\s\S]*\.replace\(GROUP_HIDDEN_TAG_REGEX, ''\)/, 'group replies should use the same hidden-tag stripping for validation and persistence');
     assert.match(groupChat, /const visibleGroupReply = stripGroupHiddenTags\(cleanReply\);[\s\S]*throw new Error\('Group AI returned no visible reply\. Please retry\.'\);[\s\S]*Parse \[CHAR_AFFINITY/, 'group chat should reject tag-only AI output before applying side effects');
     assert.match(groupChat, /cleanReply = stripGroupHiddenTags\(cleanReply\);[\s\S]*if \(cleanReply\.length > 0\)/, 'group chat should persist the same visible text that passed validation');
@@ -1864,8 +1869,7 @@ test('settings upload and memo drawer avoid debug logs and use explicit auth', (
     const app = readRepoFile('client', 'src', 'App.jsx');
 
     assert.doesNotMatch(settingsPanel, /DEBUG:|DEBUG Upload/, 'avatar upload should not leave production debug logs');
-    assert.doesNotMatch(app, /styleTag\.innerHTML/, 'custom CSS should not be injected through HTML parsing');
-    assert.match(app, /styleTag\.textContent = userProfile\.custom_css/, 'custom CSS should be assigned as style text content');
+    assert.doesNotMatch(app, /styleTag\.innerHTML|styleTag\.textContent = userProfile\.custom_css/, 'retired custom CSS injection should not remain');
     assert.doesNotMatch(memoTable, /MemoTable rendering|Real-time memory update/, 'memo drawer should not log on every render/update');
     assert.match(memoTable, /function buildAuthHeaders/, 'memo drawer should centralize auth headers');
     assert.match(memoTable, /fetch\(`\$\{apiUrl\}\/memories\/\$\{contact\.id\}`,\s*\{ headers: buildAuthHeaders\(\) \}\)/, 'memo load should send auth headers explicitly');
@@ -1891,7 +1895,6 @@ test('relationships plugin does not persist or log raw LLM responses', () => {
 
 test('LLM generation routes do not log raw generated content', () => {
     const serverIndex = readRepoFile('server', 'index.js');
-    const themePlugin = readRepoFile('server', 'plugins', 'theme', 'index.js');
     const engineSource = readRepoFile('server', 'engine.js');
     const cityPlugin = readRepoFile('server', 'plugins', 'city', 'index.js');
     const citySocialService = readRepoFile('server', 'plugins', 'city', 'services', 'socialService.js');
@@ -1907,23 +1910,13 @@ test('LLM generation routes do not log raw generated content', () => {
     assert.match(serverIndex, /parsed = normalizeGeneratedCharacterPayload\(parseGeneratedCharacterReply\(generatedText\)\)/, 'character generator should validate model JSON before adding local integration fields');
     assert.doesNotMatch(serverIndex, /cleanText\.indexOf\('\{'\)|cleanText\.lastIndexOf\('\}'\)|cleanText\.slice\(startIdx, endIdx \+ 1\)/, 'character generator must not slice JSON out of malformed model output');
 
-    assert.doesNotMatch(themePlugin, /Theme Generator Raw Output/, 'theme generator must not log raw model output');
-    assert.doesNotMatch(themePlugin, /JSON\.parse failed on this theme string/, 'theme generator must not log failed raw JSON');
-    assert.doesNotMatch(themePlugin, /Failed to find JSON brackets in cleanText:\s*,\s*cleanText/, 'theme generator must not log raw non-JSON responses');
-    assert.match(themePlugin, /\[Theme Generator\] LLM returned \$\{String\(generatedText \|\| ''\)\.length\} chars\./, 'theme generator should retain non-content diagnostics');
-    assert.match(themePlugin, /function parseThemeJsonReply\(replyText\)[\s\S]*return JSON\.parse\(cleanText\)/, 'theme generator should parse the full cleaned model reply as JSON');
-    assert.match(themePlugin, /const HEX_COLOR_RE = \/\^#\[0-9a-fA-F\]\{6\}\$\//, 'theme generator should define strict hex color validation');
-    assert.match(themePlugin, /function validateGeneratedThemeConfig\(value\)[\s\S]*if \(!HEX_COLOR_RE\.test\(color\)\)/, 'theme generator should validate generated colors as strict hex values');
-    assert.match(themePlugin, /for \(const key of THEME_COLOR_KEYS\)[\s\S]*throw new Error\(`Generated theme has invalid color for \$\{key\}\.`\)/, 'theme generator should reject missing or invalid generated theme keys');
-    assert.doesNotMatch(themePlugin, /cleanText\.indexOf\('\{'\)|cleanText\.lastIndexOf\('\}'\)|cleanText\.slice\(startIdx, endIdx \+ 1\)/, 'theme generator must not slice JSON out of malformed model output');
-
     assert.doesNotMatch(engineSource, /LLM raw output|JSON\.stringify\(generatedText\)|generatedText\.substring|console\.(?:log|warn|error)[^\n]*(?:Query: "\$\{retrievalLabel\}"|matches for "\$\{retrievalLabel\}"|temporalHint\}"|: "\$\{clean\}"|\$\{taskPrompt\})/, 'runtime engine logs must not include raw generated text, retrieval queries, or proactive prompt content');
     assert.match(engineSource, /LLM output received for \$\{charCheck\.name\}\. chars=\$\{String\(generatedText \|\| ''\)\.length\}/, 'runtime engine should keep only non-content output diagnostics');
     assert.match(engineSource, /Dynamic RAG triggered for \$\{character\.name\}\. queryChars=\$\{String\(retrievalLabel \|\| ''\)\.length\}/, 'runtime engine RAG logs should not include retrieval query text');
     assert.match(engineSource, /Proactive task triggered for \$\{character\.name\}\. promptChars=\$\{String\(taskPrompt \|\| ''\)\.length\}/, 'runtime engine proactive logs should not include prompt text');
-    assert.doesNotMatch(cityPlugin, /console\.log[^\n]*(?:chatContent|explicitMoment)\.substring/, 'city-to-chat logs must not include generated chat or moment snippets');
+    assert.doesNotMatch(cityPlugin, /console\.log[^\n]*(?:chatContent|explicitMoment)\.substring/, 'city-to-chat logs must not include generated chat snippets');
     assert.match(cityPlugin, /发私聊 chars=\$\{String\(chatContent \|\| ''\)\.length\}/, 'city-to-chat private logs should keep only content length');
-    assert.match(cityPlugin, /发朋友圈 chars=\$\{String\(explicitMoment \|\| ''\)\.length\}/, 'city-to-chat moment logs should keep only content length');
+    assert.doesNotMatch(cityPlugin, /explicitMoment|发朋友圈|moment_update|db\.addMoment/, 'city-to-chat should no longer generate moments');
     assert.doesNotMatch(citySocialService, /console\.error[^\n]*clean\.substring/, 'city social parser logs must not include raw model output snippets');
     assert.match(citySocialService, /尝试解析的文本长度:', clean \? String\(clean\)\.length : 0/, 'city social parser logs should keep only raw output length');
 });
@@ -2057,8 +2050,8 @@ test('private chat thinking state is shown by the contact breathing light only',
     assert.doesNotMatch(chatWindow, /t\('Thinking'\)/, 'private chat should not render a typing/thinking text bubble before the input area');
     assert.doesNotMatch(chatWindow, /isGeneratingReply/, 'private chat should not use a generated reply flag to render text-only status UI');
 
-    assert.match(contactList, /const isWorking = !!\(state\?\.isThinking \|\| state\?\.webSearchActive\)/, 'contact list should treat live model calls as working');
-    assert.match(contactList, /autopulse-status-dot \$\{isWorking \? 'thinking' : 'connected'\}/, 'contact list should turn the breathing light yellow while the character is thinking');
+    assert.match(contactList, /const isWorking = isOnline && !!\(state\?\.isThinking \|\| state\?\.webSearchActive\)/, 'contact list should treat live model calls from configured models as working');
+    assert.match(contactList, /autopulse-status-dot \$\{isWorking \? 'thinking' : \(isOnline \? 'connected' : 'offline'\)\}/, 'contact list should show thinking, online, and offline states through the breathing light');
     assert.match(contactList, /const statusText = countdown \? `\$\{countdown\}s` : contact\.time/, 'contact list should not replace the time with thinking text');
     assert.doesNotMatch(contactList, /思考中/, 'private chat list should not show thinking as text');
     assert.doesNotMatch(contactList, /color: isWorking \|\| countdown \?/, 'working state should not turn the timestamp into a text indicator');
@@ -2202,7 +2195,7 @@ test('autonomous city action parser tolerates quoted narration text', () => {
     assert.match(serverIndex, /content: sanitizeCityNarrationText\(diary\.content\)/, 'diary reads should hide old internal structured fields from the UI');
     assert.match(cityIndex, /正文内如需引用话语，优先使用中文引号/, 'city action prompt should discourage raw JSON-breaking quotes');
 
-    const valid = parseCityActionNarrations('```json\n{"action":"[HOME]","log":"休息。","chat":"","moment":"","diary":""}\n```');
+    const valid = parseCityActionNarrations('```json\n{"action":"[HOME]","log":"休息。","chat":"","diary":""}\n```');
     assert.equal(valid.action, '[HOME]');
     assert.equal(valid.log, '休息。');
 
@@ -2213,7 +2206,6 @@ test('autonomous city action parser tolerates quoted narration text', () => {
 
 然后靠回沙发休息。",
   "chat": "那句"要么我也成为黑客"我听见了。",
-  "moment": "",
   "diary": "明天再拆。"
 }
 \`\`\``);
@@ -2227,14 +2219,12 @@ test('autonomous city action parser tolerates quoted narration text', () => {
   "action": "[RESTAURANT]",
   "log": "她说"渠道没渗水"，我听懂了。",
   "chat": "你那句"渠道没渗水"是什么意思，嫌我中间抽了一下风？",
-  "moment": null,
   "diary": "面很烫，蛋很好。"
 }
 \`\`\``);
     assert.equal(looseWithNull.action, '[RESTAURANT]');
     assert.match(looseWithNull.log, /渠道没渗水/);
     assert.match(looseWithNull.chat, /中间抽了一下风/);
-    assert.equal(looseWithNull.moment, '');
     assert.equal(looseWithNull.diary, '面很烫，蛋很好。');
 
     const leakedQuestIntent = parseCityActionNarrations(`\`\`\`json
@@ -2242,7 +2232,6 @@ test('autonomous city action parser tolerates quoted narration text', () => {
   "action": "[SCHOOL]",
   "log": "她把公告纸叠起来。",
   "chat": "",
-  "moment": "",
   "diary": "她确实想知道那个卖身契设定背后到底是什么。";
   "quest_intent": {"quest_id": 180, "stage": "claim"}
 }
@@ -2324,7 +2313,7 @@ parseJsonObjectFromLlmText(${JSON.stringify('{"reason":"玩家在预设互动末
     assert.match(pixelWorldPanel, /function keepBehaviorInteractionSessionActive\(\)[\s\S]*expiresAt: Date\.now\(\) \+ commercialV2BehaviorInteractionSessionIdleMs[\s\S]*autonomousBehaviorCooldownRef\.current = Date\.now\(\) \+ commercialV2BehaviorInteractionSessionIdleMs/, 'player interactions should extend the autonomous behavior cooldown while the dialogue is active');
     assert.match(pixelWorldPanel, /function isBehaviorInteractionSessionActive\(\)[\s\S]*behaviorInteractionSessionRef\.current = \{ active: false, expiresAt: 0 \}[\s\S]*return true/, 'expired interaction locks should self-clear before autonomous behavior resumes');
     assert.match(pixelWorldPanel, /if \(isBehaviorInteractionSessionActive\(\)\) return/, 'autonomous behavior should pause while a player interaction session is alive');
-    assert.equal((pixelWorldPanel.match(/if \(!behaviorCharacterId \|\| !behaviorOrderedPlaces\.length\) return;/g) || []).length, 2, 'commercial and room autonomous behavior should stay bound to the selected AI character');
+    assert.equal((pixelWorldPanel.match(/if \(!(?:activeBehaviorCharacterId|behaviorCharacterId) \|\| !behaviorOrderedPlaces\.length\) return;/g) || []).length, 2, 'commercial and room autonomous behavior should stay bound to the selected AI character');
     assert.match(pixelWorldPanel, /function buildCommercialBehaviorSourceOwnerMeta\(source = '', characterId = '', character = null\)[\s\S]*isCommercialBehaviorAiSource\(source\)[\s\S]*buildCommercialBehaviorOwnerMeta\(characterId, character\)/, 'AI behavior patches should derive an owner from the selected character');
     assert.match(pixelWorldPanel, /owner_character_id: ownerCharacterId[\s\S]*owner_character_name: ownerCharacterName/, 'AI behavior patch nodes should persist owner metadata');
     assert.match(pixelWorldPanel, /function mergeCommercialBehaviorTreePatchesForRuntime\(currentTree, rawPatches = \[\], source = 'manual', characterId = '', character = null\)[\s\S]*const ownerMeta = buildCommercialBehaviorSourceOwnerMeta\(patchSource, characterId, character\)/, 'merged AI behavior patch packs should bind to the selected AI character');
@@ -3011,6 +3000,7 @@ test('city config rejects invalid numeric values before persistence', () => {
     assert.match(inputGuards, /function normalizeCityConfigValue\(key, value\)/, 'city config value validation should be centralized');
     assert.match(inputGuards, /function normalizeStoredCityOffsetHours\(value\)[\s\S]*!Number\.isFinite\(parsed\) \|\| parsed < 0 \|\| parsed >= 24/, 'stored city hour offsets should allow fractional hours but reject non-finite and out-of-day values');
     assert.match(inputGuards, /BOOLEAN_CONFIG_KEYS/, 'boolean city config keys should be normalized explicitly');
+    assert.doesNotMatch(inputGuards, /city_moment_probability/, 'removed moments probability config should not be accepted');
     assert.match(inputGuards, /city_time_offset_hours' && parsed >= 24/, 'city time offset hours should stay within one day');
 
     assert.match(coreRoutes, /const value = normalizeCityConfigValue\(key, req\.body\?\.value\)/, 'city config route should validate values before DB writes');
@@ -3035,7 +3025,6 @@ test('city config rejects invalid numeric values before persistence', () => {
     assert.equal(guards.normalizeCityConfigValue('mayor_interval_hours', 0), null);
     assert.equal(guards.normalizeCityConfigValue('mayor_interval_hours', 169), null);
     assert.equal(guards.normalizeCityConfigValue('metabolism_rate', 0), '0');
-    assert.equal(guards.normalizeCityConfigValue('city_moment_probability', 101), null);
     assert.equal(guards.normalizeCityConfigValue('inflation', 0), '0');
     assert.equal(guards.normalizeCityConfigValue('work_bonus', 0), '0');
     assert.equal(guards.normalizeCityConfigValue('gambling_win_rate', 0), '0');

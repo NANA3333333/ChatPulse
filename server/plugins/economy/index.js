@@ -79,7 +79,7 @@ module.exports = function initEconomy(app, context) {
 ${userProfile?.name || 'User'} 给你转账了 ¥${result.amount.toFixed(2)}，留言：「${t.note || '无'}」。根据你的性格用1-2句自然地回应这笔转账（感谢、惊喜、暖心等）。不要有名字前缀，直接说话。`;
                                 const reply = await callLLM({ endpoint: char.api_endpoint, key: char.api_key, model: char.model_name, messages: [{ role: 'system', content: reactionPrompt }, { role: 'user', content: '请回应。' }], maxTokens: 80 });
                                 if (reply?.trim()) {
-                                    const clean = reply.trim().replace(/\[(?:AFFINITY|PRESSURE|TIMER|MOMENT|DIARY)[^\]]*\]/gi, '').trim();
+                                    const clean = reply.trim().replace(/\[(?:AFFINITY|PRESSURE|TIMER|DIARY)[^\]]*\]/gi, '').trim();
                                     if (clean) {
                                         const { id: rid, timestamp: rts } = db.addMessage(char.id, 'character', clean);
                                         const claimMsg = { id: rid, character_id: char.id, role: 'character', content: clean, timestamp: rts };
@@ -163,7 +163,7 @@ ${recentContext || '（无）'}
                     }
                     const reply = await callLLM({ endpoint: char.api_endpoint, key: char.api_key, model: char.model_name, messages: [{ role: 'system', content: reactionPrompt }, { role: 'user', content: '请回应。' }], maxTokens: 100 });
                     if (reply?.trim()) {
-                        const clean = reply.trim().replace(/\[(?:AFFINITY|PRESSURE|TIMER|MOMENT|DIARY)[^\]]*\]/gi, '').trim();
+                        const clean = reply.trim().replace(/\[(?:AFFINITY|PRESSURE|TIMER|DIARY)[^\]]*\]/gi, '').trim();
                         if (clean) {
                             const { id: rid, timestamp: rts } = db.addMessage(char.id, 'character', clean);
                             const reactionMsg = { id: rid, character_id: char.id, role: 'character', content: clean, timestamp: rts };
@@ -282,7 +282,7 @@ ${char.is_blocked ? `【注意：你当前处于拉黑对方的状态！对方�
                     }
 
                     // Broadcast reaction
-                    const clean = reaction.replace(/\[(?:AFFINITY|PRESSURE|TIMER|MOMENT|DIARY)[^\]]*\]/gi, '').trim();
+                    const clean = reaction.replace(/\[(?:AFFINITY|PRESSURE|TIMER|DIARY)[^\]]*\]/gi, '').trim();
                     if (clean) {
                         const { id: rid, timestamp: rts } = db.addMessage(char.id, 'character', clean);
                         const replyMsg = { id: rid, character_id: char.id, role: 'character', content: clean, timestamp: rts };

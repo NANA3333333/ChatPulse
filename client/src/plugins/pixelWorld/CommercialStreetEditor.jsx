@@ -223,6 +223,32 @@ import {
   getPointerStagePoint
 } from './commercialStreetCore';
 
+const commercialV2BehaviorActorBindingStorageKey = 'pixelWorld.commercialStreetV2.behaviorActorBindings';
+
+function normalizeCommercialV2BehaviorActorBindings(rawBindings = {}) {
+  if (!rawBindings || typeof rawBindings !== 'object') return {};
+  return Object.entries(rawBindings).reduce((result, [actorId, characterId]) => {
+    const safeActorId = String(actorId || '').trim();
+    const safeCharacterId = String(characterId || '').trim();
+    if (safeActorId && safeCharacterId && commercialV2PlayerCharacterById.has(safeActorId)) {
+      result[safeActorId] = safeCharacterId;
+    }
+    return result;
+  }, {});
+}
+
+function readStoredCommercialV2BehaviorActorBindings() {
+  if (typeof localStorage === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(commercialV2BehaviorActorBindingStorageKey);
+    if (!raw) return {};
+    return normalizeCommercialV2BehaviorActorBindings(JSON.parse(raw));
+  } catch {
+    localStorage.removeItem(commercialV2BehaviorActorBindingStorageKey);
+    return {};
+  }
+}
+
 function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   const stageRef = useRef(null);
   const canvasWrapRef = useRef(null);
@@ -241,6 +267,8 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   const behaviorChoicePendingRef = useRef(false);
   const behaviorInteractionSessionRef = useRef({ active: false, expiresAt: 0 });
   const behaviorTreeStateRef = useRef(null);
+  const behaviorActorIdRef = useRef(commercialV2RoleActorId);
+  const behaviorActorSyncRef = useRef('');
   const autonomousBehaviorCooldownRef = useRef(Date.now() + commercialV2BehaviorAutonomousInitialDelayMs);
   const autonomousBehaviorCursorRef = useRef(0);
   const autonomousBehaviorRecentRef = useRef([]);
@@ -273,6 +301,8 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   const [interactionMenuOpen, setInteractionMenuOpen] = useState(false);
   const [assetSilhouettes, setAssetSilhouettes] = useState({});
   const [behaviorCharacters, setBehaviorCharacters] = useState([]);
+  const [behaviorActorId, setBehaviorActorId] = useState(commercialV2RoleActorId);
+  const [behaviorActorBindings, setBehaviorActorBindings] = useState(() => readStoredCommercialV2BehaviorActorBindings());
   const [behaviorCharacterId, setBehaviorCharacterId] = useState('');
   const [behaviorAction, setBehaviorAction] = useState('greet');
   const [behaviorPlaceId, setBehaviorPlaceId] = useState('');
@@ -425,12 +455,35 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   const player = players[controlledPlayerId]
     || players[commercialV2DefaultControlledPlayerId]
     || createCommercialV2PlayerState(commercialV2PlayerCharacters[0]);
-  const roleActor = players[commercialV2RoleActorId]
-    || createCommercialV2PlayerState(commercialV2PlayerCharacterById.get(commercialV2RoleActorId) || commercialV2PlayerCharacters[0]);
-  const userActor = players[commercialV2UserActorId]
-    || createCommercialV2PlayerState(commercialV2PlayerCharacterById.get(commercialV2UserActorId) || commercialV2PlayerCharacters[0]);
   const controlledPlayerCharacter = getCommercialV2PlayerCharacter(player);
-  const behaviorCharacter = behaviorCharacters.find((item) => item.id === behaviorCharacterId) || behaviorCharacters[0] || null;
+  const behaviorTargetActorId = commercialV2PlayerCharacterById.has(behaviorActorId)
+    ? behaviorActorId
+    : commercialV2RoleActorId;
+  const behaviorUserActorId = behaviorTargetActorId === commercialV2UserActorId
+    ? commercialV2RoleActorId
+    : commercialV2UserActorId;
+  const behaviorActorCharacter = commercialV2PlayerCharacterById.get(behaviorTargetActorId) || commercialV2PlayerCharacters[0];
+  const behaviorUserCharacter = commercialV2PlayerCharacterById.get(behaviorUserActorId) || commercialV2PlayerCharacters[0];
+  const behaviorTargetActor = players[behaviorTargetActorId] || createCommercialV2PlayerState(behaviorActorCharacter);
+  const behaviorUserActor = players[behaviorUserActorId] || createCommercialV2PlayerState(behaviorUserCharacter);
+  const behaviorBoundCharacterId = behaviorActorBindings[behaviorTargetActorId] || '';
+  const behaviorBoundCharacter = behaviorCharacters.find((item) => item.id === behaviorBoundCharacterId) || null;
+  const behaviorSelectedCharacter = behaviorCharacters.find((item) => item.id === behaviorCharacterId) || null;
+  const behaviorRequestCharacterId = behaviorBoundCharacterId || behaviorCharacterId;
+  const behaviorCharacter = behaviorCharacters.find((item) => item.id === behaviorRequestCharacterId)
+    || behaviorSelectedCharacter
+    || behaviorBoundCharacter
+    || behaviorCharacters[0]
+    || null;
+  const activeBehaviorCharacterId = behaviorCharacter?.id || '';
+  const behaviorBindingSummary = behaviorBoundCharacter
+    ? `${behaviorActorCharacter.label} -> ${behaviorBoundCharacter.name || behaviorBoundCharacter.id}`
+    : `${behaviorActorCharacter.label} 尚未绑定实际角色`;
+  const controlledBoundCharacterId = behaviorActorBindings[controlledPlayerId] || '';
+  const controlledBoundCharacter = behaviorCharacters.find((item) => item.id === controlledBoundCharacterId) || null;
+  const controlledBindingSummary = controlledBoundCharacter
+    ? `已绑定：${controlledBoundCharacter.name || controlledBoundCharacter.id}`
+    : '未绑定';
   const behaviorPrimaryActions = commercialV2BehaviorPrimaryActionIds
     .map((id) => commercialV2BehaviorActions.find((item) => item.id === id))
     .filter(Boolean);
@@ -438,22 +491,31 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     .map((id) => commercialV2BehaviorActions.find((item) => item.id === id))
     .filter(Boolean);
   const behaviorInteractionState = useMemo(() => {
-    const dx = getCommercialV2LoopDeltaX(roleActor.x, userActor.x, stageSize.width);
-    const dy = userActor.y - roleActor.y;
+    const dx = getCommercialV2LoopDeltaX(behaviorTargetActor.x, behaviorUserActor.x, stageSize.width);
+    const dy = behaviorUserActor.y - behaviorTargetActor.y;
     const distance = Math.hypot(dx, dy);
     let side = dx >= 0 ? 'left' : 'right';
-    if (roleActor.x < 320) side = 'right';
-    if (roleActor.x > stageSize.width - 320) side = 'left';
-    const bodyY = roleActor.y - playerDimensions.height * 0.42 + playerDimensions.footOffset;
+    if (behaviorTargetActor.x < 320) side = 'right';
+    if (behaviorTargetActor.x > stageSize.width - 320) side = 'left';
+    const bodyY = behaviorTargetActor.y - playerDimensions.height * 0.42 + playerDimensions.footOffset;
     const menuY = Math.max(96, Math.min(stageSize.height - 90, bodyY));
     return {
       distance,
       nearby: distance <= commercialV2BehaviorInteractionDistance,
-      x: wrapLoopCoordinate(roleActor.x, stageSize.width),
+      x: wrapLoopCoordinate(behaviorTargetActor.x, stageSize.width),
       y: menuY,
       side
     };
-  }, [playerDimensions.footOffset, playerDimensions.height, roleActor.x, roleActor.y, stageSize.height, stageSize.width, userActor.x, userActor.y]);
+  }, [
+    behaviorTargetActor.x,
+    behaviorTargetActor.y,
+    behaviorUserActor.x,
+    behaviorUserActor.y,
+    playerDimensions.footOffset,
+    playerDimensions.height,
+    stageSize.height,
+    stageSize.width
+  ]);
 
   useEffect(() => {
     if (!behaviorInteractionState.nearby || activeBehaviorDialog) {
@@ -532,6 +594,10 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   }, [controlledPlayerId]);
 
   useEffect(() => {
+    behaviorActorIdRef.current = behaviorTargetActorId;
+  }, [behaviorTargetActorId]);
+
+  useEffect(() => {
     playerRef.current = player;
   }, [player]);
 
@@ -584,6 +650,51 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     }
   }, [behaviorTreeState]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(commercialV2BehaviorActorBindingStorageKey, JSON.stringify(behaviorActorBindings));
+    } catch {
+      // Bindings are a convenience layer; behavior requests can still use the current selector.
+    }
+  }, [behaviorActorBindings]);
+
+  useEffect(() => {
+    if (!behaviorCharacters.length) return;
+    const characterIds = new Set(behaviorCharacters.map((item) => item.id));
+    setBehaviorActorBindings((current) => {
+      const next = Object.entries(current).reduce((result, [actorId, characterId]) => {
+        if (commercialV2PlayerCharacterById.has(actorId) && characterIds.has(characterId)) {
+          result[actorId] = characterId;
+        }
+        return result;
+      }, {});
+      const same = Object.keys(next).length === Object.keys(current).length
+        && Object.entries(next).every(([actorId, characterId]) => current[actorId] === characterId);
+      return same ? current : next;
+    });
+  }, [behaviorCharacters]);
+
+  useEffect(() => {
+    if (!behaviorCharacters.length) {
+      setBehaviorCharacterId('');
+      return;
+    }
+    const characterIds = new Set(behaviorCharacters.map((item) => item.id));
+    const preferred = behaviorCharacters.find((item) => Number(item.sys_survival ?? 1) === 1) || behaviorCharacters[0];
+    const boundCharacterId = behaviorActorBindings[behaviorTargetActorId] || '';
+    const actorChanged = behaviorActorSyncRef.current !== behaviorTargetActorId;
+    if (actorChanged) {
+      behaviorActorSyncRef.current = behaviorTargetActorId;
+      if (boundCharacterId && characterIds.has(boundCharacterId)) {
+        setBehaviorCharacterId(boundCharacterId);
+        return;
+      }
+    }
+    if (!behaviorCharacterId || !characterIds.has(behaviorCharacterId)) {
+      setBehaviorCharacterId(preferred?.id || '');
+    }
+  }, [behaviorActorBindings, behaviorCharacterId, behaviorCharacters, behaviorTargetActorId]);
+
   function keepBehaviorInteractionSessionActive() {
     behaviorInteractionSessionRef.current = {
       active: true,
@@ -604,7 +715,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
-      if (!behaviorCharacterId || !behaviorOrderedPlaces.length) return;
+      if (!activeBehaviorCharacterId || !behaviorOrderedPlaces.length) return;
       if (behaviorLoading || activeBehaviorDialog || interactionMenuOpen) return;
       if (behaviorChoicePendingRef.current || behaviorRuntimeRef.current) return;
       if (isBehaviorInteractionSessionActive()) return;
@@ -620,7 +731,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     return () => window.clearInterval(intervalId);
   }, [
     activeBehaviorDialog,
-    behaviorCharacterId,
+    activeBehaviorCharacterId,
     behaviorInteractionState.nearby,
     behaviorLoading,
     behaviorOrderedPlaces.length,
@@ -711,6 +822,46 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     }));
   }
 
+  function getCurrentBehaviorActorId() {
+    const actorId = behaviorActorIdRef.current || behaviorTargetActorId || commercialV2RoleActorId;
+    return commercialV2PlayerCharacterById.has(actorId) ? actorId : commercialV2RoleActorId;
+  }
+
+  function getCurrentBehaviorUserActorId(actorId = getCurrentBehaviorActorId()) {
+    return actorId === commercialV2UserActorId ? commercialV2RoleActorId : commercialV2UserActorId;
+  }
+
+  function bindBehaviorActorToCharacter(actorId = behaviorTargetActorId, characterId = behaviorCharacterId) {
+    const safeActorId = commercialV2PlayerCharacterById.has(actorId) ? actorId : behaviorTargetActorId;
+    const safeCharacterId = String(characterId || '').trim();
+    const selectedCharacter = behaviorCharacters.find((item) => item.id === safeCharacterId);
+    const selectedActorCharacter = commercialV2PlayerCharacterById.get(safeActorId) || commercialV2PlayerCharacters[0];
+    if (!selectedCharacter) {
+      const message = '先选择一个已经创建的实际角色，再绑定到皮套。';
+      setBehaviorStatus(message);
+      setNotice(message);
+      return false;
+    }
+    setBehaviorActorId(safeActorId);
+    setBehaviorCharacterId(selectedCharacter.id);
+    setBehaviorActorBindings((current) => ({
+      ...current,
+      [safeActorId]: selectedCharacter.id
+    }));
+    const message = `已绑定：${selectedActorCharacter.label} -> ${selectedCharacter.name || selectedCharacter.id}。后续行为树会读取这个实际角色的上下文。`;
+    setBehaviorStatus(message);
+    setNotice(message);
+    return true;
+  }
+
+  function bindControlledSkinToBehaviorCharacter() {
+    const safeActorId = commercialV2PlayerCharacterById.has(controlledPlayerId)
+      ? controlledPlayerId
+      : commercialV2RoleActorId;
+    bindBehaviorActorToCharacter(safeActorId, behaviorCharacterId);
+    setBehaviorPanelCollapsed(false);
+  }
+
   function resolveBehaviorAction(actionId = behaviorAction) {
     return commercialV2BehaviorActions.find((item) => item.id === actionId) || commercialV2BehaviorActions[0];
   }
@@ -734,17 +885,23 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     return String(userProfile?.name || '').trim() || '用户';
   }
 
-  function summarizeBehaviorActor(actorId, label) {
+  function summarizeBehaviorActor(actorId, label, options = {}) {
     const character = commercialV2PlayerCharacterById.get(actorId) || commercialV2PlayerCharacters[0];
     const actor = players[actorId] || createCommercialV2PlayerState(character);
-    const isUserActor = actorId === commercialV2UserActorId;
-    const displayName = isUserActor ? getBehaviorUserDisplayName() : character.label;
+    const semanticRole = options.semanticRole || (actorId === commercialV2UserActorId ? 'player_user' : 'character_actor');
+    const boundCharacter = options.boundCharacter || null;
+    const isUserActor = semanticRole === 'player_user';
+    const displayName = isUserActor
+      ? getBehaviorUserDisplayName()
+      : (boundCharacter?.name || character.label);
     return {
       id: actorId,
       label: isUserActor ? displayName : label,
       display_name: displayName,
-      semantic_role: isUserActor ? 'player_user' : 'character_actor',
+      semantic_role: semanticRole,
       sprite: character.label,
+      bound_character_id: boundCharacter?.id || '',
+      bound_character_name: boundCharacter?.name || '',
       direction: actor.direction,
       moving: Boolean(actor.moving),
       controlled: actorId === controlledPlayerId,
@@ -783,8 +940,19 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
         allowed_place_ids: behaviorOrderedPlaces.map((place) => place.placeId),
         allowed_movement_actions: commercialV2BehaviorMovementActions,
         actors: {
-          role: summarizeBehaviorActor(commercialV2RoleActorId, '角色小人'),
-          user: summarizeBehaviorActor(commercialV2UserActorId, '玩家小人')
+          role: summarizeBehaviorActor(behaviorTargetActorId, '角色小人', {
+            semanticRole: 'character_actor',
+            boundCharacter: behaviorCharacter
+          }),
+          user: summarizeBehaviorActor(behaviorUserActorId, '玩家小人', {
+            semanticRole: 'player_user'
+          })
+        },
+        actor_binding: {
+          skin_actor_id: behaviorTargetActorId,
+          skin_label: behaviorActorCharacter.label,
+          character_id: behaviorCharacter?.id || '',
+          character_name: behaviorCharacter?.name || ''
         },
         selected_place: selectedPlace
           ? {
@@ -824,13 +992,13 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     const customKey = String(behaviorConfig.api_key || '').trim();
     const customComplete = Boolean(customEndpoint && customKey);
     const customIncomplete = Boolean(customEndpoint || customKey) && !customComplete;
-    if (customIncomplete && !behaviorCharacterId) {
+    if (customIncomplete && !activeBehaviorCharacterId) {
       const message = '自定义模型配置需要同时填写 URL 和 Key；当前也没有可用绑定角色。';
       setBehaviorModelStatus(message);
       setBehaviorStatus(message);
       return;
     }
-    if (!customComplete && !behaviorCharacterId) {
+    if (!customComplete && !activeBehaviorCharacterId) {
       const message = '没有绑定角色，无法使用角色模型配置。';
       setBehaviorModelStatus(message);
       setBehaviorStatus(message);
@@ -845,7 +1013,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     try {
       const url = customComplete
         ? `${apiUrl}/models`
-        : `${apiUrl}/city/characters/${encodeURIComponent(behaviorCharacterId)}/behavior-models`;
+        : `${apiUrl}/city/characters/${encodeURIComponent(activeBehaviorCharacterId)}/behavior-models`;
       const { response, data } = await fetchBehaviorJsonWithTimeout(url, {
         method: customComplete ? 'POST' : 'GET',
         headers: getBehaviorAuthHeaders(),
@@ -875,7 +1043,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   }
 
   async function requestBehaviorInput() {
-    if (!behaviorCharacterId) {
+    if (!activeBehaviorCharacterId) {
       const message = '没有可用角色，先在角色设置里创建或启用一个角色。';
       setBehaviorStatus(message);
       setNotice(message);
@@ -895,7 +1063,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     });
     setBehaviorOutput(null);
     try {
-      const response = await fetch(`${apiUrl}/city/characters/${encodeURIComponent(behaviorCharacterId)}/behavior-input`, {
+      const response = await fetch(`${apiUrl}/city/characters/${encodeURIComponent(activeBehaviorCharacterId)}/behavior-input`, {
         method: 'POST',
         headers: getBehaviorAuthHeaders(),
         body: JSON.stringify(requestPayload)
@@ -918,7 +1086,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   }
 
   async function generateBehaviorBranch(options = {}) {
-    if (!behaviorCharacterId) {
+    if (!activeBehaviorCharacterId) {
       const message = '没有可用角色，先在角色设置里创建或启用一个角色。';
       setBehaviorStatus(message);
       setNotice(message);
@@ -943,7 +1111,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     ));
     setBehaviorOutput(null);
     try {
-      const { response, data } = await fetchBehaviorJsonWithTimeout(`${apiUrl}/city/characters/${encodeURIComponent(behaviorCharacterId)}/behavior-branch`, {
+      const { response, data } = await fetchBehaviorJsonWithTimeout(`${apiUrl}/city/characters/${encodeURIComponent(activeBehaviorCharacterId)}/behavior-branch`, {
         method: 'POST',
         headers: getBehaviorAuthHeaders(),
         body: JSON.stringify({
@@ -991,7 +1159,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   }
 
   async function generateBaseBehaviorBranches() {
-    if (!behaviorCharacterId) {
+    if (!activeBehaviorCharacterId) {
       const message = '没有可用角色，先在角色设置里创建或启用一个角色。';
       setBehaviorStatus(message);
       setNotice(message);
@@ -1015,7 +1183,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     });
     setBehaviorOutput(null);
     try {
-      const { response, data } = await fetchBehaviorJsonWithTimeout(`${apiUrl}/city/characters/${encodeURIComponent(behaviorCharacterId)}/behavior-base-branches`, {
+      const { response, data } = await fetchBehaviorJsonWithTimeout(`${apiUrl}/city/characters/${encodeURIComponent(activeBehaviorCharacterId)}/behavior-base-branches`, {
         method: 'POST',
         headers: getBehaviorAuthHeaders(),
         body: JSON.stringify({
@@ -1077,7 +1245,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       rawPatch,
       fallbackBranch,
       source,
-      behaviorCharacterId,
+      activeBehaviorCharacterId,
       behaviorCharacter
     );
     if (!result.patch) return null;
@@ -1096,7 +1264,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       baseTree,
       rawPatches,
       source,
-      behaviorCharacterId,
+      activeBehaviorCharacterId,
       behaviorCharacter
     );
     if (!result?.patches?.length) return null;
@@ -1132,7 +1300,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     const candidates = sourceNodeIds
       .map((nodeId) => createCommercialBehaviorBranchFromNode(nodes[nodeId]))
       .filter((branch) => branch
-        && commercialBehaviorBranchMatchesOwner(branch, behaviorCharacterId)
+        && commercialBehaviorBranchMatchesOwner(branch, activeBehaviorCharacterId)
         && !commercialBehaviorBranchIsTravelRecovery(branch)
         && Array.isArray(branch.steps)
         && behaviorBranchReferencesOnlyPlaces(branch, allowedPlaceIds));
@@ -1169,7 +1337,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       actionId,
       selectedPlaceId,
       behaviorOrderedPlaces.map((place) => place.placeId),
-      behaviorCharacterId
+      activeBehaviorCharacterId
     );
     const presetBranch = generatedStarterBranch || createCommercialV2PresetInteractionBranch(
       actionId,
@@ -1304,7 +1472,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
           style={style}
           onPointerDown={(event) => event.stopPropagation()}
           onClick={() => setInteractionMenuOpen(true)}
-          disabled={behaviorLoading || !behaviorCharacterId}
+          disabled={behaviorLoading || !activeBehaviorCharacterId}
         >
           <strong>{behaviorLoading ? '生成中' : '互动'}</strong>
           <span>{behaviorCharacter?.name || '角色'}</span>
@@ -1333,7 +1501,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
               key={action.id}
               type="button"
               className={behaviorAction === action.id ? 'active' : ''}
-              disabled={behaviorLoading || !behaviorCharacterId}
+              disabled={behaviorLoading || !activeBehaviorCharacterId}
               title={action.hint}
               onClick={() => runPlayerInteraction(action.id)}
             >
@@ -1364,7 +1532,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
               key={action.id}
               type="button"
               className={behaviorAction === action.id ? 'active' : ''}
-              disabled={behaviorLoading || !behaviorCharacterId}
+              disabled={behaviorLoading || !activeBehaviorCharacterId}
               title={action.hint}
               onClick={() => runPlayerInteraction(action.id)}
             >
@@ -1379,8 +1547,9 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   function renderBehaviorActorCard(actorId, title, note) {
     const character = commercialV2PlayerCharacterById.get(actorId) || commercialV2PlayerCharacters[0];
     const actor = players[actorId] || createCommercialV2PlayerState(character);
+    const actorKind = actorId === behaviorTargetActorId ? 'role' : 'user';
     return (
-      <div className={`pixel-world-behavior-actor ${actorId === commercialV2RoleActorId ? 'role' : 'user'}`}>
+      <div className={`pixel-world-behavior-actor ${actorKind}`}>
         <img src={commercialV2PlayerFrame(actor, `${actor.direction || 'front'}_walk_idle.png`)} alt="" draggable={false} />
         <div>
           <strong>{title}</strong>
@@ -1473,24 +1642,56 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
         </div>
 
         <div className="pixel-world-behavior-actors">
-          {renderBehaviorActorCard(commercialV2RoleActorId, '角色小人', behaviorCharacter?.name ? `绑定：${behaviorCharacter.name}` : '等待绑定角色')}
-          {renderBehaviorActorCard(commercialV2UserActorId, '玩家小人', userProfile?.name ? `玩家：${userProfile.name}` : '玩家控制入口')}
+          {renderBehaviorActorCard(behaviorTargetActorId, '角色皮套', behaviorBoundCharacter?.name ? `绑定：${behaviorBoundCharacter.name}` : '等待绑定实际角色')}
+          {renderBehaviorActorCard(behaviorUserActorId, '玩家小人', userProfile?.name ? `玩家：${userProfile.name}` : '玩家控制入口')}
         </div>
 
-        <label className="pixel-world-behavior-field">
-          <span>绑定角色</span>
-          <select
-            value={behaviorCharacterId}
-            onChange={(event) => setBehaviorCharacterId(event.target.value)}
-            disabled={!behaviorCharacters.length}
+        <div className="pixel-world-behavior-binding-grid">
+          <label className="pixel-world-behavior-field">
+            <span>行为皮套</span>
+            <select
+              value={behaviorTargetActorId}
+              onChange={(event) => setBehaviorActorId(event.target.value)}
+            >
+              {commercialV2PlayerCharacters.map((character) => (
+                <option key={character.id} value={character.id}>{character.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="pixel-world-behavior-field">
+            <span>实际角色</span>
+            <select
+              value={behaviorCharacterId}
+              onChange={(event) => setBehaviorCharacterId(event.target.value)}
+              disabled={!behaviorCharacters.length}
+            >
+              {behaviorCharacters.length ? behaviorCharacters.map((item) => (
+                <option key={item.id} value={item.id}>{item.name || item.id}</option>
+              )) : (
+                <option value="">暂无角色</option>
+              )}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => bindBehaviorActorToCharacter(behaviorTargetActorId, behaviorCharacterId)}
+            disabled={!behaviorCharacters.length || !behaviorCharacterId}
+            title="把选中的实际角色绑定到当前行为皮套；行为树生成会读取该角色的上下文。"
           >
-            {behaviorCharacters.length ? behaviorCharacters.map((item) => (
-              <option key={item.id} value={item.id}>{item.name || item.id}</option>
-            )) : (
-              <option value="">暂无角色</option>
-            )}
-          </select>
-        </label>
+            绑定到此皮套
+          </button>
+          <button
+            type="button"
+            onClick={bindControlledSkinToBehaviorCharacter}
+            disabled={!behaviorCharacters.length || !behaviorCharacterId}
+            title="把上方“控制角色”当前选中的皮套绑定到这个实际角色。"
+          >
+            绑定当前选中皮套
+          </button>
+          <div className={`pixel-world-behavior-binding-status ${behaviorBoundCharacter ? 'bound' : ''}`}>
+            {behaviorBindingSummary}
+          </div>
+        </div>
 
         {renderBehaviorFold(
           'model',
@@ -1693,7 +1894,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
           <button
             type="button"
             onClick={requestBehaviorInput}
-            disabled={behaviorLoading || !behaviorCharacterId}
+            disabled={behaviorLoading || !activeBehaviorCharacterId}
             title="整理角色记忆、当前场景和地点白名单，查看 AI 实际会收到的上文。"
           >
             读取 AI 上文
@@ -1701,7 +1902,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
           <button
             type="button"
             onClick={generateBaseBehaviorBranches}
-            disabled={behaviorLoading || !behaviorCharacterId}
+            disabled={behaviorLoading || !activeBehaviorCharacterId}
             title="让 AI 生成无人互动时会自动轮询的日常行动池。"
           >
             {behaviorLoading ? '生成中...' : '生成行为枝丫'}
@@ -1710,7 +1911,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
             type="button"
             className="primary"
             onClick={generateBehaviorBranch}
-            disabled={behaviorLoading || !behaviorCharacterId}
+            disabled={behaviorLoading || !activeBehaviorCharacterId}
             title="根据当前玩家动作、目标地点和补充输入，生成下一段互动回应。"
           >
             生成互动回应
@@ -1727,7 +1928,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
               activateBehaviorBranch(branch, 'base');
               setBehaviorStatus(`已试跑日常行为：${branch.title}`);
             }}
-            disabled={behaviorLoading || !behaviorCharacterId}
+            disabled={behaviorLoading || !activeBehaviorCharacterId}
             title="从已生成的日常行动池中挑一条立刻执行。"
           >
             试跑日常行为
@@ -2721,6 +2922,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     controlledPlayerIdRef.current = nextPlayerId;
     playerRef.current = playersRef.current[nextPlayerId] || createCommercialV2PlayerState(character);
     setControlledPlayerId(nextPlayerId);
+    setBehaviorActorId(nextPlayerId);
     setNotice(`现在控制：${character.label}。WASD 会移动当前选中的人物。`);
   }, [cancelAutoTravel]);
 
@@ -3001,7 +3203,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     });
     setActiveBehaviorDialog(null);
     setInteractionMenuOpen(false);
-    setWorldPlayerBubble(commercialV2RoleActorId, branch.title || branchKindLabel);
+    setWorldPlayerBubble(getCurrentBehaviorActorId(), branch.title || branchKindLabel);
     setNotice(`${branchKindLabel}开始执行：${branch.title || branch.branch_id || '未命名'}。`);
   }
 
@@ -3013,7 +3215,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     }
     setActiveBehaviorBranch(null);
     setActiveBehaviorDialog((current) => current?.type === 'pending' ? current : null);
-    setWorldPlayerBubble(commercialV2RoleActorId, '');
+    setWorldPlayerBubble(getCurrentBehaviorActorId(), '');
     if (message) setNotice(message);
   }
 
@@ -3023,7 +3225,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       tree,
       commercialV2BehaviorTravelFailureTrigger,
       behaviorOrderedPlaces.map((place) => place.placeId),
-      behaviorCharacterId
+      activeBehaviorCharacterId
     );
     if (!recoveryBranch) return false;
     setBehaviorTreeState((currentTree) => ({
@@ -3038,7 +3240,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
         }
       }
     }));
-    setPlayerById(commercialV2RoleActorId, (current) => ({
+    setPlayerById(getCurrentBehaviorActorId(), (current) => ({
       ...current,
       moving: false,
       frame: 0,
@@ -3052,9 +3254,13 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   function startBehaviorTravelStep(runtime, step) {
     const action = String(step?.action || '');
     let targetId = getBehaviorStepPlaceId(step);
+    const behaviorActor = getCurrentBehaviorActorId();
+    const behaviorUser = getCurrentBehaviorUserActorId(behaviorActor);
     if ((action === 'approach_player' || action === 'follow_player') && !targetId) {
-      const role = playersRef.current[commercialV2RoleActorId] || createCommercialV2PlayerState(commercialV2PlayerCharacterById.get(commercialV2RoleActorId));
-      const user = playersRef.current[commercialV2UserActorId] || createCommercialV2PlayerState(commercialV2PlayerCharacterById.get(commercialV2UserActorId));
+      const roleCharacter = commercialV2PlayerCharacterById.get(behaviorActor) || commercialV2PlayerCharacters[0];
+      const userCharacter = commercialV2PlayerCharacterById.get(behaviorUser) || commercialV2PlayerCharacters[0];
+      const role = playersRef.current[behaviorActor] || createCommercialV2PlayerState(roleCharacter);
+      const user = playersRef.current[behaviorUser] || createCommercialV2PlayerState(userCharacter);
       const dx = getCommercialV2LoopDeltaX(role.x, user.x, stageSize.width);
       const targetPoint = getNearestWalkablePlayerPoint(user.x - Math.sign(dx || 1) * commercialV2PlayerApproachGap, user.y, role, {
         useAutoTravelBlocks: true,
@@ -3066,7 +3272,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       const travelId = `${runtime.id}_step_${runtime.stepIndex}`;
       autoTravelRef.current = {
         targetId: 'player',
-        playerId: commercialV2RoleActorId,
+        playerId: behaviorActor,
         behaviorRuntimeId: runtime.id,
         behaviorTravelId: travelId,
         place: { facing: dx > 0 ? 'right' : 'left' },
@@ -3083,11 +3289,12 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       };
       runtime.waitingForTravelId = travelId;
       setAutoTravelActive(true);
-      setWorldPlayerBubble(commercialV2RoleActorId, action === 'follow_player' ? '跟上你' : '靠近你');
+      setWorldPlayerBubble(behaviorActor, action === 'follow_player' ? '跟上你' : '靠近你');
       return true;
     }
     if (!targetId) return false;
-    const role = playersRef.current[commercialV2RoleActorId] || createCommercialV2PlayerState(commercialV2PlayerCharacterById.get(commercialV2RoleActorId));
+    const roleCharacter = commercialV2PlayerCharacterById.get(behaviorActor) || commercialV2PlayerCharacters[0];
+    const role = playersRef.current[behaviorActor] || createCommercialV2PlayerState(roleCharacter);
     const target = resolveAutoTravelTarget(targetId, role);
     if (!target) return false;
     const travelId = `${runtime.id}_step_${runtime.stepIndex}`;
@@ -3095,7 +3302,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     const smoothPath = buildBehaviorSmoothTravelPath(role, targetPoint);
     autoTravelRef.current = {
       ...target,
-      playerId: commercialV2RoleActorId,
+      playerId: behaviorActor,
       behaviorRuntimeId: runtime.id,
       behaviorTravelId: travelId,
       point: smoothPath[smoothPath.length - 1] || target.point,
@@ -3109,7 +3316,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     };
     runtime.waitingForTravelId = travelId;
     setAutoTravelActive(true);
-    setWorldPlayerBubble(commercialV2RoleActorId, target.label ? `去 ${target.label}` : '行动中');
+    setWorldPlayerBubble(behaviorActor, target.label ? `去 ${target.label}` : '行动中');
     return true;
   }
 
@@ -3150,7 +3357,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       const isBaseBranch = runtime.source === 'base' || runtime.branch.branch_kind === 'base';
       if (isBaseBranch) {
         const text = String(step.text || (action === 'say' ? '……' : '停顿了一下')).trim();
-        setWorldPlayerBubble(commercialV2RoleActorId, text);
+        setWorldPlayerBubble(getCurrentBehaviorActorId(), text);
         setBehaviorStatus(action === 'say' ? `日常行为气泡：${text}` : `日常行为动作：${text}`);
         const requestedDuration = Number(step.duration_ms || step.durationMs);
         const readableDuration = Math.min(5200, 1600 + text.length * 85);
@@ -3161,7 +3368,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       keepBehaviorInteractionSessionActive();
       runtime.waitingForDialog = true;
       runtime.waitingUntil = 0;
-      setWorldPlayerBubble(commercialV2RoleActorId, '');
+      setWorldPlayerBubble(getCurrentBehaviorActorId(), '');
       setInteractionMenuOpen(false);
       setActiveBehaviorDialog({
         runtimeId: runtime.id,
@@ -3183,14 +3390,18 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       return;
     }
     if (action === 'face_player') {
-      const role = playersRef.current[commercialV2RoleActorId] || createCommercialV2PlayerState(commercialV2PlayerCharacterById.get(commercialV2RoleActorId));
-      const user = playersRef.current[commercialV2UserActorId] || createCommercialV2PlayerState(commercialV2PlayerCharacterById.get(commercialV2UserActorId));
+      const behaviorActor = getCurrentBehaviorActorId();
+      const behaviorUser = getCurrentBehaviorUserActorId(behaviorActor);
+      const roleCharacter = commercialV2PlayerCharacterById.get(behaviorActor) || commercialV2PlayerCharacters[0];
+      const userCharacter = commercialV2PlayerCharacterById.get(behaviorUser) || commercialV2PlayerCharacters[0];
+      const role = playersRef.current[behaviorActor] || createCommercialV2PlayerState(roleCharacter);
+      const user = playersRef.current[behaviorUser] || createCommercialV2PlayerState(userCharacter);
       const dx = getCommercialV2LoopDeltaX(role.x, user.x, stageSize.width);
       const dy = user.y - role.y;
       const direction = Math.abs(dx) > Math.abs(dy)
         ? (dx > 0 ? 'right' : 'left')
         : (dy > 0 ? 'front' : 'back');
-      setPlayerById(commercialV2RoleActorId, (current) => ({
+      setPlayerById(behaviorActor, (current) => ({
         ...current,
         direction,
         moving: false,
@@ -3218,7 +3429,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
           action,
           targetLabel: getBehaviorStepPlaceId(step) || step.movement_style || action
         })) return;
-        setWorldPlayerBubble(commercialV2RoleActorId, step.movement_style || action);
+        setWorldPlayerBubble(getCurrentBehaviorActorId(), step.movement_style || action);
         const isBaseBranch = runtime.source === 'base' || runtime.branch.branch_kind === 'base';
         runtime.waitingUntil = now + (isBaseBranch ? commercialV2BehaviorBaseFallbackMs : 1200);
         runtime.stepIndex += 1;
@@ -3230,7 +3441,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       keepBehaviorInteractionSessionActive();
       runtime.waitingForChoice = true;
       runtime.waitingUntil = 0;
-      setWorldPlayerBubble(commercialV2RoleActorId, '');
+      setWorldPlayerBubble(getCurrentBehaviorActorId(), '');
       setInteractionMenuOpen(false);
       setActiveBehaviorDialog({
         runtimeId: runtime.id,
@@ -4560,16 +4771,20 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
 
     function renderPlayer(targetPlayer, offset = 0, zIndex = getPlayerZIndex(targetPlayer)) {
       const isControlled = targetPlayer.id === controlledPlayerId;
-      const actorKind = targetPlayer.id === commercialV2RoleActorId
+      const actorKind = targetPlayer.id === behaviorTargetActorId
         ? 'role-actor'
-        : targetPlayer.id === commercialV2UserActorId
+        : targetPlayer.id === behaviorUserActorId
           ? 'user-actor'
           : '';
-      const actorLabel = actorKind === 'role-actor' ? '角色' : actorKind === 'user-actor' ? '玩家' : '';
+      const actorLabel = actorKind === 'role-actor'
+        ? (behaviorCharacter?.name || '角色')
+        : actorKind === 'user-actor'
+          ? '玩家'
+          : '';
       const frameName = targetPlayer.moving ? commercialV2PlayerFrameOrder[targetPlayer.frame] : 'idle';
       const src = commercialV2PlayerFrame(targetPlayer, `${targetPlayer.direction}_walk_${frameName}.png`);
       const visualX = targetPlayer.x + offset;
-      const behaviorDialog = targetPlayer.id === commercialV2RoleActorId ? activeBehaviorDialog : null;
+      const behaviorDialog = targetPlayer.id === behaviorTargetActorId ? activeBehaviorDialog : null;
       const actionBubble = behaviorDialog ? '' : (playerActionBubbles[targetPlayer.id] || (isControlled ? playerActionBubble : ''));
       const playerLeftPx = (visualX - playerDimensions.width / 2) * zoom;
       const playerTopPx = (targetPlayer.y - playerDimensions.height + playerDimensions.footOffset) * zoom;
@@ -4813,6 +5028,33 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
         >
           新增角色
         </button>
+        <label className="pixel-world-player-bind-control">
+          <span>实际角色</span>
+          <select
+            value={behaviorCharacterId}
+            onChange={(event) => {
+              setBehaviorActorId(controlledPlayerId);
+              setBehaviorCharacterId(event.target.value);
+            }}
+            disabled={!behaviorCharacters.length}
+            aria-label="选择当前皮套绑定的实际角色"
+          >
+            {behaviorCharacters.length ? behaviorCharacters.map((item) => (
+              <option key={item.id} value={item.id}>{item.name || item.id}</option>
+            )) : (
+              <option value="">暂无角色</option>
+            )}
+          </select>
+          <button
+            type="button"
+            onClick={bindControlledSkinToBehaviorCharacter}
+            disabled={!behaviorCharacters.length || !behaviorCharacterId}
+            title="把当前控制的皮套绑定到这个实际角色"
+          >
+            绑定
+          </button>
+          <strong>{controlledBindingSummary}</strong>
+        </label>
         <label className="pixel-world-auto-walk-control">
           <span>自动循迹</span>
           <select

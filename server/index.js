@@ -1807,15 +1807,6 @@ function clearCharacterArchiveData(rawDb, characterId) {
     runArchiveCleanup(rawDb, 'DELETE FROM message_tts WHERE message_id IN (SELECT id FROM messages WHERE character_id = ?)', characterId);
     runArchiveCleanup(rawDb, 'DELETE FROM messages WHERE character_id = ?', characterId);
     runArchiveCleanup(rawDb, 'DELETE FROM memories WHERE character_id = ?', characterId);
-    const momentIds = rawDb.prepare('SELECT id FROM moments WHERE character_id = ?').all(characterId).map(row => row.id);
-    if (momentIds.length > 0) {
-        const placeholders = momentIds.map(() => '?').join(', ');
-        runArchiveCleanup(rawDb, `DELETE FROM moment_likes WHERE moment_id IN (${placeholders})`, ...momentIds);
-        runArchiveCleanup(rawDb, `DELETE FROM moment_comments WHERE moment_id IN (${placeholders})`, ...momentIds);
-    }
-    runArchiveCleanup(rawDb, 'DELETE FROM moment_likes WHERE liker_id = ?', characterId);
-    runArchiveCleanup(rawDb, 'DELETE FROM moment_comments WHERE author_id = ?', characterId);
-    runArchiveCleanup(rawDb, 'DELETE FROM moments WHERE character_id = ?', characterId);
     runArchiveCleanup(rawDb, 'DELETE FROM diaries WHERE character_id = ?', characterId);
     runArchiveCleanup(rawDb, 'DELETE FROM history_window_cache WHERE character_id = ?', characterId);
     runArchiveCleanup(rawDb, 'DELETE FROM prompt_block_cache WHERE character_id = ?', characterId);
@@ -1934,34 +1925,6 @@ function importArchiveMemories(rawDb, characterId, rows = []) {
     return count;
 }
 
-function importArchiveMoments(rawDb, characterId, rows = []) {
-    const columns = getTableColumnSet(rawDb, 'moments');
-    const insertColumns = ['character_id', 'content', 'image_url', 'visibility', 'timestamp', 'likes']
-        .filter(col => columns.has(col));
-    if (insertColumns.length === 0) return { count: 0, idMap: new Map() };
-    const stmt = makeInsertStatement(rawDb, 'moments', insertColumns);
-    let count = 0;
-    const idMap = new Map();
-    for (const row of Array.isArray(rows) ? rows : []) {
-        const content = firstImportString(row?.content);
-        if (!content) continue;
-        const valuesByColumn = {
-            character_id: characterId,
-            content,
-            image_url: firstImportString(row?.image_url),
-            visibility: firstImportString(row?.visibility, 'all'),
-            timestamp: toArchiveNumber(row?.timestamp, Date.now()),
-            likes: toArchiveNumber(row?.likes, 0)
-        };
-        const info = stmt.run(...insertColumns.map(col => valuesByColumn[col]));
-        const oldId = Number(row?.id || 0);
-        const newId = Number(info.lastInsertRowid || 0);
-        if (oldId > 0 && newId > 0) idMap.set(oldId, newId);
-        count += 1;
-    }
-    return { count, idMap };
-}
-
 function importArchiveDiaries(rawDb, characterId, rows = []) {
     const columns = getTableColumnSet(rawDb, 'diaries');
     const insertColumns = ['character_id', 'content', 'emotion', 'is_unlocked', 'timestamp']
@@ -1985,64 +1948,10 @@ function importArchiveDiaries(rawDb, characterId, rows = []) {
     return count;
 }
 
-function importArchiveMomentLikes(rawDb, characterId, rows = [], momentIdMap = new Map(), sourceCharacterId = '') {
-    const columns = getTableColumnSet(rawDb, 'moment_likes');
-    const insertColumns = ['moment_id', 'liker_id', 'timestamp']
-        .filter(col => columns.has(col));
-    if (insertColumns.length === 0) return 0;
-    const placeholders = insertColumns.map(() => '?').join(', ');
-    const stmt = rawDb.prepare(`INSERT OR IGNORE INTO moment_likes (${insertColumns.join(', ')}) VALUES (${placeholders})`);
-    let count = 0;
-    for (const row of Array.isArray(rows) ? rows : []) {
-        const oldMomentId = Number(row?.moment_id || 0);
-        const newMomentId = momentIdMap.get(oldMomentId);
-        if (!newMomentId) continue;
-        const likerId = firstImportString(row?.liker_id) === sourceCharacterId ? characterId : firstImportString(row?.liker_id, 'user');
-        const valuesByColumn = {
-            moment_id: newMomentId,
-            liker_id: likerId,
-            timestamp: toArchiveNumber(row?.timestamp, Date.now())
-        };
-        const info = stmt.run(...insertColumns.map(col => valuesByColumn[col]));
-        count += Number(info.changes || 0);
-    }
-    return count;
-}
-
-function importArchiveMomentComments(rawDb, characterId, rows = [], momentIdMap = new Map(), sourceCharacterId = '') {
-    const columns = getTableColumnSet(rawDb, 'moment_comments');
-    const insertColumns = ['moment_id', 'author_id', 'content', 'timestamp']
-        .filter(col => columns.has(col));
-    if (insertColumns.length === 0) return 0;
-    const stmt = makeInsertStatement(rawDb, 'moment_comments', insertColumns);
-    let count = 0;
-    for (const row of Array.isArray(rows) ? rows : []) {
-        const oldMomentId = Number(row?.moment_id || 0);
-        const newMomentId = momentIdMap.get(oldMomentId);
-        const content = firstImportString(row?.content);
-        if (!newMomentId || !content) continue;
-        const authorId = firstImportString(row?.author_id) === sourceCharacterId ? characterId : firstImportString(row?.author_id, 'user');
-        const valuesByColumn = {
-            moment_id: newMomentId,
-            author_id: authorId,
-            content,
-            timestamp: toArchiveNumber(row?.timestamp, Date.now())
-        };
-        stmt.run(...insertColumns.map(col => valuesByColumn[col]));
-        count += 1;
-    }
-    return count;
-}
-
 function importCharacterArchiveRows(rawDb, characterId, payload) {
-    const sourceCharacterId = firstImportString(payload?.character?.id, payload?.character_id);
-    const momentsResult = importArchiveMoments(rawDb, characterId, payload.moments);
     return {
         messages: importArchiveMessages(rawDb, characterId, payload.messages),
         memories: importArchiveMemories(rawDb, characterId, payload.memories),
-        moments: momentsResult.count,
-        moment_likes: importArchiveMomentLikes(rawDb, characterId, payload.moment_likes, momentsResult.idMap, sourceCharacterId),
-        moment_comments: importArchiveMomentComments(rawDb, characterId, payload.moment_comments, momentsResult.idMap, sourceCharacterId),
         diaries: importArchiveDiaries(rawDb, characterId, payload.diaries)
     };
 }
@@ -2885,9 +2794,17 @@ app.get('/api/characters', authMiddleware, (req, res) => {
         // Attach unread_count so the frontend can initialise badges correctly on load/refresh
         const enriched = characters.map(c => {
             const emotion = deriveEmotion(c);
+            const messageStats = typeof db.getCharacterMessageStats === 'function'
+                ? db.getCharacterMessageStats(c.id)
+                : {};
             return redactSecretFields({
                 ...c,
                 unread_count: db.getUnreadCount(c.id),
+                first_message_at: Number(messageStats.first_message_at || 0),
+                last_message_at: Number(messageStats.last_message_at || 0),
+                private_message_count: Number(messageStats.private_message_count || 0),
+                user_message_count: Number(messageStats.user_message_count || 0),
+                character_message_count: Number(messageStats.character_message_count || 0),
                 inventory: typeof db.city?.getInventory === 'function' ? db.city.getInventory(c.id) : [],
                 emotion_state: emotion.state,
                 emotion_label: emotion.label,
@@ -2896,6 +2813,26 @@ app.get('/api/characters', authMiddleware, (req, res) => {
             }, CHARACTER_SECRET_FIELDS);
         });
         res.json(enriched);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/characters/:id/message-stats', authMiddleware, (req, res) => {
+    const db = req.db;
+    try {
+        const charObj = db.getCharacter(req.params.id);
+        if (!charObj) return res.status(404).json({ error: 'Character not found' });
+        const stats = typeof db.getCharacterMessageStats === 'function'
+            ? db.getCharacterMessageStats(charObj.id)
+            : {
+                first_message_at: 0,
+                last_message_at: 0,
+                private_message_count: 0,
+                user_message_count: 0,
+                character_message_count: 0
+            };
+        res.json({ success: true, stats });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -3572,7 +3509,7 @@ app.delete('/api/messages/:characterId', authMiddleware, (req, res) => {
     }
 });
 
-// 4.7 DEEP WIPE: Clear all messages, sql memories, moments, diaries, and vectors
+// 4.7 DEEP WIPE: Clear all messages, sql memories, diaries, and vectors
 app.delete('/api/data/:characterId', authMiddleware, async (req, res) => {
     const db = req.db;
     const engine = req.engine;
@@ -3590,12 +3527,10 @@ app.delete('/api/data/:characterId', authMiddleware, async (req, res) => {
         db.clearMessages(id);
         db.clearCharacterMessageCaches?.(id);
         db.clearMemories(id);
-        db.clearMoments(id);
         db.clearDiaries(id);
         db.clearFriends(id);
         db.clearCharRelationships(id); // Also wipe inter-char social bonds
         db.clearTransfers(id);         // Wipe all private transfers (sent & received)
-        db.clearMomentInteractions(id); // Wipe likes & comments on/by this char
         if (db.city && typeof db.city.clearCharacterCityData === 'function') {
             db.city.clearCharacterCityData(id);
         }
@@ -3616,15 +3551,14 @@ app.delete('/api/data/:characterId', authMiddleware, async (req, res) => {
             diary_password: null,
             hidden_state: '',
             jealousy_level: 0,
-            jealousy_target: '',
-            last_moment_at: 0
+            jealousy_target: ''
         });
         // Immediately assign a fresh diary password
         const newPw = String(Math.floor(1000 + Math.random() * 9000));
         db.setDiaryPassword(id, newPw);
 
         // Add wipe notice (engine's anti-wipe check looks for this message)
-        db.addMessage(id, 'system', '[System] All chat history, long-term memories, extracted vectors, moments, and diary have been completely wiped. This character is now a blank slate.');
+        db.addMessage(id, 'system', '[System] All chat history, long-term memories, extracted vectors, and diary have been completely wiped. This character is now a blank slate.');
 
         // Restart the character's engine timer so they resume proactive messaging
         engine.handleUserMessage(id, wsClients, {
@@ -3640,7 +3574,7 @@ app.delete('/api/data/:characterId', authMiddleware, async (req, res) => {
     }
 });
 
-// 4.8 EXPORT: Export character data (settings, messages, memories, moments, diaries)
+// 4.8 EXPORT: Export character data (settings, messages, memories, diaries)
 app.get('/api/data/:characterId/export', authMiddleware, (req, res) => {
     const db = req.db;
     const engine = req.engine;
@@ -6428,181 +6362,6 @@ app.delete('/api/memories/:id', authMiddleware, async (req, res) => {
     }
 });
 
-// 7. Get All Moments
-app.get('/api/moments', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
-    try {
-        const allMoments = db.getMoments();
-        const characters = db.getCharacters();
-        const blockedCharIds = characters.filter(c => c.is_blocked).map(c => c.id);
-        // Allow user-posted moments (character_id = 'user')
-        const visibleMoments = allMoments.filter(m => m.character_id === 'user' || !blockedCharIds.includes(m.character_id));
-
-        // Enrich each moment with likes and comments
-        const enriched = visibleMoments.map(m => ({
-            ...m,
-            likers: db.getLikesForMoment(m.id).map(l => l.liker_id),
-            comments: db.getComments(m.id)
-        }));
-        res.json(enriched);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// User posts a Moment
-app.post('/api/moments', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
-    try {
-        const { content, image_url } = req.body;
-        const momentContent = typeof content === 'string' ? content.trim() : '';
-        if (!momentContent) return res.status(400).json({ error: 'content required' });
-        const imageUrl = typeof image_url === 'string' ? image_url.trim() : '';
-        const id = db.addMoment('user', momentContent, imageUrl || null);
-        res.json({ success: true, id });
-    } catch (e) {
-        res.status(e.status || 500).json({ error: e.message });
-    }
-});
-
-// 7.5 Delete a Moment (user only)
-app.delete('/api/moments/:id', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
-    try {
-        const moment = db.getMoment(req.params.id);
-        if (!moment) return res.status(404).json({ error: 'Moment not found' });
-        if (String(moment.character_id || '') !== 'user') {
-            return res.status(403).json({ error: 'Only user moments can be deleted here.' });
-        }
-        const deleted = db.deleteMoment(moment.id);
-        if (!deleted) return res.status(404).json({ error: 'Moment not found' });
-        res.json({ success: true, deleted });
-    } catch (e) {
-        res.status(e.status || 500).json({ error: e.message });
-    }
-});
-
-// 8. Get Moments for a specific character
-app.get('/api/moments/:characterId', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
-    try {
-        const char = db.getCharacter(req.params.characterId);
-        if (!char) return res.status(404).json({ error: 'Character not found' });
-        if (char && char.is_blocked) return res.json([]);
-        const moments = db.getCharacterMoments(req.params.characterId);
-        res.json(moments);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// 8.5 Toggle Like on a Moment
-app.post('/api/moments/:id/like', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
-    try {
-        const moment = db.getMoment(req.params.id);
-        if (!moment) return res.status(404).json({ error: 'Moment not found' });
-        const liked = db.toggleLike(moment.id, 'user');
-        const likers = db.getLikesForMoment(moment.id).map(l => l.liker_id);
-
-        // If the user liked it, potentially trigger a reaction from the AI
-        if (liked) {
-            if (moment && moment.character_id !== 'user') {
-                const userProfile = db.getUserProfile();
-                const reactionRate = userProfile?.moments_reaction_rate ?? 30; // 30% default
-                if (Math.random() * 100 < reactionRate) {
-                    // Send an invisible context message directly to the engine
-                    const char = db.getCharacter(moment.character_id);
-                    if (char && !char.is_blocked) {
-                        const userName = userProfile?.name || 'User';
-                        const contextContent = '[System] ' + userName + ' 刚刚赞了你的朋友圈动态：“' + moment.content.substring(0, 50) + '”。你可以在私聊中提及这件事。';
-                        db.addMessage(char.id, 'system', contextContent);
-                        console.log(`[Moments] User liked ${char.name}'s moment. Triggering reaction (Rate: ${reactionRate}%).`);
-                        setTimeout(() => {
-                            try {
-                                engine.handleUserMessage(char.id, wsClients, {
-                                    triggerSource: 'moment_like_reaction',
-                                    triggerRoute: 'POST /api/moments/:momentId/like',
-                                    requestId: createRequestTraceId('moment-like'),
-                                    triggerNote: `moment_like_${moment.id}`
-                                });
-                            } catch (err) {
-                                console.error('[Moments] Error triggering reaction for like:', err.message);
-                            }
-                        }, 2000); // 2-second delay to feel natural
-                    }
-                }
-            }
-        }
-
-        res.json({ success: true, liked, likers });
-    } catch (e) {
-        res.status(e.status || 500).json({ error: e.message });
-    }
-});
-
-// 8.6 Add a Comment on a Moment
-app.post('/api/moments/:id/comment', authMiddleware, (req, res) => {
-    const db = req.db;
-    const engine = req.engine;
-    const memory = req.memory;
-    const wsClients = getWsClients(req.user.id);
-    try {
-        const { content } = req.body;
-        const comment = String(content || '').trim();
-        if (!comment) return res.status(400).json({ error: 'content required' });
-        const moment = db.getMoment(req.params.id);
-        if (!moment) return res.status(404).json({ error: 'Moment not found' });
-        const commentId = db.addComment(moment.id, 'user', comment);
-
-        // If the user commented, potentially trigger a reaction
-        if (moment && moment.character_id !== 'user') {
-            const userProfile = db.getUserProfile();
-            const reactionRate = userProfile?.moments_reaction_rate ?? 30;
-            if (Math.random() * 100 < reactionRate) {
-                const char = db.getCharacter(moment.character_id);
-                if (char && !char.is_blocked) {
-                    const userName = userProfile?.name || 'User';
-                    const contextContent = '[System] ' + userName + ' 刚刚评论了你的朋友圈动态：“' + moment.content.substring(0, 50) + '”，评论说：“' + comment + '”。你可以在私聊中回应。';
-                    db.addMessage(char.id, 'system', contextContent);
-                    console.log(`[Moments] User commented on ${char.name}'s moment. Triggering reaction (Rate: ${reactionRate}%).`);
-                    setTimeout(() => {
-                        try {
-                            engine.handleUserMessage(char.id, wsClients, {
-                                triggerSource: 'moment_comment_reaction',
-                                triggerRoute: 'POST /api/moments/:momentId/comment',
-                                requestId: createRequestTraceId('moment-comment'),
-                                triggerNote: `moment_comment_${moment.id}`
-                            });
-                        } catch (err) {
-                            console.error('[Moments] Error triggering reaction for comment:', err.message);
-                        }
-                    }, 2000);
-                }
-            }
-        }
-
-        res.json({ success: true, id: commentId });
-    } catch (e) {
-        res.status(e.status || 500).json({ error: e.message });
-    }
-});
-
 // 9. Get Diaries for a Character
 app.get('/api/diaries/:characterId', authMiddleware, (req, res) => {
     const db = req.db;
@@ -6672,19 +6431,11 @@ app.put('/api/user', authMiddleware, (req, res) => {
     const wsClients = getWsClients(req.user.id);
     try {
         db.updateUserProfile(req.body);
-        // If group proactive settings changed, restart all group timers immediately
-        const proactiveKeys = ['group_proactive_enabled', 'group_interval_min', 'group_interval_max'];
-        if (proactiveKeys.some(k => k in req.body)) {
-            engine.startGroupProactiveTimers(wsClients);
-        }
         res.json({ success: true, profile: { ...(db.getUserProfile() || {}), username: req.user.username, role: req.user.role || 'user' } });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
-
-// 11.5 Theme Generation Helper & 11.6 AI Theme Generation
-// MOVED TO DLC: server/plugins/theme/index.js
 
 // 11.8 Context Token Stats
 app.get('/api/characters/:id/context-stats', authMiddleware, async (req, res) => {
@@ -6828,7 +6579,6 @@ app.get('/api/characters/:id/context-stats', authMiddleware, async (req, res) =>
             estimatedSystemPromptWithoutDigestTokens
             - Number(breakdown.city_x_y || 0)
             - Number(breakdown.z_memory || 0)
-            - Number(breakdown.moments || 0)
             - Number(breakdown.q_impression || 0)
         );
         const estimatedWithoutCacheOtherTokens = Math.max(
@@ -6838,7 +6588,6 @@ app.get('/api/characters/:id/context-stats', authMiddleware, async (req, res) =>
             - estimatedWithoutCacheXTokens
             - Number(breakdown.city_x_y || 0)
             - Number(breakdown.z_memory || 0)
-            - Number(breakdown.moments || 0)
             - Number(breakdown.q_impression || 0)
         );
         const estimatedWithCacheOtherTokens = Math.max(
@@ -6849,7 +6598,6 @@ app.get('/api/characters/:id/context-stats', authMiddleware, async (req, res) =>
             - estimatedWithCacheXTokens
             - Number(breakdown.city_x_y || 0)
             - Number(breakdown.z_memory || 0)
-            - Number(breakdown.moments || 0)
             - Number(breakdown.q_impression || 0)
         );
         const estimatedWithoutCacheBaseTokens = Math.max(
@@ -6864,7 +6612,6 @@ app.get('/api/characters/:id/context-stats', authMiddleware, async (req, res) =>
             0,
             Number(breakdown.city_x_y || 0)
             + Number(breakdown.z_memory || 0)
-            + Number(breakdown.moments || 0)
             + Number(breakdown.q_impression || 0)
         );
         breakdown.system_full = estimatedSystemPromptTokens;
@@ -7509,7 +7256,7 @@ app.delete('/api/characters/:id', authMiddleware, async (req, res) => {
             });
         }
 
-        // 4. Delete the character (handles messages, moments, groups, relationships, etc.)
+        // 4. Delete the character (handles messages, groups, relationships, etc.)
         db.deleteCharacter(charId);
 
         // 5. Notify frontend

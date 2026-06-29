@@ -59,6 +59,7 @@ module.exports = function initCityGrowthPlugin(app, context) {
                 id: char.id,
                 name: char.name,
                 avatar: char.avatar,
+                avatar_frame: char.avatar_frame || '',
                 school_progress: growthDb.getCharacterCourseProgress(char.id).map((row) => ({
                     ...row,
                     mastery: Number(row.mastery || 0),

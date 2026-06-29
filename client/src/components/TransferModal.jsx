@@ -17,8 +17,8 @@ function TransferModal({ contact, onClose, onConfirm }) {
     };
 
     return (
-        <div className="modal-overlay">
-            <div className="modal-content" style={{ maxWidth: '320px', padding: '0' }}>
+        <div className="modal-overlay chat-modal-overlay chat-transfer-modal-overlay">
+            <div className="modal-content chat-action-modal chat-transfer-modal" style={{ maxWidth: '320px', padding: '0' }}>
                 <div style={{ padding: '15px 20px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ fontSize: '16px', fontWeight: '500' }}>{lang === 'en' ? 'Transfer to' : '转账给'} {contact?.name}</div>
                     <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><span style={{ fontSize: '18px', color: '#999' }}>✕</span></button>

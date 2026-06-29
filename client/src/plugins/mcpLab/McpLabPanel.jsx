@@ -3,8 +3,8 @@ import { CheckCircle2, Clock3, Database, ExternalLink, KeyRound, Play, RefreshCw
 
 const panel = {
   height: '100%',
-  background: '#f7f9fc',
-  color: '#1f2937',
+  background: 'transparent',
+  color: '#342b34',
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden'
@@ -14,18 +14,18 @@ const toolbar = {
   display: 'flex',
   alignItems: 'center',
   gap: '8px',
-  padding: '12px 16px',
-  borderBottom: '1px solid #d8e0ea',
-  background: '#fff'
+  padding: '14px 18px',
+  borderBottom: '1px solid rgba(255, 111, 151, 0.24)',
+  background: 'rgba(255, 253, 254, 0.92)'
 };
 
 const iconButton = {
-  width: '34px',
-  height: '34px',
-  border: '1px solid #cbd5e1',
-  borderRadius: '6px',
-  background: '#fff',
-  color: '#475569',
+  width: '36px',
+  height: '36px',
+  border: '1px solid rgba(255, 111, 151, 0.32)',
+  borderRadius: '8px',
+  background: 'rgba(255, 247, 250, 0.88)',
+  color: '#ff4f82',
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -37,20 +37,21 @@ const primaryButton = {
   width: 'auto',
   padding: '0 12px',
   gap: '6px',
-  background: '#2563eb',
-  borderColor: '#2563eb',
+  background: 'linear-gradient(180deg, #ff8bad 0%, #ff5c8c 100%)',
+  borderColor: 'rgba(255, 79, 130, 0.42)',
   color: '#fff',
-  fontWeight: 600
+  fontWeight: 800
 };
 
 const inputStyle = {
-  height: '34px',
-  border: '1px solid #cbd5e1',
-  borderRadius: '6px',
+  height: '36px',
+  border: '1px solid rgba(255, 111, 151, 0.30)',
+  borderRadius: '8px',
   padding: '0 10px',
   fontSize: '13px',
   outline: 'none',
-  background: '#fff',
+  background: 'rgba(255, 255, 255, 0.88)',
+  color: '#342b34',
   minWidth: 0
 };
 
@@ -63,10 +64,11 @@ const textAreaStyle = {
 };
 
 const sectionStyle = {
-  background: '#fff',
-  border: '1px solid #d8e0ea',
+  background: 'rgba(255, 255, 255, 0.88)',
+  border: '1px solid rgba(255, 111, 151, 0.24)',
   borderRadius: '8px',
-  padding: '12px'
+  padding: '14px',
+  boxShadow: '0 7px 16px rgba(255, 111, 151, 0.08)'
 };
 
 const badgeStyle = {
@@ -76,9 +78,9 @@ const badgeStyle = {
   height: '22px',
   padding: '0 8px',
   borderRadius: '999px',
-  border: '1px solid #dbe4ef',
-  background: '#f8fafc',
-  color: '#475569',
+  border: '1px solid rgba(255, 111, 151, 0.26)',
+  background: 'rgba(255, 247, 250, 0.86)',
+  color: '#806273',
   fontSize: '11px',
   whiteSpace: 'nowrap'
 };
@@ -144,10 +146,10 @@ function formatRawJson(value) {
 const rawBlockStyle = {
   marginTop: '6px',
   padding: '8px',
-  border: '1px solid #dbe4ef',
-  borderRadius: '6px',
-  background: '#fff',
-  color: '#334155',
+  border: '1px solid rgba(255, 111, 151, 0.20)',
+  borderRadius: '8px',
+  background: 'rgba(255, 255, 255, 0.92)',
+  color: '#59424e',
   fontSize: '11px',
   lineHeight: 1.45,
   whiteSpace: 'pre-wrap',
@@ -158,16 +160,16 @@ const rawBlockStyle = {
 
 function TaskRecord({ task, selected, providers, onSelect, onRerun, onDelete }) {
   const source = task.output?.source || task.input?.provider || '';
-  const statusColor = task.status === 'done' ? '#16a34a' : task.status === 'error' ? '#dc2626' : '#64748b';
+  const statusColor = task.status === 'done' ? '#16a34a' : task.status === 'error' ? '#dc2626' : '#806273';
   const outputResults = Array.isArray(task.output?.results) ? task.output.results : [];
   const outputText = task.output?.text || task.output?.url || '';
   return (
     <div
       style={{
-        border: selected ? '1px solid #2563eb' : '1px solid #e2e8f0',
-        borderRadius: '7px',
+        border: selected ? '1px solid rgba(255, 79, 130, 0.52)' : '1px solid rgba(255, 111, 151, 0.22)',
+        borderRadius: '8px',
         padding: '8px',
-        background: selected ? '#eff6ff' : '#fff'
+        background: selected ? 'rgba(255, 240, 246, 0.94)' : 'rgba(255, 255, 255, 0.88)'
       }}
     >
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -191,22 +193,22 @@ function TaskRecord({ task, selected, providers, onSelect, onRerun, onDelete }) 
       </div>
       {task.error && <div style={{ color: '#dc2626', fontSize: '11px', marginTop: '6px' }}>{task.error}</div>}
       {selected && (outputResults.length > 0 || outputText) && (
-        <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #dbe4ef', display: 'grid', gap: '6px' }}>
+        <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid rgba(255, 111, 151, 0.20)', display: 'grid', gap: '6px' }}>
           {outputResults.map((item, index) => (
             <div key={`${item.url || item.title}-${index}`} style={{ display: 'grid', gap: '2px' }}>
-              <div style={{ fontSize: '12px', fontWeight: 700, color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title || item.url || 'Result'}</div>
-              {item.snippet && <div style={{ fontSize: '11px', color: '#64748b', lineHeight: 1.45 }}>{item.snippet}</div>}
-              {item.url && <a href={item.url} target="_blank" rel="noreferrer" style={{ color: '#2563eb', fontSize: '11px', textDecoration: 'none' }}>打开来源</a>}
+              <div style={{ fontSize: '12px', fontWeight: 700, color: '#342b34', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title || item.url || 'Result'}</div>
+              {item.snippet && <div style={{ fontSize: '11px', color: '#806273', lineHeight: 1.45 }}>{item.snippet}</div>}
+              {item.url && <a href={item.url} target="_blank" rel="noreferrer" style={{ color: '#ff4f82', fontSize: '11px', textDecoration: 'none' }}>打开来源</a>}
               {item.page_text && (
                 <details style={{ marginTop: '4px' }}>
-                  <summary style={{ cursor: 'pointer', color: '#2563eb', fontSize: '11px' }}>查看抓取正文</summary>
+                  <summary style={{ cursor: 'pointer', color: '#ff4f82', fontSize: '11px' }}>查看抓取正文</summary>
                   <pre style={rawBlockStyle}>{item.page_text}</pre>
                 </details>
               )}
               {item.page_error && <div style={{ color: '#b91c1c', fontSize: '11px' }}>正文抓取失败：{item.page_error}</div>}
               {item.raw && (
                 <details style={{ marginTop: '4px' }}>
-                  <summary style={{ cursor: 'pointer', color: '#2563eb', fontSize: '11px' }}>查看 API 原始返回</summary>
+                  <summary style={{ cursor: 'pointer', color: '#ff4f82', fontSize: '11px' }}>查看 API 原始返回</summary>
                   <pre style={rawBlockStyle}>{formatRawJson(item.raw)}</pre>
                 </details>
               )}
@@ -214,12 +216,12 @@ function TaskRecord({ task, selected, providers, onSelect, onRerun, onDelete }) 
           ))}
           {task.output?.raw_response && (
             <details>
-              <summary style={{ cursor: 'pointer', color: '#2563eb', fontSize: '11px' }}>查看本次查询完整响应</summary>
+              <summary style={{ cursor: 'pointer', color: '#ff4f82', fontSize: '11px' }}>查看本次查询完整响应</summary>
               <pre style={rawBlockStyle}>{formatRawJson(task.output.raw_response)}</pre>
             </details>
           )}
           {!outputResults.length && outputText && (
-            <div style={{ fontSize: '11px', color: '#64748b', lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+            <div style={{ fontSize: '11px', color: '#806273', lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
               {outputText}
             </div>
           )}
@@ -233,33 +235,33 @@ function SearchResultList({ result }) {
   const results = Array.isArray(result?.results) ? result.results : [];
   if (!result || results.length === 0) return null;
   return (
-    <div style={{ marginTop: '10px', borderTop: '1px solid #e2e8f0', paddingTop: '10px', display: 'grid', gap: '8px' }}>
+    <div style={{ marginTop: '10px', borderTop: '1px solid rgba(255, 111, 151, 0.20)', paddingTop: '10px', display: 'grid', gap: '8px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center' }}>
         <div style={{ fontWeight: 700, fontSize: '12px' }}>本次查询结果</div>
         <span style={badgeStyle}>{result.source || 'web'} / {results.length}</span>
       </div>
       <div style={{ display: 'grid', gap: '7px' }}>
         {results.map((item, index) => (
-          <div key={`${item.url || item.title}-${index}`} style={{ border: '1px solid #e2e8f0', borderRadius: '7px', padding: '8px', background: '#f8fafc' }}>
+          <div key={`${item.url || item.title}-${index}`} style={{ border: '1px solid rgba(255, 111, 151, 0.20)', borderRadius: '8px', padding: '8px', background: 'rgba(255, 247, 250, 0.72)' }}>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: '12px', fontWeight: 700, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: '#342b34', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {item.title || item.url || `结果 ${index + 1}`}
                 </div>
                 {item.snippet && (
-                  <div style={{ marginTop: '3px', color: '#64748b', fontSize: '11px', lineHeight: 1.5 }}>
+                  <div style={{ marginTop: '3px', color: '#806273', fontSize: '11px', lineHeight: 1.5 }}>
                     {item.snippet}
                   </div>
                 )}
                 {item.raw && (
                   <details style={{ marginTop: '6px' }}>
-                    <summary style={{ cursor: 'pointer', color: '#2563eb', fontSize: '11px' }}>展开 API 返回字段</summary>
+                    <summary style={{ cursor: 'pointer', color: '#ff4f82', fontSize: '11px' }}>展开 API 返回字段</summary>
                     <pre style={rawBlockStyle}>{formatRawJson(item.raw)}</pre>
                   </details>
                 )}
                 {item.page_text && (
                   <details style={{ marginTop: '6px' }}>
-                    <summary style={{ cursor: 'pointer', color: '#2563eb', fontSize: '11px' }}>展开抓取正文</summary>
+                    <summary style={{ cursor: 'pointer', color: '#ff4f82', fontSize: '11px' }}>展开抓取正文</summary>
                     <pre style={rawBlockStyle}>{item.page_text}</pre>
                   </details>
                 )}
@@ -282,7 +284,7 @@ function SearchResultList({ result }) {
       </div>
       {result.raw_response && (
         <details>
-          <summary style={{ cursor: 'pointer', color: '#2563eb', fontSize: '11px' }}>查看本次查询完整响应</summary>
+          <summary style={{ cursor: 'pointer', color: '#ff4f82', fontSize: '11px' }}>查看本次查询完整响应</summary>
           <pre style={rawBlockStyle}>{formatRawJson(result.raw_response)}</pre>
         </details>
       )}
@@ -535,11 +537,11 @@ export default function McpLabPanel({ apiUrl }) {
   const taskItems = Array.isArray(tasks) ? tasks : [];
 
   return (
-    <div style={panel}>
-      <div style={toolbar}>
+    <div className="mcp-lab-panel" style={panel}>
+      <div className="mcp-lab-panel__toolbar" style={toolbar}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 800, fontSize: '15px' }}>MCP 实验台</div>
-          <div style={{ color: '#64748b', fontSize: '12px', marginTop: '2px' }}>
+          <div style={{ color: '#806273', fontSize: '12px', marginTop: '2px' }}>
             联网搜索、网页抓取和资料记录
           </div>
         </div>
@@ -551,9 +553,9 @@ export default function McpLabPanel({ apiUrl }) {
 
       {error && <div style={{ margin: '12px 16px 0', padding: '8px 10px', border: '1px solid #fecaca', borderRadius: '6px', color: '#b91c1c', background: '#fff1f2', fontSize: '12px' }}>{error}</div>}
 
-      {notice && <div style={{ margin: '10px 16px 0', padding: '7px 10px', border: '1px solid #bfdbfe', borderRadius: '6px', color: '#1d4ed8', background: '#eff6ff', fontSize: '12px' }}>{notice}</div>}
+      {notice && <div style={{ margin: '10px 16px 0', padding: '7px 10px', border: '1px solid rgba(255, 111, 151, 0.26)', borderRadius: '8px', color: '#ff4f82', background: 'rgba(255, 247, 250, 0.86)', fontSize: '12px' }}>{notice}</div>}
 
-      <div style={{ padding: '14px 16px', overflowY: 'auto', minHeight: 0 }}>
+      <div className="mcp-lab-panel__body" style={{ overflowY: 'auto', minHeight: 0 }}>
         <div style={{ display: 'grid', gap: '12px', maxWidth: '1120px', margin: '0 auto' }}>
           <section style={sectionStyle}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
@@ -576,7 +578,7 @@ export default function McpLabPanel({ apiUrl }) {
               {selectedProviderConfig ? (
                 <div style={{ display: 'grid', gap: '6px' }}>
                   {selectedProviderConfig.has_key && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', color: '#475569', fontSize: '12px' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', color: '#806273', fontSize: '12px' }}>
                       <span style={{ ...badgeStyle, color: '#166534', borderColor: '#bbf7d0', background: '#f0fdf4' }}>
                         已保存
                       </span>
@@ -585,7 +587,7 @@ export default function McpLabPanel({ apiUrl }) {
                   )}
                   <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '8px', alignItems: 'center' }}>
                     <div style={{ position: 'relative', minWidth: 0 }}>
-                      <KeyRound size={14} style={{ position: 'absolute', left: '10px', top: '10px', color: '#64748b' }} />
+                      <KeyRound size={14} style={{ position: 'absolute', left: '10px', top: '11px', color: '#ff4f82' }} />
                       <input
                         style={{ ...inputStyle, width: '100%', paddingLeft: '30px' }}
                         type={webKeys[selectedProviderConfig.id] ? 'password' : 'text'}
@@ -599,8 +601,8 @@ export default function McpLabPanel({ apiUrl }) {
                         ...iconButton,
                         width: '54px',
                         background: clearKeyIds.includes(selectedProviderConfig.id) ? '#fee2e2' : '#fff',
-                        borderColor: clearKeyIds.includes(selectedProviderConfig.id) ? '#fca5a5' : '#cbd5e1',
-                        color: clearKeyIds.includes(selectedProviderConfig.id) ? '#b91c1c' : '#475569',
+                        borderColor: clearKeyIds.includes(selectedProviderConfig.id) ? '#fca5a5' : 'rgba(255, 111, 151, 0.32)',
+                        color: clearKeyIds.includes(selectedProviderConfig.id) ? '#b91c1c' : '#806273',
                         fontSize: '11px'
                       }}
                       onClick={() => toggleClearProvider(selectedProviderConfig.id)}
@@ -611,7 +613,7 @@ export default function McpLabPanel({ apiUrl }) {
                   </div>
                 </div>
               ) : (
-                <div style={{ color: '#64748b', fontSize: '12px', lineHeight: 1.5 }}>
+                <div style={{ color: '#806273', fontSize: '12px', lineHeight: 1.5 }}>
                   {selectedProvider === 'duckduckgo' ? 'DuckDuckGo 不需要 Key。' : '自动模式会优先使用已保存 Key，未配置时使用 DuckDuckGo。'}
                 </div>
               )}
@@ -625,7 +627,7 @@ export default function McpLabPanel({ apiUrl }) {
             <button style={{ ...iconButton, width: '100%', marginTop: '8px' }} onClick={() => createTask('web_search')} disabled={busy || !query.trim()} title="创建并执行查询任务">
               <Play size={15} /> 保存为查询任务
             </button>
-            <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
+            <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(255, 111, 151, 0.20)' }}>
               <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '8px' }}>抓取指定网页</div>
               <div style={{ display: 'flex', gap: '8px' }}>
                 <input style={{ ...inputStyle, flex: 1 }} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com" onKeyDown={(e) => { if (e.key === 'Enter') fetchUrl(); }} />
@@ -667,10 +669,10 @@ export default function McpLabPanel({ apiUrl }) {
           <section style={sectionStyle}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
               <div style={{ fontWeight: 700, fontSize: '13px' }}>联网任务记录</div>
-              <span style={{ color: '#64748b', fontSize: '12px' }}>{taskItems.length}</span>
+              <span style={{ color: '#806273', fontSize: '12px' }}>{taskItems.length}</span>
             </div>
             <div style={{ display: 'grid', gap: '8px' }}>
-              {taskItems.length === 0 && <div style={{ color: '#64748b', fontSize: '12px' }}>还没有任务。</div>}
+              {taskItems.length === 0 && <div style={{ color: '#806273', fontSize: '12px' }}>还没有任务。</div>}
               {taskItems.map(task => (
                 <TaskRecord
                   key={task.id}

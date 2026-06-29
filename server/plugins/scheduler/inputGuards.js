@@ -1,4 +1,4 @@
-const SCHEDULER_ACTION_TYPES = new Set(['chat', 'moment', 'diary', 'memory_aggregation']);
+const SCHEDULER_ACTION_TYPES = new Set(['chat', 'diary', 'memory_aggregation']);
 const MAX_SCHEDULER_PROMPT_LENGTH = 2000;
 
 class SchedulerValidationError extends Error {

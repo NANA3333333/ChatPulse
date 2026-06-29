@@ -232,7 +232,6 @@ module.exports = function initAdminDashboard(app, context) {
             characters_count: 0,
             messages_count: 0,
             memories_count: 0,
-            moments_count: 0,
             diaries_count: 0,
             token_total: 0,
             account_age_ms: Math.max(0, Date.now() - Number(user.created_at || Date.now()))
@@ -253,7 +252,6 @@ module.exports = function initAdminDashboard(app, context) {
             stats.characters_count = count('characters');
             stats.messages_count = count('messages');
             stats.memories_count = count('memories');
-            stats.moments_count = count('moments');
             stats.diaries_count = count('diaries');
             stats.token_total = userDb.prepare('SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0) as total FROM token_usage').get()?.total || 0;
 
@@ -261,7 +259,6 @@ module.exports = function initAdminDashboard(app, context) {
                 ...collectUploadReferences(userDb, 'SELECT avatar, banner FROM user_profile', undefined, user.id),
                 ...collectUploadReferences(userDb, 'SELECT avatar FROM characters', undefined, user.id),
                 ...collectUploadReferences(userDb, 'SELECT avatar FROM group_chats', undefined, user.id),
-                ...collectUploadReferences(userDb, 'SELECT image_url FROM moments', undefined, user.id),
             ]);
             for (const relPath of uploadRefs) {
                 const fullPath = resolveUploadReferencePath(uploadsRoot, relPath);

@@ -597,7 +597,6 @@ ${candidates.map(d => `- ${d.id}: ${d.emoji} ${d.name} (${d.type})`).join('\n')}
         const narrations = {
             log,
             chat: '',
-            moment: '',
             diary: ''
         };
         await applyDecision(district, char, db, userId, currentCals, config, activeEvents, narrations, { preserveDirectedDistrict: true });
@@ -708,7 +707,6 @@ ${candidates.map(d => `- ${d.id}: ${d.emoji} ${d.name} (${d.type})`).join('\n')}
         const haystack = [
             richNarrations?.log,
             richNarrations?.diary,
-            richNarrations?.moment,
             richNarrations?.chat
         ].map(value => String(value || '').trim().toLowerCase()).filter(Boolean).join('\n');
         if (!haystack) return null;
@@ -819,7 +817,7 @@ ${candidates.map(d => `- ${d.id}: ${d.emoji} ${d.name} (${d.type})`).join('\n')}
         const walletBefore = Number(char.wallet || 0);
         const walletAfter = Math.max(0, walletBefore + Number(outcome.moneyDelta || 0));
         const styleText = styleHint && typeof styleHint === 'object'
-            ? [styleHint.log, styleHint.diary, styleHint.moment, styleHint.chat].map(v => String(v || '').trim()).filter(Boolean)[0] || ''
+            ? [styleHint.log, styleHint.diary, styleHint.chat].map(v => String(v || '').trim()).filter(Boolean)[0] || ''
             : '';
 
         const prompt = `你正在生成一次正常的商业街赌场行动结果。
@@ -839,7 +837,7 @@ ${candidates.map(d => `- ${d.id}: ${d.emoji} ${d.name} (${d.type})`).join('\n')}
 - 只根据上面的既定结果写这次赌场行动里实际发生了什么。
 - 你不能把赢写成输，也不能把输写成赢。
 - log 要像普通商业街行动记录，有画面、动作和结果，但不要写成固定模板。
-- chat / moment / diary 默认可留空；只有自然出现时才填写。
+- chat / diary 默认可留空；只有自然出现时才填写。
 - 不要写系统、后台、日志、结算、触发器。
 ${styleText ? `- 可轻微参考这段既有语气，但只能参考语气，不能覆盖既定输赢事实：${styleText}` : ''}
 
@@ -847,7 +845,6 @@ ${styleText ? `- 可轻微参考这段既有语气，但只能参考语气，不
 {
   "log": "自然的赌场行动记录",
   "chat": "",
-  "moment": "",
   "diary": ""
 }`;
 
@@ -896,7 +893,6 @@ ${styleText ? `- 可轻微参考这段既有语气，但只能参考语气，不
         return {
             log,
             chat: String(parsed.chat || '').trim(),
-            moment: String(parsed.moment || '').trim(),
             diary: String(parsed.diary || '').trim()
         };
     }
@@ -913,7 +909,7 @@ ${styleText ? `- 可轻微参考这段既有语气，但只能参考语气，不
         const inventory = db.city.getInventory(char.id);
         const availableDistrictItems = getAvailableDistrictItems(db, district.id);
         const districtItemsPrompt = availableDistrictItems.length > 0
-            ? `\n[当前目标地点可用商品]\n${district.name} 现在真实可用的商品只有：${formatDistrictItemsForPrompt(availableDistrictItems)}\n- 如果你在 log / diary / moment / chat 里提到具体吃了、买了、拿了什么，只能从上面这些商品里选。\n- 可以不写具体商品；但如果写了，就绝对不要编造清单外的食物或商品。\n- 便利店是购买/补给场景：在便利店买到的食物会先进入背包，不等于当场恢复体力；如果这次真正目的是“吃饭/恢复体力”，优先去餐厅或吃背包里已有食物。\n- 如果地点已锁定为便利店，就把文案写成买了/带走/准备之后吃，不要写成已经坐下吃完并恢复。`
+            ? `\n[当前目标地点可用商品]\n${district.name} 现在真实可用的商品只有：${formatDistrictItemsForPrompt(availableDistrictItems)}\n- 如果你在 log / diary / chat 里提到具体吃了、买了、拿了什么，只能从上面这些商品里选。\n- 可以不写具体商品；但如果写了，就绝对不要编造清单外的食物或商品。\n- 便利店是购买/补给场景：在便利店买到的食物会先进入背包，不等于当场恢复体力；如果这次真正目的是“吃饭/恢复体力”，优先去餐厅或吃背包里已有食物。\n- 如果地点已锁定为便利店，就把文案写成买了/带走/准备之后吃，不要写成已经坐下吃完并恢复。`
             : '';
         const engineContextWrapper = { getUserDb: context.getUserDb, getMemory: context.getMemory, userId, forceCityDetail: true };
         const universalResult = await buildUniversalContext(engineContextWrapper, char, '', false);
@@ -927,7 +923,7 @@ ${styleText ? `- 可轻微参考这段既有语气，但只能参考语气，不
 [当前任务优先级]
 - 你手上有公告任务：${activeQuestClaim.emoji || '📜'} ${activeQuestClaim.title}。
 - 任务目标地点：${activeQuestClaim.target_district || 'street'}；当前进度：${activeQuestClaim.progress_count || 0}/${activeQuestClaim.completion_target || 0}；阶段：${activeQuestClaim.status}。
-- 如果本轮锁定地点就是任务目标地点，log / chat / moment / diary 必须写成推进这项任务，而不是写普通地点玩法。
+- 如果本轮锁定地点就是任务目标地点，log / chat / diary 必须写成推进这项任务，而不是写普通地点玩法。
 - 本轮必须返回 quest_intent：{"quest_id":${Number(activeQuestClaim.quest_id || activeQuestClaim.id || 0)},"stage":"${['ready_to_report', 'reporting'].includes(String(activeQuestClaim.status || '')) ? 'report' : 'progress'}"}。
 - 写任务推进时要出现可评分的具体行动：寻找/接触目标、确认情况、动手处理、护送、交付、汇报、解决阻碍等，按任务要求选择。
 - 如果目标地点是赌场，但任务不是“参与赌博”，不要写下注、轮盘、骰宝、牌局输赢或自行消遣；赌场只是任务发生地点。
@@ -953,7 +949,7 @@ ${styleText ? `- 可轻微参考这段既有语气，但只能参考语气，不
 
         try {
             const messages = [
-                { role: 'system', content: '你是一个城市生活模拟角色行动引擎。你必须严格返回完整 JSON 对象，不要输出 JSON 之外的解释、markdown 或额外文本。返回结果必须包含 action、log、chat、moment、diary 五个字段。' },
+                { role: 'system', content: '你是一个城市生活模拟角色行动引擎。你必须严格返回完整 JSON 对象，不要输出 JSON 之外的解释、markdown 或额外文本。返回结果必须包含 action、log、chat、diary 四个字段。' },
                 { role: 'user', content: directedPrompt }
             ];
             recordCityLlmDebug(db, char, 'input', 'city_private_reply_directed_action', messages, {
@@ -1108,7 +1104,6 @@ ${styleText ? `- 可轻微参考这段既有语气，但只能参考语气，不
         const draftText = [
             baseNarrations?.log,
             baseNarrations?.chat,
-            baseNarrations?.moment,
             baseNarrations?.diary
         ].map((value) => String(value || '').trim()).filter(Boolean).join('\n');
         const districtSpecificRule = district.id === 'restaurant'
@@ -1135,12 +1130,11 @@ ${draftText || '（无）'}
 - 最终文案必须像真人刚经历完这件事，不要套固定模板。
 - 不要出现“肚子里空空的”“想先把肚子和整个人安顿好”“从家离开”这类高复用套话。
 - log 要有具体动作、感受或现场细节，但不要写成系统总结。
-- chat / moment / diary 可以留空，只有自然冒出来时才写。
+- chat / diary 可以留空，只有自然冒出来时才写。
 ${districtSpecificRule ? districtSpecificRule + '\n' : ''}严格返回 JSON：
 {
   "log": "重写后的商业街行动文案",
   "chat": "",
-  "moment": "",
   "diary": ""
 }`;
 
@@ -1899,7 +1893,6 @@ ${taskInstruction}
 - 比起泛泛追问，更优先写“我刚刚怎么了 / 我现在什么状态 / 我准备做什么 / 我为什么突然想给你发消息”
 - 如果要提问，也要让问题强依附于这次商业街事件本身，而不是空泛地确认用户在不在
 - chat 不是正常私聊重 roll；不要复制或近似改写最近私聊已经说过的话
-- 若值得公开展示再填 moment
 - 若有没说出口的心声再填 diary
 - 想花钱但钱不够时，也要把失败尝试真实写进 log
 - 不要重复 preamble 里刚做过的地点/动作
@@ -1910,7 +1903,6 @@ ${taskInstruction}
     "action": "[PARK]",
     "log": "自然的行动描写",
     "chat": "（可选）发给玩家的话",
-    "moment": "（可选）朋友圈动态",
     "diary": "（可选）内心独白",
     "quest_intent": { "quest_id": 12, "stage": "claim|progress|report" }
   }
@@ -2011,10 +2003,8 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
   "affinity_delta_a": 0,
   "affinity_delta_b": 0,
   "chat_a": "A发给${userName}的私聊，可为空",
-  "moment_a": "A发的朋友圈，可为空",
   "diary_a": "A写的日记，可为空",
   "chat_b": "B发给${userName}的私聊，可为空",
-  "moment_b": "B发的朋友圈，可为空",
   "diary_b": "B写的日记，可为空"
 }`;
     }
@@ -3299,7 +3289,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
                 world_description: '语义房间，不是商业街，也不是大世界地图',
                 movement_model: 'room_semantic_v1',
                 movement_rule: '角色只能从 allowed_place_ids 选择当前房间里的家具或站位锚点，只能从 allowed_movement_actions 选择移动动作；不要决定像素坐标，家具锚点和碰撞由前端执行器本地映射。',
-                blocked_context_label: '最近私聊、朋友圈、商业街活动记录、公告任务',
+                blocked_context_label: '最近私聊、商业街活动记录、公告任务',
                 policy_rule: '读取大输入库作为背景材料，但私聊、商业街活动记录、公告任务不得触发小人移动、发起互动、改变目的地或重写基础枝丫；当前行为只能由玩家在房间里的互动事件或房间本地运行时触发。',
                 layout_rule: 'input.room_layout 是当前房间 ASCII、当前家具占格和家具清单，只用于理解室内环境；不要输出家具 PLACE 行，行为树仍按 output_contract 生成 patch 或 base_branches。'
             };
@@ -3314,7 +3304,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             world_description: '语义街区，不是大世界地图',
             movement_model: 'side_scrolling_semantic_v1',
             movement_rule: '角色只能从 allowed_place_ids 选择语义地点，只能从 allowed_movement_actions 选择移动动作；不要决定像素坐标。像素锚点、碰撞和平移移动由前端执行器本地映射。',
-            blocked_context_label: '最近私聊、朋友圈、商业街活动记录、公告任务',
+            blocked_context_label: '最近私聊、商业街活动记录、公告任务',
             policy_rule: '读取大输入库作为背景材料，但私聊和商业街活动记录不得触发小人移动、发起互动、改变目的地或重写基础枝丫。',
             layout_rule: ''
         };
@@ -3590,7 +3580,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
                     '活跃度规则：每条特殊枝丫在 offer_choices 前要有 3-5 个可见步骤，至少 1 个身体动作或移动步骤，至少 2 个 say/emote；不要只站着说一句就给选项。',
                     '硬规则：任何 choice.trigger 为 suggest_destination 的选项，都必须填写 choice.place_id，且必须从 input.world.allowed_place_ids 选择；这是前端判断目的地的必填协议字段，不能只把地点写进 label。',
                     'input.recent_special_interactions 是最近特殊互动台词，禁止复写这些台词、开头、收尾或同一情绪推进。',
-                    `你可以读取 input.large_input，但它只是背景材料。${sceneContext.blocked_context_label || '最近私聊、朋友圈、商业街活动记录、公告任务'}不能作为小人移动、发起互动、改变目的地或重写基础枝丫的原因。`,
+                    `你可以读取 input.large_input，但它只是背景材料。${sceneContext.blocked_context_label || '最近私聊、商业街活动记录、公告任务'}不能作为小人移动、发起互动、改变目的地或重写基础枝丫的原因。`,
                     '特殊枝丫只能由当前 input.player_event 触发；基础枝丫只由 runtime_state、location、nearby_player、otherwise、idle 等本地运行时触发。',
                     `角色可以自由决定在${sceneContext.activity_label || '商业街'}做什么，但不要输出 x/y、像素坐标、锚点或碰撞信息。`,
                     sceneContext.layout_rule || '',
@@ -3719,7 +3709,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
                     'base_branches 不要生成 player_interaction，不要等待玩家选择，不要使用 offer_choices。',
                     '活跃度规则：除 movement_recovery 外，每条 base_branch 要有 4-7 个步骤，至少 2 个身体动作/移动/地点停留步骤，至少 1 个 say，最好再有 1 个 emote；不要输出 wait-only、idle-only 或纯摘要式枝丫。',
                     'interaction_branches 在 offer_choices 前要有 3-5 个可见步骤，至少 1 个身体动作或移动步骤，至少 2 个 say/emote。',
-                    `你可以读取 input.large_input，但它只是背景材料。${sceneContext.blocked_context_label || '最近私聊、朋友圈、商业街活动记录、公告任务'}不能作为小人移动、发起互动、改变目的地或重写基础枝丫的原因。`,
+                    `你可以读取 input.large_input，但它只是背景材料。${sceneContext.blocked_context_label || '最近私聊、商业街活动记录、公告任务'}不能作为小人移动、发起互动、改变目的地或重写基础枝丫的原因。`,
                     '基础枝丫只能由 runtime_state、location、nearby_player、otherwise、idle 等本地运行时触发。',
                     'movement_recovery 是运行时移动失败专用基础枝丫；trigger 固定 runtime_state.travel_failed，steps 不要再移动，只用 say/emote/wait/face_player 做短恢复反应。',
                     '互动开场枝丫只能由当前场景内玩家主动点击触发，不要写成模型刚看见私聊后主动说话。',
@@ -4286,7 +4276,6 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             action: `[${String(restDistrict?.id || 'home').toUpperCase()}]`,
             log: `${char.name}${reason}最后还是停了下来，转身去${restName}先补觉。眼皮沉得厉害，脚步也慢，能撑到躺下已经算是把自己从透支边缘拽回来。`,
             chat: '',
-            moment: '',
             diary: '不是不想把事情做完，是身体已经不太听使唤。先睡一会儿，醒了再说。'
         };
     }
@@ -4485,7 +4474,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         let actionDistrict = targetDistrict || null;
         try {
             const messages = [
-                { role: 'system', content: '你是一个城市生活模拟角色行动引擎。你必须严格按照用户要求返回完整 JSON 对象，不要输出 JSON 之外的解释、markdown 或额外文本。返回结果必须包含 action、log、chat、moment、diary 五个字段。正文内如需引用话语，优先使用中文引号“”。' },
+                { role: 'system', content: '你是一个城市生活模拟角色行动引擎。你必须严格按照用户要求返回完整 JSON 对象，不要输出 JSON 之外的解释、markdown 或额外文本。返回结果必须包含 action、log、chat、diary 四个字段。正文内如需引用话语，优先使用中文引号“”。' },
                 { role: 'user', content: prompt }
             ];
             recordCityLlmDebug(db, char, 'input', 'city_action_decision', messages, { model: char.model_name, location: char.location || '', status: currentCityStatus });
@@ -5273,7 +5262,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    // City->Chat bridge: send city events to chat, moments, diary, and memory
+    // City->Chat bridge: send city events to chat, diary, and memory
 
     function broadcastCityToChat(userId, char, eventSummary, eventType, richNarrations = null) {
         try {
@@ -5282,7 +5271,6 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             const config = db.city.getConfig();
             const chatProb = parseInt(config.city_chat_probability) || 0;  // legacy fallback gate
             const explicitChat = sanitizeCityNarrationText(richNarrations?.chat);
-            const explicitMoment = sanitizeCityNarrationText(richNarrations?.moment);
             const explicitDiary = sanitizeCityNarrationText(richNarrations?.diary);
 
             // 1. Private chat message to user
@@ -5352,25 +5340,8 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
                 }
             }
 
-            // 2. Post to Moments
-            // Do not auto-post generic city logs. Only post when the character explicitly produced a Moment.
-            if (explicitMoment) {
-                try {
-                    if (explicitMoment) {
-                        db.addMoment(char.id, explicitMoment);
-                        // Broadcast moment update to frontend
-                        const wsClients = getWsClients(userId);
-                        const payload = JSON.stringify({ type: 'moment_update' });
-                        wsClients.forEach(c => { if (c.readyState === 1) c.send(payload); });
-                        console.log(`[City->Chat] ${char.name} 发朋友圈 chars=${String(explicitMoment || '').length}`);
-                    }
-                } catch (e) {
-                    console.error(`[City->Chat] 朋友圈失败: ${e.message}`);
-                }
-            }
-
-            // 3. Write diary entry
-            // Same rule as Moments: only persist when the character explicitly produced diary content.
+            // 2. Write diary entry
+            // Only persist when the character explicitly produced diary content.
             if (explicitDiary) {
                 try {
                     const emotionMap = {
@@ -5460,7 +5431,6 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             tasks_completed: tasksCompleted,
             tasks_missed: tasksMissed,
             chat: String(raw?.chat || '').trim(),
-            moment: String(raw?.moment || '').trim(),
             diary: String(raw?.diary || '').trim()
         };
     }
@@ -5517,7 +5487,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
 这是一段回溯模拟。在过去这段时间里（从 ${oldCityDate.getHours()}:00 到 ${newCityDate.getHours()}:00，大约 ${skippedHoursDelta} 小时），你处于自由活动状态，没有固定日程安排。
 
 请你作为 ${char.name}，回想一下这段时间你是怎么度过的。你去了哪里，做了什么？
-请输出一段 JSON 格式的回忆总结，包含发给玩家的微信、朋友圈和日记，系统会将其保存为这段时间的历史记录。`;
+请输出一段 JSON 格式的回忆总结，包含发给玩家的微信和日记，系统会将其保存为这段时间的历史记录。`;
             }
             // Scenario C: Fully skipped (skipped more than or equal to 80% of schedule length or crossing day)
             else if (missedTasks.length >= Math.max(1, scheduleArray.length - 1)) {
@@ -5527,7 +5497,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
 ${missedTaskText}
 
 请你作为 ${char.name}，一次性回想这整段时间自己是怎么度过的。这些计划是否顺利完成？中间有没有发生有趣的事或意外？
-请输出一段 JSON 格式的回忆总结，包含发给玩家 ${userName} 的微信、朋友圈和日记，系统会将其保存为这段时间的历史记录。`;
+请输出一段 JSON 格式的回忆总结，包含发给玩家 ${userName} 的微信和日记，系统会将其保存为这段时间的历史记录。`;
             }
             // Scenario B: Partially skipped (missed just a few plans)
             else {
@@ -5537,7 +5507,7 @@ ${missedTaskText}
 ${missedTaskText}
 
 请你作为 ${char.name}，回想一下这段时间自己是怎么度过的。这几个计划是否顺利完成？中间有没有发生有趣的事或意外？
-请输出一段 JSON 格式的回忆总结，包含发给玩家 ${userName} 的微信、朋友圈和日记，系统会将其保存为这段时间的历史记录。`;
+请输出一段 JSON 格式的回忆总结，包含发给玩家 ${userName} 的微信和日记，系统会将其保存为这段时间的历史记录。`;
             }
 
             prompt += `
@@ -5548,7 +5518,6 @@ ${missedTaskText}
   "tasks_completed": [8, ...],
   "tasks_missed": [12, ...],
   "chat": "（可选）发给玩家 ${userName} 的微信消息，口语化；如果不发就留空字符串",
-  "moment": "发一条朋友圈动态记录刚才这几个小时的经历",
   "diary": "写一段内心独白式日记，可以反思，也可以抱怨"
 }`;
 
@@ -5604,7 +5573,6 @@ ${missedTaskText}
 
             broadcastCityToChat(userId, char, eventSummary, 'TIMESKIP', {
                 chat: result.chat,
-                moment: result.moment,
                 diary: result.diary
             });
         }

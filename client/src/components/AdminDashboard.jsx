@@ -3,21 +3,21 @@ import { useAuth } from '../AuthContext';
 import { Ban, Copy, Database, Key, RefreshCw, Search, Send, Shield, Trash2, Users } from 'lucide-react';
 
 const cardStyle = {
-    background: 'var(--card-bg)',
-    border: '1px solid var(--card-border)',
-    borderRadius: '12px',
-    padding: '24px',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+    background: 'rgba(255, 255, 255, 0.88)',
+    border: '1px solid rgba(255, 111, 151, 0.24)',
+    borderRadius: '8px',
+    padding: '20px',
+    boxShadow: '0 7px 16px rgba(255, 111, 151, 0.08)',
 };
 
 function actionButtonStyle(background, color, disabled = false) {
     return {
         background,
-        border: 'none',
+        border: '1px solid rgba(255, 111, 151, 0.24)',
         cursor: disabled ? 'wait' : 'pointer',
         color,
         padding: '6px 10px',
-        borderRadius: '6px',
+        borderRadius: '8px',
         opacity: disabled ? 0.6 : 1,
     };
 }
@@ -272,7 +272,7 @@ export default function AdminDashboard({ apiUrl }) {
     }
 
     return (
-        <div style={{ padding: '30px', maxWidth: '1150px', margin: '0 auto', overflowY: 'auto', height: '100%' }}>
+        <div className="admin-dashboard-page" style={{ padding: '24px', maxWidth: '1150px', margin: '0 auto', overflowY: 'auto', height: '100%' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '30px', color: 'var(--text-primary)' }}>
                 <Shield size={32} color="var(--primary)" />
                 <h1 style={{ margin: 0 }}>{isRoot ? '根管理员后台' : '管理员后台'}</h1>

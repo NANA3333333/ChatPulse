@@ -10,7 +10,6 @@ function createQuestService(deps = {}) {
         return [
             richNarrations?.log,
             richNarrations?.chat,
-            richNarrations?.moment,
             richNarrations?.diary
         ].map((value) => String(value || '').trim()).filter(Boolean).join('\n');
     }

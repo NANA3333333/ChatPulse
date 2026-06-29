@@ -60,7 +60,6 @@ function createActionService(deps = {}) {
         const taskNarrationText = [
             richNarrations?.log,
             richNarrations?.chat,
-            richNarrations?.moment,
             richNarrations?.diary
         ].map((value) => String(value || '').trim()).filter(Boolean).join('\n');
         const activeQuestClaim = db.city.getCharacterActiveQuestClaim?.(char.id) || null;
@@ -135,7 +134,6 @@ function createActionService(deps = {}) {
             const candidates = [
                 richNarrations.log,
                 richNarrations.diary,
-                richNarrations.moment,
                 richNarrations.chat
             ].map(v => String(v || '').trim()).filter(Boolean);
 

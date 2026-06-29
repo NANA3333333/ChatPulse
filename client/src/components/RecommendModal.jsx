@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Search, CheckCircle2 } from 'lucide-react';
-import AuthenticatedImage from './AuthenticatedImage';
+import AvatarWithFrame from './AvatarWithFrame';
 import { useLanguage } from '../LanguageContext';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 
@@ -43,8 +43,8 @@ function RecommendModal({ apiUrl, currentContact, allContacts, onClose, onRecomm
     );
 
     return (
-        <div className="modal-overlay">
-            <div className="modal-content" style={{ maxWidth: '400px', padding: '0' }}>
+        <div className="modal-overlay chat-modal-overlay chat-recommend-modal-overlay">
+            <div className="modal-content chat-action-modal chat-recommend-modal" style={{ maxWidth: '400px', padding: '0' }}>
                 <div style={{ padding: '15px 20px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ fontSize: '16px', fontWeight: '500' }}>
                         {lang === 'en' ? `Recommend Contact to ${currentContact.name}` : `将联系人推荐给 ${currentContact.name}`}
@@ -81,6 +81,7 @@ function RecommendModal({ apiUrl, currentContact, allContacts, onClose, onRecomm
                                     availableContacts.map(c => (
                                         <div
                                             key={c.id}
+                                            className={`chat-modal-list-row ${selectedCharId === c.id ? 'is-selected' : ''}`}
                                             onClick={() => setSelectedCharId(c.id)}
                                             style={{
                                                 display: 'flex', alignItems: 'center', padding: '10px',
@@ -89,7 +90,14 @@ function RecommendModal({ apiUrl, currentContact, allContacts, onClose, onRecomm
                                                 borderRadius: '6px'
                                             }}
                                         >
-                                            <AuthenticatedImage src={resolveAvatarUrl(c.avatar, apiUrl, c.name || c.id || 'User')} fallbackSrc={defaultAvatarUrl(c.name || c.id || 'User')} alt={c.name} style={{ width: '40px', height: '40px', borderRadius: '50%', marginRight: '12px', objectFit: 'cover' }} />
+                                            <AvatarWithFrame
+                                                size={40}
+                                                frame={c.avatar_frame}
+                                                src={resolveAvatarUrl(c.avatar, apiUrl, c.name || c.id || 'User')}
+                                                fallbackSrc={defaultAvatarUrl(c.name || c.id || 'User')}
+                                                alt={c.name}
+                                                style={{ marginRight: '12px' }}
+                                            />
                                             <div style={{ flex: 1, fontWeight: '500', fontSize: '15px' }}>{c.name}</div>
                                             {selectedCharId === c.id && (
                                                 <CheckCircle2 size={20} color="var(--accent-color)" />

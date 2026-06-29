@@ -221,7 +221,6 @@ ${simulationLogs.map((l, idx) => `${idx + 1}. ${l}`).join('\n')}
   "characters": {
     "传入的角色ID_1": {
       "chat": "该角色发给玩家 ${userName} 的私聊内容。必须是强烈的第一人称口吻；如果不想发则留空字符串。",
-      "moment": "该角色事后发的一条朋友圈动态",
       "diary": "该角色的私密日记，写下这次相遇中的真实想法",
       "affinity_deltas": {
         "其他角色ID_A": -2,
@@ -252,9 +251,8 @@ ${simulationLogs.map((l, idx) => `${idx + 1}. ${l}`).join('\n')}
         systemPrompt += `2. 不要把角色对玩家的强烈情绪，直接改写成对在场其他角色的情绪。\n`;
         systemPrompt += `3. 只有当本次现场互动里出现了明确的挑衅、误会、竞争、迁怒或投射时，才允许把负面情绪落到其他角色身上。\n`;
         systemPrompt += `4. affinity_deltas 和 impressions 必须基于角色之间这次真实互动本身，而不是基于他们对玩家的私聊情绪。\n`;
-        systemPrompt += `[输出偏好]\n如果这次相遇对某个角色来说明显值得私聊玩家、发朋友圈或写日记，请积极填写对应字段，不要过度保守。\n`;
+        systemPrompt += `[输出偏好]\n如果这次相遇对某个角色来说明显值得私聊玩家或写日记，请积极填写对应字段，不要过度保守。\n`;
         systemPrompt += `- chat 要像角色真的忍不住想找玩家说话，允许嫉妒、撒娇、试探、炫耀、抱怨。\n`;
-        systemPrompt += `- moment 要像真实朋友圈，不要写成“在某地遇到了一群人”这种系统播报。\n`;
         systemPrompt += `- diary 要比 chat 更坦白、更像心里话。\n`;
         systemPrompt += `如果角色没有明确表达欲，再留空字符串。\n`;
         systemPrompt += `[严格 JSON 语法警告]\n1. 所有字符串值内部都不能出现真实换行；如需换行，请输出转义字符 "\\n"。\n2. 所有字符串值内部都不能包含未转义的英文双引号 (\")；必要时请改用单引号或中文引号。\n3. 最后一个字段后面不要带多余逗号。\n`;
@@ -330,7 +328,6 @@ ${simulationLogs.map((l, idx) => `${idx + 1}. ${l}`).join('\n')}
             broadcastCityEvent(userId, c.id, 'SOCIAL', `🤝 ${c.name}: ${summaryMsg}`);
             broadcastCityToChat(userId, c, summaryMsg, 'SOCIAL', {
                 chat: data.chat,
-                moment: data.moment,
                 diary: data.diary
             });
         }

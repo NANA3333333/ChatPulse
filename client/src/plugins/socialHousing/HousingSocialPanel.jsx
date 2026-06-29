@@ -426,7 +426,7 @@ function summarizeAgencyError(value) {
   if (!raw) return '';
   return raw.length > 320 ? `${raw.slice(0, 320)}...` : raw;
 }
-function Pill({ children, bg = '#f8fafc', color = '#475569', icon: Icon = null }) {
+function Pill({ children, bg = '#fff8fb', color = '#806273', icon: Icon = null }) {
   return (
     <span className="housing-pill" style={{ background: bg, color }}>
       {Icon ? <Icon size={13} strokeWidth={2.4} /> : null}
@@ -463,8 +463,8 @@ function ActionButton({ children, icon: Icon = null, tone = 'neutral', disabled 
   );
 }
 function StatCard({ label, value, tone = 'neutral', icon: Icon = null }) {
-  const color = tone === 'good' ? '#047857' : tone === 'warn' ? '#be123c' : tone === 'info' ? '#1d4ed8' : '#334155';
-  const bg = tone === 'good' ? '#ecfdf5' : tone === 'warn' ? '#fff1f2' : tone === 'info' ? '#eff6ff' : '#fff';
+  const color = tone === 'good' ? '#2f9c76' : tone === 'warn' ? '#be4664' : tone === 'info' ? '#ff4f82' : '#342b34';
+  const bg = tone === 'good' ? '#effaf4' : tone === 'warn' ? '#fff1f6' : tone === 'info' ? '#fff0f6' : '#fff';
   return (
     <div className="housing-stat-card" style={{ ...shell.card, background: bg }}>
       <div className="housing-stat-meta">
@@ -491,14 +491,14 @@ const chainStageOrder = ['recommended', 'viewing', 'considering', 'deciding', 'r
 function getChainTone(status) {
   if (status === 'failed') return { bg: '#fff1f2', color: '#be123c', icon: AlertTriangle };
   if (status === 'completed') return { bg: '#dcfce7', color: '#166534', icon: CheckCircle2 };
-  return { bg: '#eff6ff', color: '#1d4ed8', icon: CircleDashed };
+  return { bg: '#fff0f6', color: '#ff4f82', icon: CircleDashed };
 }
 function getHousingStatusTone(status, hasHousing) {
   if (status === 'overdue') return { bg: '#fff1f2', color: '#be123c', icon: AlertTriangle, label: text.overdue };
-  if (hasHousing) return { bg: '#ecfdf5', color: '#047857', icon: Home, label: text.stable };
-  return { bg: '#f8fafc', color: '#475569', icon: CircleDashed, label: text.homeless };
+  if (hasHousing) return { bg: '#effaf4', color: '#2f9c76', icon: Home, label: text.stable };
+  return { bg: '#fff8fb', color: '#806273', icon: CircleDashed, label: text.homeless };
 }
-function ScoreBar({ label, value, color = '#1d4ed8' }) {
+function ScoreBar({ label, value, color = '#ff4f82' }) {
   const safe = Math.max(0, Math.min(60, Number(value || 0)));
   const width = `${Math.min(100, Math.round((safe / 60) * 100))}%`;
   return (
@@ -1729,7 +1729,7 @@ export default function HousingSocialPanel() {
           <ActionButton icon={Plus} tone="primary" onClick={() => { setEditingHomeId(''); setHomeForm(emptyHome); setShowCustomHomeEditor(true); }}>{text.custom}</ActionButton>
           <ActionButton icon={WandSparkles} tone="neutral" onClick={() => setShowRoomAssemblyModal(true)}>{text.openRoomAssembly}</ActionButton>
         </div>
-        {homeNotice ? <div style={{ ...shell.card, background: '#eff6ff', color: '#1d4ed8', borderColor: '#bfdbfe', fontSize: 14 }}>{homeNotice}</div> : null}
+        {homeNotice ? <div className="housing-inline-notice" style={{ ...shell.card, fontSize: 14 }}>{homeNotice}</div> : null}
         <div className="housing-home-grid">
           {sortedHousingTiers.map((home) => (
             <HomeSummaryCard
@@ -1804,9 +1804,9 @@ export default function HousingSocialPanel() {
             {visibleAgencyAds.length ? visibleAgencyAds.map((ad) => (
               <div key={ad.id} style={shell.card}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
-                  <div style={{ fontWeight: 800, color: '#0f172a', fontSize: 15 }}>{ad.title || text.noAds}</div>
+                  <div className="housing-ad-title" style={{ fontWeight: 800, fontSize: 15 }}>{ad.title || text.noAds}</div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <Pill bg={ad.trigger_type === 'auto' ? '#eff6ff' : '#f8fafc'} color={ad.trigger_type === 'auto' ? '#1d4ed8' : '#475569'}>{ad.trigger_type === 'auto' ? text.auto : text.manual}</Pill>
+                    <Pill bg={ad.trigger_type === 'auto' ? '#fff0f6' : '#fff8fb'} color={ad.trigger_type === 'auto' ? '#ff4f82' : '#806273'}>{ad.trigger_type === 'auto' ? text.auto : text.manual}</Pill>
                     {Number(ad.is_published ? 1 : 0) === 1 ? <Pill bg="#dcfce7" color="#166534">{text.published}</Pill> : null}
                     <ActionButton icon={Trash2} tone="danger" onClick={() => deleteAgencyAd(ad.id).catch((e) => alert(e.message))}>{text.removeAd}</ActionButton>
                   </div>
@@ -1818,12 +1818,12 @@ export default function HousingSocialPanel() {
         </div>
       </Section>
       {showRoomAssemblyModal ? (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.42)', zIndex: 52, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }} onClick={() => setShowRoomAssemblyModal(false)}>
-          <div style={{ width: 'min(760px, 100%)', maxHeight: '85vh', overflowY: 'auto', background: '#fff', borderRadius: 20, border: '1px solid #bfdbfe', boxShadow: '0 20px 80px rgba(15,23,42,0.18)', padding: 20 }} onClick={(e) => e.stopPropagation()}>
+        <div className="housing-modal-backdrop" style={{ position: 'fixed', inset: 0, zIndex: 52, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }} onClick={() => setShowRoomAssemblyModal(false)}>
+          <div className="housing-modal-card housing-room-assembly-modal" style={{ width: 'min(760px, 100%)', maxHeight: '85vh', overflowY: 'auto', padding: 20 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 14 }}>
               <div>
-                <div style={{ fontSize: 20, fontWeight: 800, color: '#1d4ed8' }}>{text.roomAssembly}</div>
-                <div style={{ color: '#64748b', fontSize: 13, marginTop: 4 }}>实验版会直接覆盖当前像素小屋布局，并保存到浏览器本地房间存储。</div>
+                <div className="housing-modal-title" style={{ fontSize: 20, fontWeight: 800 }}>{text.roomAssembly}</div>
+                <div className="housing-modal-subtitle" style={{ fontSize: 13, marginTop: 4 }}>实验版会直接覆盖当前像素小屋布局，并保存到浏览器本地房间存储。</div>
               </div>
               <ActionButton icon={X} tone="neutral" onClick={() => setShowRoomAssemblyModal(false)}>{text.cancel}</ActionButton>
             </div>
@@ -1840,24 +1840,24 @@ export default function HousingSocialPanel() {
                   <Pill>{text.comfort} {selectedRoomAssemblyHome.comfort || 0}</Pill>
                   <Pill>{text.prestige} {selectedRoomAssemblyHome.prestige || 0}</Pill>
                   <Pill>{text.privacy} {selectedRoomAssemblyHome.privacy || 0}</Pill>
-                  <Pill bg="#eff6ff" color="#1d4ed8">预算 {formatMoney(getRoomAssemblyBudget(selectedRoomAssemblyHome))}</Pill>
+                  <Pill bg="#fff0f6" color="#ff4f82">预算 {formatMoney(getRoomAssemblyBudget(selectedRoomAssemblyHome))}</Pill>
                   <Pill bg="#f5f3ff" color="#6d28d9">家具商店 {roomAssemblyShopItems.length} 件</Pill>
                   <Pill bg="#ecfdf5" color="#047857">比例标尺 {Object.keys(currentRoomAssemblySizeProfile).length} 类</Pill>
                 </div>
               ) : null}
-              <div style={{ color: '#64748b', fontSize: 13, lineHeight: 1.65 }}>
+              <div className="housing-modal-copy" style={{ fontSize: 13, lineHeight: 1.65 }}>
                 点生成后，中介 AI 会读取房间网格、完整家具商店、每件家具价格和当前房源预算，自行采购并摆放；保存完成后去“像素实装模块 / 居住房间”即可看到实际房间已经变成这套布局。
               </div>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                 <ActionButton icon={WandSparkles} tone="primary" disabled={roomAssemblySaving} onClick={runRoomAssembly}>{roomAssemblySaving ? 'AI生成中...' : text.generateRoomAssembly}</ActionButton>
                 <ActionButton icon={X} tone="neutral" onClick={() => setShowRoomAssemblyModal(false)}>{text.cancel}</ActionButton>
               </div>
-              {roomAssemblyNotice ? <div style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 14, padding: 12, fontSize: 14, lineHeight: 1.55 }}>{roomAssemblyNotice}</div> : null}
+              {roomAssemblyNotice ? <div className="housing-inline-notice" style={{ borderRadius: 8, padding: 12, fontSize: 14, lineHeight: 1.55 }}>{roomAssemblyNotice}</div> : null}
               {roomAssemblySnapshot ? (
                 <div style={{ border: '1px solid #e7edf5', borderRadius: 16, padding: 14, background: '#f8fafc' }}>
                   <div style={{ fontWeight: 800, color: '#334155', marginBottom: 8 }}>已保存素材</div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-                    <Pill bg="#eff6ff" color="#1d4ed8">预算 {formatMoney(roomAssemblySnapshot.budget)}</Pill>
+                    <Pill bg="#fff0f6" color="#ff4f82">预算 {formatMoney(roomAssemblySnapshot.budget)}</Pill>
                     <Pill bg="#ecfdf5" color="#047857">花费 {formatMoney(roomAssemblySnapshot.spent)}</Pill>
                     <Pill>购买 {roomAssemblySnapshot.purchases?.length || 0} 件</Pill>
                     <Pill>比例标尺 {Object.keys(roomAssemblySnapshot.sizeProfile || {}).length} 类</Pill>
@@ -1877,12 +1877,12 @@ export default function HousingSocialPanel() {
         </div>
       ) : null}
       {(showCustomHomeEditor || editingHomeId) ? (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.42)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }} onClick={() => { setShowCustomHomeEditor(false); setEditingHomeId(''); setHomeForm(emptyHome); }}>
-          <div style={{ width: 'min(860px, 100%)', maxHeight: '85vh', overflowY: 'auto', background: '#fff', borderRadius: 20, border: '1px solid #e7edf5', boxShadow: '0 20px 80px rgba(15,23,42,0.18)', padding: 20 }} onClick={(e) => e.stopPropagation()}>
+        <div className="housing-modal-backdrop" style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }} onClick={() => { setShowCustomHomeEditor(false); setEditingHomeId(''); setHomeForm(emptyHome); }}>
+          <div className="housing-modal-card housing-home-editor-modal" style={{ width: 'min(860px, 100%)', maxHeight: '85vh', overflowY: 'auto', padding: 20 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 14 }}>
               <div>
-                <div style={{ fontSize: 20, fontWeight: 800, color: '#334155' }}>{editingHomeId ? text.modalEditHome : text.modalCustomHome}</div>
-                <div style={{ color: '#94a3b8', fontSize: 13, marginTop: 4 }}>这里是少数情况才需要手动改的详细资料。</div>
+                <div className="housing-modal-title" style={{ fontSize: 20, fontWeight: 800 }}>{editingHomeId ? text.modalEditHome : text.modalCustomHome}</div>
+                <div className="housing-modal-subtitle" style={{ fontSize: 13, marginTop: 4 }}>这里是少数情况才需要手动改的详细资料。</div>
               </div>
               <ActionButton icon={X} tone="neutral" onClick={() => { setShowCustomHomeEditor(false); setEditingHomeId(''); setHomeForm(emptyHome); }}>{text.cancel}</ActionButton>
             </div>

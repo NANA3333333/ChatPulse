@@ -33,7 +33,7 @@ export const plugins = [
     name_zh: '\u4f4f\u623f\u7cfb\u7edf',
     icon: Building2,
     component: HousingSocialPanel,
-    color: '#f97316',
+    color: 'var(--accent-color)',
     position: 'top'
   },
   {
@@ -51,7 +51,7 @@ export const plugins = [
     name_zh: '\u5546\u4e1a\u8857',
     icon: Activity,
     component: CityLog,
-    color: '#ff9800',
+    color: 'var(--accent-color)',
     position: 'top'
   }
 ];

@@ -104,12 +104,7 @@ function getUserDb(userId) {
             name TEXT DEFAULT 'User',
             avatar TEXT,
             bio TEXT DEFAULT '',
-            theme TEXT DEFAULT 'light',
             group_msg_limit INTEGER DEFAULT 20,
-            group_skip_rate INTEGER DEFAULT 10,
-            group_proactive_enabled INTEGER DEFAULT 0,
-            group_interval_max INTEGER DEFAULT 60,
-            theme_config TEXT DEFAULT '{}',
             banner TEXT,
             private_msg_limit_for_group INTEGER DEFAULT 3
         );
@@ -151,6 +146,9 @@ function getUserDb(userId) {
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             avatar TEXT,
+            group_proactive_enabled INTEGER DEFAULT 0,
+            group_interval_min INTEGER DEFAULT 10,
+            group_interval_max INTEGER DEFAULT 60,
             created_at INTEGER NOT NULL
         );
 
@@ -407,20 +405,35 @@ function getUserDb(userId) {
             db.prepare('ALTER TABLE user_profile ADD COLUMN private_msg_limit_for_group INTEGER DEFAULT 3').run();
         } catch (e) { }
 
-        // Add group_skip_rate to user_profile (% chance a char skips reply in group chat)
+        // Add per-group proactive settings
+        try { db.prepare('ALTER TABLE group_chats ADD COLUMN group_proactive_enabled INTEGER DEFAULT 0').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE group_chats ADD COLUMN group_interval_min INTEGER DEFAULT 10').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE group_chats ADD COLUMN group_interval_max INTEGER DEFAULT 60').run(); } catch (e) { }
+
         try {
-            db.prepare('ALTER TABLE user_profile ADD COLUMN group_skip_rate INTEGER DEFAULT 10').run();
+            const legacyGroupProactive = db.prepare(`
+                SELECT group_proactive_enabled, group_interval_min, group_interval_max
+                FROM user_profile
+                WHERE id = ?
+            `).get('default');
+            if (Number(legacyGroupProactive?.group_proactive_enabled || 0) === 1) {
+                const min = Math.max(1, Math.min(1440, Number(legacyGroupProactive.group_interval_min || 10)));
+                const max = Math.max(min, Math.min(1440, Number(legacyGroupProactive.group_interval_max || 60)));
+                db.prepare(`
+                    UPDATE group_chats
+                    SET group_proactive_enabled = 1,
+                        group_interval_min = ?,
+                        group_interval_max = ?
+                    WHERE COALESCE(group_proactive_enabled, 0) = 0
+                `).run(min, max);
+            }
         } catch (e) { }
 
-        // Add jealousy_chance to user_profile (% chance a char gets jealous when user talks to someone else)
-        try {
-            db.prepare('ALTER TABLE user_profile ADD COLUMN jealousy_chance INTEGER DEFAULT 5').run();
-        } catch (e) { }
-
-        // Add group proactive settings
-        try { db.prepare('ALTER TABLE user_profile ADD COLUMN group_proactive_enabled INTEGER DEFAULT 0').run(); } catch (e) { }
-        try { db.prepare('ALTER TABLE user_profile ADD COLUMN group_interval_min INTEGER DEFAULT 10').run(); } catch (e) { }
-        try { db.prepare('ALTER TABLE user_profile ADD COLUMN group_interval_max INTEGER DEFAULT 60').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile DROP COLUMN group_skip_rate').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile DROP COLUMN jealousy_chance').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile DROP COLUMN group_proactive_enabled').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile DROP COLUMN group_interval_min').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile DROP COLUMN group_interval_max').run(); } catch (e) { }
 
         // Add wallet fields
         try { db.prepare('ALTER TABLE characters ADD COLUMN wallet REAL DEFAULT 200').run(); } catch (e) { }
@@ -430,11 +443,6 @@ function getUserDb(userId) {
 
         // Add refunded column to private_transfers (for refund feature)
         try { db.prepare('ALTER TABLE private_transfers ADD COLUMN refunded INTEGER DEFAULT 0').run(); } catch (e) { }
-
-        // Add theme and custom_css for UI skinning
-        try { db.prepare('ALTER TABLE user_profile ADD COLUMN theme TEXT DEFAULT "default"').run(); } catch (e) { }
-        try { db.prepare('ALTER TABLE user_profile ADD COLUMN custom_css TEXT DEFAULT ""').run(); } catch (e) { }
-        try { db.prepare('ALTER TABLE user_profile ADD COLUMN theme_config TEXT DEFAULT "{}"').run(); } catch (e) { }
 
         // Add per-group inject_limit (how many messages from this group get injected into private/other group contexts)
         try { db.prepare('ALTER TABLE group_chats ADD COLUMN inject_limit INTEGER DEFAULT 5').run(); } catch (e) { }
@@ -924,11 +932,18 @@ function getUserDb(userId) {
                 .run('default', 'User', 'https://api.dicebear.com/7.x/notionists/svg?seed=User');
             profile = db.prepare('SELECT * FROM user_profile WHERE id = ?').get('default');
         }
+        if (profile) {
+            delete profile.group_skip_rate;
+            delete profile.jealousy_chance;
+            delete profile.group_proactive_enabled;
+            delete profile.group_interval_min;
+            delete profile.group_interval_max;
+        }
         return profile;
     }
 
     function updateUserProfile(data) {
-        const allowedFields = ['name', 'avatar', 'banner', 'bio', 'theme', 'custom_css', 'theme_config', 'group_msg_limit', 'group_skip_rate', 'group_proactive_enabled', 'group_interval_min', 'group_interval_max', 'jealousy_chance', 'wallet', 'private_msg_limit_for_group', 'moments_token_limit'];
+        const allowedFields = ['name', 'avatar', 'banner', 'bio', 'group_msg_limit', 'wallet', 'private_msg_limit_for_group', 'moments_token_limit'];
         const fields = Object.keys(data).filter(k => allowedFields.includes(k));
         if (fields.length === 0) return;
         const setClause = fields.map(f => `${f} = ?`).join(', ');

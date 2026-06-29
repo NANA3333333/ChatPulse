@@ -3,7 +3,9 @@
   min-height: 100%;
   padding: 18px;
   background:
-    linear-gradient(180deg, #fff4fb 0%, #f2fbff 48%, #f7fff3 100%);
+    linear-gradient(180deg, rgba(255, 252, 254, 0.76) 0%, rgba(255, 249, 252, 0.94) 100%),
+    radial-gradient(rgba(255, 111, 151, 0.07) 1px, transparent 1px);
+  background-size: auto, 26px 26px;
   color: #4f4050;
 }
 .pixel-world-header {
@@ -1577,6 +1579,7 @@
   font-weight: 800;
 }
 .pixel-world-player-switch-control,
+.pixel-world-player-bind-control,
 .pixel-world-auto-walk-control,
 .pixel-world-player-scale-control {
   display: inline-flex;
@@ -1591,6 +1594,7 @@
   font-weight: 800;
 }
 .pixel-world-player-switch-control select,
+.pixel-world-player-bind-control select,
 .pixel-world-auto-walk-control select {
   max-width: 142px;
   border: 1px solid #ead0dc;
@@ -1602,6 +1606,36 @@
 }
 .pixel-world-player-switch-control strong {
   color: #d45893;
+}
+.pixel-world-player-bind-control {
+  border-color: #b9ddca;
+  background: #edf9f2;
+  color: #3a7d61;
+}
+.pixel-world-player-bind-control select {
+  border-color: #b9ddca;
+  color: #2f7658;
+}
+.pixel-world-player-bind-control button {
+  padding: 4px 9px;
+  border: 1px solid #b9ddca;
+  border-radius: 5px;
+  background: #fff;
+  color: #2f7658;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 900;
+}
+.pixel-world-player-bind-control button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+.pixel-world-player-bind-control strong {
+  max-width: 150px;
+  overflow: hidden;
+  color: #2f7658;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .pixel-world-auto-walk-control button {
   padding: 4px 8px;
@@ -2228,6 +2262,45 @@
   resize: vertical;
   line-height: 1.45;
 }
+.pixel-world-behavior-binding-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #dcebf6;
+  border-radius: 8px;
+  background: #f8fbfe;
+}
+.pixel-world-behavior-binding-grid button {
+  min-height: 34px;
+  border: 1px solid #d7e7f5;
+  border-radius: 7px;
+  background: #fff;
+  color: #356fa6;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+}
+.pixel-world-behavior-binding-grid button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+.pixel-world-behavior-binding-status {
+  grid-column: 1 / -1;
+  padding: 7px 8px;
+  border: 1px solid #e1ecf6;
+  border-radius: 7px;
+  background: #fff;
+  color: #607383;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+.pixel-world-behavior-binding-status.bound {
+  border-color: #b9ddca;
+  background: #edf9f2;
+  color: #3a7d61;
+}
 .pixel-world-behavior-model-grid {
   display: grid;
   gap: 8px;
@@ -2722,4 +2795,153 @@
   .pixel-world-stage {
     --tile: clamp(20px, 5vw, 30px);
   }
+}
+
+.app-container.has-chat-skin .pixel-world-page {
+  width: 100%;
+  min-height: 100%;
+  padding: 18px !important;
+  color: #342b34;
+}
+
+.app-container.has-chat-skin .pixel-world-header {
+  position: relative;
+  min-height: 64px;
+  padding: 16px 18px;
+  border: 1px solid rgba(255, 111, 151, 0.24);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 254, 0.94) 0%, rgba(255, 247, 250, 0.92) 100%),
+    radial-gradient(rgba(255, 111, 151, 0.08) 1px, transparent 1px);
+  background-size: auto, 22px 22px;
+  box-shadow: 0 7px 16px rgba(255, 111, 151, 0.08);
+}
+
+.app-container.has-chat-skin .pixel-world-header::before {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  left: 7px;
+  top: 7px;
+  border: 2px solid rgba(255, 111, 151, 0.36);
+  border-right-color: transparent;
+  border-bottom-color: transparent;
+  border-radius: 8px 0 0 0;
+  pointer-events: none;
+}
+
+.app-container.has-chat-skin .pixel-world-kicker {
+  color: #ff4f82;
+  font-weight: 900;
+}
+
+.app-container.has-chat-skin .pixel-world-header h2,
+.app-container.has-chat-skin .pixel-world-scene-title h3,
+.app-container.has-chat-skin .pixel-world-card h3,
+.app-container.has-chat-skin .pixel-world-asset-panel h3,
+.app-container.has-chat-skin .pixel-world-inspector h3,
+.app-container.has-chat-skin .pixel-world-behavior-panel h3 {
+  color: #2d2531;
+  letter-spacing: 0;
+}
+
+.app-container.has-chat-skin .pixel-world-header p,
+.app-container.has-chat-skin .pixel-world-scene-title span,
+.app-container.has-chat-skin .pixel-world-card p,
+.app-container.has-chat-skin .pixel-world-editor-toolbar span {
+  color: #806273;
+}
+
+.app-container.has-chat-skin .pixel-world-tabs,
+.app-container.has-chat-skin .pixel-world-style-tabs button,
+.app-container.has-chat-skin .pixel-world-editor-toolbar,
+.app-container.has-chat-skin .pixel-world-scene-panel,
+.app-container.has-chat-skin .pixel-world-card,
+.app-container.has-chat-skin .pixel-world-asset-panel,
+.app-container.has-chat-skin .pixel-world-inspector,
+.app-container.has-chat-skin .pixel-world-behavior-panel,
+.app-container.has-chat-skin .pixel-world-layer-panel,
+.app-container.has-chat-skin .pixel-world-interaction-menu,
+.app-container.has-chat-skin .pixel-world-behavior-dialog {
+  border-color: rgba(255, 111, 151, 0.24) !important;
+  border-radius: 8px !important;
+  background: rgba(255, 255, 255, 0.88) !important;
+  box-shadow: 0 7px 16px rgba(255, 111, 151, 0.08) !important;
+}
+
+.app-container.has-chat-skin .pixel-world-scene-title {
+  border-bottom-color: rgba(255, 111, 151, 0.22);
+  background:
+    linear-gradient(180deg, rgba(255, 253, 254, 0.92) 0%, rgba(255, 247, 250, 0.88) 100%),
+    radial-gradient(rgba(255, 111, 151, 0.08) 1px, transparent 1px);
+  background-size: auto, 22px 22px;
+}
+
+.app-container.has-chat-skin .pixel-world-tabs button,
+.app-container.has-chat-skin .pixel-world-style-tabs button,
+.app-container.has-chat-skin .pixel-world-editor-toolbar button,
+.app-container.has-chat-skin .pixel-world-asset-grid button,
+.app-container.has-chat-skin .pixel-world-asset-type-tabs button,
+.app-container.has-chat-skin .pixel-world-direction-card-head button,
+.app-container.has-chat-skin .pixel-world-direction-grid button,
+.app-container.has-chat-skin .pixel-world-place-card-head button,
+.app-container.has-chat-skin .pixel-world-nudge-pad button,
+.app-container.has-chat-skin .pixel-world-scale-row button,
+.app-container.has-chat-skin .pixel-world-collision-actions button,
+.app-container.has-chat-skin .pixel-world-behavior-head-actions button,
+.app-container.has-chat-skin .pixel-world-behavior-model-actions button,
+.app-container.has-chat-skin .pixel-world-behavior-run-row button,
+.app-container.has-chat-skin .pixel-world-behavior-actions button,
+.app-container.has-chat-skin .pixel-world-behavior-model-options button,
+.app-container.has-chat-skin .pixel-world-behavior-runtime-control button {
+  border-color: rgba(255, 111, 151, 0.28);
+  border-radius: 8px;
+  background: rgba(255, 247, 250, 0.88);
+  color: #ff4f82;
+  font-weight: 850;
+}
+
+.app-container.has-chat-skin .pixel-world-tabs button.active,
+.app-container.has-chat-skin .pixel-world-style-tabs button.active,
+.app-container.has-chat-skin .pixel-world-editor-toolbar button.active,
+.app-container.has-chat-skin .pixel-world-asset-type-tabs button.active,
+.app-container.has-chat-skin .pixel-world-direction-grid button.active,
+.app-container.has-chat-skin .pixel-world-behavior-model-options button.active,
+.app-container.has-chat-skin .pixel-world-behavior-actions button.active,
+.app-container.has-chat-skin .pixel-world-behavior-run-row button.primary {
+  border-color: rgba(255, 79, 130, 0.42);
+  background: linear-gradient(180deg, #ff8bad 0%, #ff5c8c 100%);
+  color: #fff;
+  box-shadow: 0 5px 14px rgba(255, 114, 160, 0.16);
+}
+
+.app-container.has-chat-skin .pixel-world-live,
+.app-container.has-chat-skin .pixel-world-editor-toolbar strong,
+.app-container.has-chat-skin .pixel-world-selected-name {
+  color: #ff4f82;
+}
+
+.app-container.has-chat-skin .pixel-world-stage-wrap,
+.app-container.has-chat-skin .pixel-world-editor-canvas-wrap {
+  border-color: rgba(255, 111, 151, 0.24);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(255, 247, 250, 0.72)),
+    #fff0f6;
+}
+
+.app-container.has-chat-skin .pixel-world-inspector input,
+.app-container.has-chat-skin .pixel-world-inspector textarea,
+.app-container.has-chat-skin .pixel-world-interaction-menu select,
+.app-container.has-chat-skin .pixel-world-player-switch-control select,
+.app-container.has-chat-skin .pixel-world-auto-walk-control select,
+.app-container.has-chat-skin .pixel-world-player-scale-control input[type="number"],
+.app-container.has-chat-skin .pixel-world-collision-fields input,
+.app-container.has-chat-skin .pixel-world-behavior-field input,
+.app-container.has-chat-skin .pixel-world-behavior-field select,
+.app-container.has-chat-skin .pixel-world-behavior-field textarea {
+  border-color: rgba(255, 111, 151, 0.30);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.90);
+  color: #342b34;
 }

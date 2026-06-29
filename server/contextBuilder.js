@@ -1013,7 +1013,7 @@ async function buildUniversalContext(context, character, recentInput = '', isGro
     };
 
     // Token metric accumulator
-    const breakdown = { base: 0, z_memory: 0, cross_group: 0, cross_private: 0, city_x_y: 0, q_impression: 0, moments: 0 };
+    const breakdown = { base: 0, z_memory: 0, cross_group: 0, cross_private: 0, city_x_y: 0, q_impression: 0 };
     const getDelta = (startLen) => getTokenCount(prompt.substring(startLen));
 
     let startLen = prompt.length;
@@ -1158,20 +1158,7 @@ async function buildUniversalContext(context, character, recentInput = '', isGro
     breakdown.base = getDelta(startLen);
     startLen = prompt.length;
 
-    // 6. Moments (朋友圈) Context
-    try {
-        const momentsTokenLimit = userProfile?.moments_token_limit ?? 1000;
-        const momentsContext = db.getMomentsContextForChar ? db.getMomentsContextForChar(character.id, momentsTokenLimit) : '';
-        if (momentsContext) {
-            prompt += `\n${momentsContext}\n`;
-        }
-    } catch (e) {
-        console.error('[ContextBuilder] Moments context error:', e.message);
-    }
-    breakdown.moments = getDelta(startLen);
-    startLen = prompt.length;
-
-    // 7. Vector Memories Retrieval
+    // 6. Vector Memories Retrieval
     // Main private-chat RAG should be decided by the planner model in engine.js.
     // We deliberately avoid regex/keyword-gated prefetch here so retrieval is not
     // coupled to a brittle hard-coded phrase list.

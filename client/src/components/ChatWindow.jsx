@@ -3,7 +3,7 @@ import MessageBubble from './MessageBubble';
 import InputBar from './InputBar';
 import TransferModal from './TransferModal';
 import RecommendModal from './RecommendModal';
-import AuthenticatedImage from './AuthenticatedImage';
+import AvatarWithFrame from './AvatarWithFrame';
 import { Send, Smile, Paperclip, Bell, Users, ShieldBan, Trash, BookOpen, Brain, MoreHorizontal, UserPlus, Gift, Heart, UserMinus, ShieldAlert, BadgeInfo, ChevronLeft } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
@@ -73,10 +73,18 @@ function createSystemErrorMessage(message, characterId) {
 function SystemMessage({ text }) {
     return (
         <div style={{ textAlign: 'center', margin: '8px 0' }}>
-            <span style={{ fontSize: '12px', color: '#aaa', backgroundColor: '#f0f0f0', padding: '3px 10px', borderRadius: '10px' }}>
+            <span style={{ fontSize: '12px', color: 'var(--text-secondary)', backgroundColor: 'rgba(255, 247, 250, 0.92)', padding: '3px 10px', borderRadius: '10px' }}>
                 {text}
             </span>
         </div>
+    );
+}
+
+function hasPrimaryModelConfig(contact = {}) {
+    return !!(
+        String(contact.api_endpoint || '').trim()
+        && contact.api_key_configured === true
+        && String(contact.model_name || '').trim()
     );
 }
 
@@ -102,90 +110,58 @@ function RagHeaderProgress({ progress, lang }) {
         setDisplayStep(progress.currentStep || 0);
     }, [progress?.runId, progress?.currentStep, progress]);
 
-    const totalSteps = 7;
+    const totalSteps = Number(progress?.totalSteps || 7);
     const percent = Math.max(0, Math.min(100, Math.round((displayStep / totalSteps) * 100)));
-    const labels = [
-        lang === 'en' ? '1 Switch' : '1 \u5207\u9898',
-        lang === 'en' ? '2 Route' : '2 \u8DEF\u7531',
-        lang === 'en' ? '3 Topics' : '3 \u4E3B\u9898',
-        lang === 'en' ? '4 Decide' : '4 \u51B3\u7B56',
-        lang === 'en' ? '5 Rewrite' : '5 \u6539\u5199',
-        lang === 'en' ? '6 Retrieve' : '6 \u53EC\u56DE',
-        lang === 'en' ? '7 Output' : '7 \u8F93\u51FA'
+    const pipelineSteps = [
+        { key: 'switch', zh: '切题', en: 'Switch' },
+        { key: 'route', zh: '路由', en: 'Route' },
+        { key: 'topics', zh: '主题', en: 'Topics' },
+        { key: 'decision', zh: '决策', en: 'Decision' },
+        { key: 'rewrite', zh: '改写', en: 'Rewrite' },
+        { key: 'retrieve', zh: '召回', en: 'Recall' },
+        { key: 'answer', zh: '输出', en: 'Answer' },
     ];
-    const currentLabelMap = {
-        switch: lang === 'en' ? 'Topic switch gate' : '\u5207\u9898\u5224\u65AD',
-        route: lang === 'en' ? 'Module routing' : '\u6A21\u5757\u8DEF\u7531',
-        topics: lang === 'en' ? 'Topic expansion' : '\u4E3B\u9898\u6269\u5C55',
-        decision: lang === 'en' ? 'RAG decision' : 'RAG \u51B3\u7B56',
-        rewrite: lang === 'en' ? 'Query rewrite' : '\u67E5\u8BE2\u6539\u5199',
-        retrieve: lang === 'en' ? 'Vector retrieval' : '\u5411\u91CF\u53EC\u56DE',
-        answer: lang === 'en' ? 'Main model output' : '\u4E3B\u6A21\u578B\u8F93\u51FA'
-    };
+    const currentKeyIndex = pipelineSteps.findIndex((step) => step.key === progress?.currentKey);
+    const activeIndex = Math.min(
+        pipelineSteps.length - 1,
+        Math.max(0, currentKeyIndex >= 0 ? currentKeyIndex : Number(displayStep || 1) - 1)
+    );
+    const railPercent = pipelineSteps.length > 1
+        ? Math.round((activeIndex / (pipelineSteps.length - 1)) * 100)
+        : percent;
     const statusText = progress?.status === 'completed'
         ? (lang === 'en' ? 'Completed' : '\u5DF2\u5B8C\u6210')
         : progress?.status === 'error'
             ? (lang === 'en' ? 'Failed' : '\u5931\u8D25')
             : progress?.skipped
                 ? (lang === 'en' ? 'Skipped to answer' : '\u8DF3\u8FC7\u524D\u7F6E\u9636\u6BB5')
-                : (currentLabelMap[progress?.currentKey] || (lang === 'en' ? 'Idle' : '\u7A7A\u95F2')); 
+                : (lang === 'en' ? 'Searching' : '\u68C0\u7D22\u4E2D');
 
     return (
-        <div style={{
-            flex: 1,
-            minWidth: 0,
-            padding: '2px 0 0'
-        }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '7px' }}>
-                <span style={{ fontSize: '11px', fontWeight: '700', color: '#55627e', letterSpacing: '0.02em' }}>
-                    {lang === 'en' ? 'RAG Pipeline' : 'RAG \u6D41\u7A0B'}
-                </span>
-                <span style={{ fontSize: '11px', color: '#8a90a6', whiteSpace: 'nowrap' }}>{percent}% - {statusText}</span>
+        <div className="rag-header-rail" title={`${lang === 'en' ? 'RAG Pipeline' : 'RAG \u6D41\u7A0B'}: ${percent}% - ${statusText}`}>
+            <div className="rag-header-rail__summary">
+                <span className="rag-header-rail__label">RAG {statusText}</span>
+                <span className="rag-header-rail__percent">{percent}%</span>
+                <span className="rag-header-rail__eta">{lang === 'en' ? 'about 2-3s' : '\u9884\u8BA1 2-3 \u79D2'}</span>
             </div>
-            <div style={{
-                position: 'relative',
-                height: '12px',
-                borderRadius: '999px',
-                background: 'rgba(255,255,255,0.88)',
-                border: '1px solid rgba(123,159,224,0.16)',
-                boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.03)',
-                overflow: 'hidden'
-            }}>
-                <div style={{
-                    position: 'absolute',
-                    inset: 0,
-                    width: `${percent}%`,
-                    borderRadius: percent >= 100 ? '999px' : '0 999px 999px 0',
-                    background: 'linear-gradient(90deg, rgba(198,223,247,0.98) 0%, rgba(166,200,241,0.96) 35%, rgba(123,159,224,0.92) 100%)',
-                    boxShadow: displayStep > 0 ? '0 0 14px rgba(123,159,224,0.20)' : 'none',
-                    animation: displayStep > 0 && progress?.status !== 'completed' ? 'ragPulse 1.8s ease-in-out infinite' : 'none',
-                    transition: 'width 260ms ease'
-                }} />
-            </div>
-            <div style={{
-                display: 'grid',
-                gridTemplateColumns: `repeat(${totalSteps}, minmax(0, 1fr))`,
-                gap: '6px',
-                marginTop: '8px'
-            }}>
-                {labels.map((label, index) => {
-                    const isDone = displayStep > index + 1 || (progress?.status === 'completed' && displayStep >= index + 1);
-                    const isCurrent = displayStep === index + 1 && progress?.status !== 'completed';
-                    return (
-                        <div key={label} style={{
-                            fontSize: '10px',
-                            lineHeight: '1.25',
-                            color: isDone || isCurrent ? '#5c6784' : '#a8adbc',
-                            fontWeight: isCurrent ? '700' : '500',
-                            whiteSpace: 'nowrap',
-                            textAlign: 'center',
-                            overflow: 'hidden',
-                            textOverflow: 'clip'
-                        }}>
-                            {label}
-                        </div>
-                    );
-                })}
+            <div className="rag-header-rail__track">
+                <span
+                    className="rag-header-rail__bar"
+                    style={{
+                        width: `${railPercent}%`,
+                        animation: displayStep > 0 && progress?.status !== 'completed' ? 'ragPulse 1.8s ease-in-out infinite' : 'none'
+                    }}
+                />
+                {pipelineSteps.map((step, index) => (
+                    <span
+                        key={step.key}
+                        className={`rag-header-rail__step ${index < activeIndex ? 'is-complete' : ''} ${index === activeIndex ? 'is-active' : ''}`}
+                        style={{ left: `${(index / (pipelineSteps.length - 1)) * 100}%` }}
+                    >
+                        <span className="rag-header-rail__dot" />
+                        <span className="rag-header-rail__step-label">{lang === 'en' ? step.en : step.zh}</span>
+                    </span>
+                ))}
             </div>
         </div>
     );
@@ -195,7 +171,7 @@ function ChatWindow({
     contact, allContacts, apiUrl, incomingMessageQueue, engineState,
     onToggleMemo, onToggleDiary, onToggleSettings,
     onPreloadMemo, onPreloadDiary, onPreloadSettings,
-    userAvatar, onBack
+    userAvatar, userAvatarFrame, onBack, isPrivateChatForegroundEnabled = false, chatLayoutKey = 'closed'
 }) {
     const { t, lang } = useLanguage();
     const [messages, setMessages] = useState([]);
@@ -211,6 +187,7 @@ function ChatWindow({
     const processedIncomingMessageIdsRef = useRef(new Set());
     const deletedMessageIdsRef = useRef(new Set());
     const messagesEndRef = useRef(null);
+    const isConversationPinnedToBottomRef = useRef(true);
     // contactRef keeps the current contact ID stable inside async callbacks
     const contactRef = useRef(contact);
     useEffect(() => { contactRef.current = contact; }, [contact]);
@@ -226,7 +203,54 @@ function ChatWindow({
     };
     const emotion = deriveEmotion(contact || {});
     const physical = derivePhysicalState(contact || {});
+    const isModelOnline = hasPrimaryModelConfig(contact);
     const displayMessages = useMemo(() => collapseRepeatedApiErrors(messages), [messages]);
+
+    const getConversationScroller = useCallback(() => {
+        const marker = messagesEndRef.current;
+        return marker?.closest?.('.chat-history') || marker?.parentElement || null;
+    }, []);
+
+    const updateConversationPinnedState = useCallback(() => {
+        const scroller = getConversationScroller();
+        if (!scroller) return;
+        const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+        isConversationPinnedToBottomRef.current = distanceFromBottom <= 120;
+    }, [getConversationScroller]);
+
+    const scrollToConversationEnd = useCallback((behavior = 'smooth') => {
+        const scroller = getConversationScroller();
+        if (!scroller) return;
+
+        const shouldReduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+        const scrollBehavior = shouldReduceMotion ? 'auto' : behavior;
+        if (typeof scroller.scrollTo === 'function') {
+            scroller.scrollTo({ top: scroller.scrollHeight, behavior: scrollBehavior });
+        } else {
+            scroller.scrollTop = scroller.scrollHeight;
+        }
+        isConversationPinnedToBottomRef.current = true;
+    }, [getConversationScroller]);
+
+    const scrollToConversationEndAfterLayout = useCallback((behavior = 'smooth', delays = []) => {
+        let secondFrame = null;
+        const timeoutIds = [];
+        const firstFrame = window.requestAnimationFrame(() => {
+            scrollToConversationEnd('auto');
+            secondFrame = window.requestAnimationFrame(() => scrollToConversationEnd(behavior));
+        });
+        delays.forEach((delay, index) => {
+            timeoutIds.push(window.setTimeout(() => {
+                scrollToConversationEnd(index === 0 ? 'auto' : behavior);
+            }, delay));
+        });
+
+        return () => {
+            window.cancelAnimationFrame(firstFrame);
+            if (secondFrame !== null) window.cancelAnimationFrame(secondFrame);
+            timeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
+        };
+    }, [scrollToConversationEnd]);
 
     const fetchLatestMessages = useCallback((options = {}) => {
         if (!contactRef.current?.id) return Promise.resolve();
@@ -358,10 +382,43 @@ function ChatWindow({
     }, [engineState, contact?.id, contact?.name]);
 
     useEffect(() => {
-        if (messagesEndRef.current) {
-            messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
-        }
-    }, [messages]);
+        scrollToConversationEnd('smooth');
+    }, [messages, scrollToConversationEnd]);
+
+    useEffect(() => {
+        if (!isPrivateChatForegroundEnabled) return undefined;
+
+        return scrollToConversationEndAfterLayout('smooth');
+    }, [isPrivateChatForegroundEnabled, scrollToConversationEndAfterLayout]);
+
+    useEffect(() => {
+        return scrollToConversationEndAfterLayout('smooth');
+    }, [selectMode, scrollToConversationEndAfterLayout]);
+
+    useEffect(() => {
+        return scrollToConversationEndAfterLayout('smooth', [60, 160, 320, 620]);
+    }, [chatLayoutKey, scrollToConversationEndAfterLayout]);
+
+    useEffect(() => {
+        const scroller = getConversationScroller();
+        if (!scroller || typeof ResizeObserver === 'undefined') return undefined;
+
+        let cancelPendingScroll = null;
+        const observer = new ResizeObserver(() => {
+            if (!isConversationPinnedToBottomRef.current) return;
+            if (cancelPendingScroll) cancelPendingScroll();
+            cancelPendingScroll = scrollToConversationEndAfterLayout('auto', [90, 220]);
+        });
+
+        observer.observe(scroller);
+        const chatMain = scroller.closest?.('.private-chat-main');
+        if (chatMain) observer.observe(chatMain);
+
+        return () => {
+            observer.disconnect();
+            if (cancelPendingScroll) cancelPendingScroll();
+        };
+    }, [chatLayoutKey, getConversationScroller, scrollToConversationEndAfterLayout]);
 
 
 
@@ -498,41 +555,63 @@ function ChatWindow({
     return (
         <>
             <div className="chat-header">
-                <div className="chat-header-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div className="chat-header-main">
                     <button className="mobile-back-btn" onClick={onBack} title="Back">
                         <ChevronLeft size={24} />
                     </button>
-                    <AuthenticatedImage
-                        src={resolveAvatarUrl(contact.avatar, apiUrl, contact.name || contact.id || 'User')}
-                        alt={contact.name}
-                        style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover' }}
-                        fallbackSrc={defaultAvatarUrl(contact.name || contact.id || 'User')}
-                    />
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
-                        <span style={{ fontSize: '16px', fontWeight: '600', color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{contact.name}</span>
-                        <span title="心理状态" style={{ fontSize: '12px', color: emotion.color, fontWeight: '600', whiteSpace: 'nowrap', flex: '0 0 auto' }}>{emotion.emoji} {emotion.label}</span>
-                        <span title="生理状态" style={{ fontSize: '12px', color: physical.color, fontWeight: '600', whiteSpace: 'nowrap', flex: '0 0 auto' }}>{physical.emoji} {physical.label}</span>
-                        <RagHeaderProgress progress={ragProgress} lang={lang} />
-                        {engineState?.[contact.id]?.isBlocked === 1 && <span style={{ color: 'var(--danger)', fontSize: '14px', fontWeight: 'bold' }}>(Blocked) [X]</span>}
+                    <div className="chat-header-avatar-shell">
+                        <AvatarWithFrame
+                            size={88}
+                            frame={contact.avatar_frame}
+                            src={resolveAvatarUrl(contact.avatar, apiUrl, contact.name || contact.id || 'User')}
+                            alt={contact.name}
+                            fallbackSrc={defaultAvatarUrl(contact.name || contact.id || 'User')}
+                        />
                     </div>
-
+                    <div className="chat-header-meta">
+                        <div className="chat-header-identity">
+                            <span className="chat-header-name-text">{contact.name}</span>
+                            <span className={`chat-header-model-status ${isModelOnline ? 'online' : 'offline'}`}>
+                                <span className="chat-header-model-status__dot" />
+                                {isModelOnline ? (lang === 'en' ? 'Online' : '在线') : (lang === 'en' ? 'Offline' : '离线')}
+                            </span>
+                        </div>
+                        <div className="chat-header-chips">
+                            <span className="chat-state-chip" title="心理状态" style={{ color: emotion.color }}>
+                                {emotion.emoji} {emotion.label}
+                            </span>
+                            <span className="chat-state-chip" title="生理状态" style={{ color: physical.color }}>
+                                {physical.emoji} {physical.label}
+                            </span>
+                            <span className="chat-state-chip chat-state-chip--energy" title={lang === 'en' ? 'Energy' : '精力'}>
+                                {lang === 'en' ? 'Energy 72' : '精力 72'}
+                            </span>
+                            {engineState?.[contact.id]?.isBlocked === 1 && <span className="chat-blocked-chip">(Blocked) [X]</span>}
+                        </div>
+                        <RagHeaderProgress progress={ragProgress} lang={lang} />
+                    </div>
                 </div>
                 <div className="chat-header-actions">
                     <button onClick={() => { setSelectMode(m => !m); setSelectedIds(new Set()); }} title={lang === 'en' ? 'Select Messages' : '选择消息'}
                         style={selectMode ? { color: 'var(--accent-color)', background: 'rgba(var(--accent-rgb, 74,144,226), 0.12)', borderRadius: '8px' } : {}}>
                         <Trash size={20} />
+                        <span>{lang === 'en' ? 'Select' : '选择消息'}</span>
                     </button>
                     <button onClick={() => setIsRecommendModalOpen(true)} title={lang === 'en' ? 'Recommend Contact' : '推荐联系人'}>
                         <UserPlus size={20} />
+                        <span>{lang === 'en' ? 'Recommend' : '推荐联系人'}</span>
                     </button>
                     <button onPointerEnter={onPreloadMemo} onFocus={onPreloadMemo} onClick={onToggleMemo} title={t('Memories')}>
                         <Brain size={20} />
+                        <span>{lang === 'en' ? 'Memory' : '记忆'}</span>
                     </button>
                     <button onPointerEnter={onPreloadDiary} onFocus={onPreloadDiary} onClick={onToggleDiary} title={t('Secret Diary')}>
                         <BookOpen size={20} />
+                        <span>{lang === 'en' ? 'Diary' : '日记'}</span>
                     </button>
                     <button onPointerEnter={onPreloadSettings} onFocus={onPreloadSettings} onClick={onToggleSettings} title={t('Chat Settings')}>
                         <MoreHorizontal size={20} />
+                        <span>{lang === 'en' ? 'Settings' : '聊天设置'}</span>
                     </button>
                 </div>
             </div>
@@ -543,14 +622,14 @@ function ChatWindow({
                 </div>
             )}
 
-            <div className="chat-history">
+            <div className="chat-history" onScroll={updateConversationPinnedState}>
                 {hasMore && (
                     <div style={{ textAlign: 'center', padding: '10px' }}>
                         <button
                             onClick={loadMore}
                             disabled={loadingMore}
                             style={{
-                                fontSize: '12px', color: '#888', background: '#f5f5f5',
+                                fontSize: '12px', color: 'var(--text-secondary)', background: 'rgba(255, 247, 250, 0.92)',
                                 border: '1px solid #ddd', borderRadius: '12px',
                                 padding: '5px 16px', cursor: 'pointer'
                             }}
@@ -565,10 +644,10 @@ function ChatWindow({
                     const boundaryElement = isBoundary ? (
                         <div key={`boundary-${msg.id}`} style={{ textAlign: 'center', margin: '30px 0', position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                             <div style={{ borderBottom: '1px dashed #ccc', position: 'absolute', top: '20px', left: '10%', right: '10%' }}></div>
-                            <span style={{ background: '#f5f5f5', padding: '0 15px', color: '#888', fontSize: '12px', fontWeight: 'bold', position: 'relative', zIndex: 1, textTransform: 'uppercase', letterSpacing: '1px' }}>
+                            <span style={{ background: 'rgba(255, 247, 250, 0.94)', padding: '0 15px', color: 'var(--text-warm)', fontSize: '12px', fontWeight: 'bold', position: 'relative', zIndex: 1, textTransform: 'uppercase', letterSpacing: '1px' }}>
                                 [AI] {lang === 'en' ? 'AI Vision Boundary' : 'AI \u89C6\u754C\u8FB9\u754C'} [AI]
                             </span>
-                            <div style={{ fontSize: '11px', color: '#aaa', marginTop: '4px', position: 'relative', zIndex: 1, backgroundColor: '#f5f5f5', padding: '0 10px' }}>
+                            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px', position: 'relative', zIndex: 1, backgroundColor: 'rgba(255, 247, 250, 0.94)', padding: '0 10px' }}>
                                 {lang === 'en' ? 'AI can only "see" messages below this line' : '\u6A21\u578B\u53EA\u80FD\u611F\u77E5\u6B64\u7EBF\u4EE5\u4E0B\u7684\u6D88\u606F'}
                             </div>
                         </div>
@@ -612,6 +691,7 @@ function ChatWindow({
                                     message={msg}
                                     characterName={contact.name}
                                     avatar={msg.role === 'user' ? (userAvatar || defaultAvatarUrl('User')) : (contact.avatar || defaultAvatarUrl(contact.name || contact.id || 'User'))}
+                                    avatarFrame={msg.role === 'user' ? userAvatarFrame : contact.avatar_frame}
                                     apiUrl={apiUrl}
                                     onRetry={handleRetry}
                                     contacts={allContacts}
@@ -626,7 +706,7 @@ function ChatWindow({
 
             {/* Floating delete bar when in select mode */}
             {selectMode && (
-                <div style={{
+                <div className="select-action-bar private-select-action-bar" style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                     padding: '10px 16px', background: '#fff', borderTop: '1px solid #eee',
                     boxShadow: '0 -2px 8px rgba(0,0,0,0.06)'
@@ -641,14 +721,14 @@ function ChatWindow({
                         >
                             {selectedIds.size === messages.length ? (lang === 'en' ? 'Deselect All' : '\u53D6\u6D88\u5168\u9009') : (lang === 'en' ? 'Select All' : '\u5168\u9009')}
                         </button>
-                        <span style={{ fontSize: '13px', color: '#888' }}>
+                        <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
                             {lang === 'en' ? `${selectedIds.size} selected` : `\u5DF2\u9009\u62E9 ${selectedIds.size} \u6761`}
                         </span>
                     </div>
                     <div style={{ display: 'flex', gap: '8px' }}>
                         <button
                             onClick={() => { setSelectMode(false); setSelectedIds(new Set()); }}
-                            style={{ padding: '6px 16px', fontSize: '13px', background: '#f5f5f5', border: '1px solid #ddd', borderRadius: '8px', cursor: 'pointer', color: '#666' }}
+                            style={{ padding: '6px 16px', fontSize: '13px', background: 'rgba(255, 247, 250, 0.92)', border: '1px solid #ddd', borderRadius: '8px', cursor: 'pointer', color: 'var(--text-secondary)' }}
                         >
                             {lang === 'en' ? 'Cancel' : '\u53D6\u6D88'}
                         </button>

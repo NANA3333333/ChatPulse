@@ -4,32 +4,35 @@
 }
 
 .housing-panel {
-  --housing-page-bg: linear-gradient(180deg, rgba(255, 251, 254, 0.96), rgba(241, 246, 255, 0.82));
-  --housing-card-bg: rgba(255, 255, 255, 0.84);
+  --housing-page-bg:
+    linear-gradient(180deg, rgba(255, 252, 254, 0.74) 0%, rgba(255, 249, 252, 0.92) 100%),
+    radial-gradient(rgba(255, 111, 151, 0.07) 1px, transparent 1px);
+  --housing-card-bg: rgba(255, 255, 255, 0.88);
   --housing-card-bg-strong: #fff;
   --housing-input-bg: rgba(255, 255, 255, 0.9);
   --housing-tint: rgba(248, 242, 248, 0.86);
-  --housing-blue-tint: rgba(241, 246, 255, 0.92);
+  --housing-blue-tint: rgba(255, 240, 246, 0.92);
   --housing-pink-tint: rgba(255, 243, 248, 0.92);
-  --housing-ink: var(--ink-strong, #293041);
-  --housing-muted: var(--ink-soft, #70748a);
-  --housing-faint: #9aa0b3;
-  --housing-blue: var(--accent-color, #7b9fe0);
-  --housing-blue-strong: #5a7fcc;
-  --housing-pink: var(--accent, #e8a0bf);
-  --housing-lilac: #c4a0e8;
-  --housing-line: var(--line-soft, rgba(123, 159, 224, 0.22));
-  --housing-line-pink: var(--line-pink, rgba(232, 160, 191, 0.28));
-  --housing-shadow: var(--shadow-soft, 0 12px 32px rgba(123, 159, 224, 0.12));
+  --housing-ink: #342b34;
+  --housing-muted: #806273;
+  --housing-faint: #b894a5;
+  --housing-blue: #ff4f82;
+  --housing-blue-strong: #ff4f82;
+  --housing-pink: #ff7aa2;
+  --housing-lilac: #f2a3be;
+  --housing-line: rgba(255, 111, 151, 0.24);
+  --housing-line-pink: rgba(255, 111, 151, 0.30);
+  --housing-shadow: 0 7px 16px rgba(255, 111, 151, 0.08);
   color: var(--housing-ink);
+  background-size: auto, 26px 26px !important;
 }
 
 .housing-panel input:focus,
 .housing-panel select:focus,
 .housing-panel textarea:focus {
   outline: none;
-  border-color: #60a5fa !important;
-  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.18);
+  border-color: #ff5c8c !important;
+  box-shadow: 0 0 0 3px rgba(255, 111, 151, 0.16);
 }
 
 .housing-section {
@@ -1008,6 +1011,217 @@
   border-color: var(--housing-line-pink);
 }
 
+.app-container.has-chat-skin .housing-panel {
+  width: 100%;
+  min-height: 100%;
+  padding: 18px 18px clamp(150px, 17vh, 210px) !important;
+  color: #342b34;
+}
+
+.app-container.has-chat-skin.is-foreground-disabled .housing-panel {
+  padding-bottom: 18px !important;
+}
+
+.app-container.has-chat-skin .housing-section {
+  gap: 12px;
+}
+
+.app-container.has-chat-skin .housing-section-head {
+  position: relative;
+  min-height: 52px;
+  padding: 13px 16px 13px 18px;
+  border: 1px solid rgba(255, 111, 151, 0.24);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 254, 0.94) 0%, rgba(255, 247, 250, 0.92) 100%),
+    radial-gradient(rgba(255, 111, 151, 0.08) 1px, transparent 1px);
+  background-size: auto, 22px 22px;
+  box-shadow: 0 7px 16px rgba(255, 111, 151, 0.08);
+}
+
+.app-container.has-chat-skin .housing-section-head::before {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  left: 7px;
+  top: 7px;
+  border: 2px solid rgba(255, 111, 151, 0.36);
+  border-right-color: transparent;
+  border-bottom-color: transparent;
+  border-radius: 8px 0 0 0;
+  pointer-events: none;
+}
+
+.app-container.has-chat-skin .housing-section-title {
+  color: #2d2531;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.app-container.has-chat-skin .housing-section-title svg,
+.app-container.has-chat-skin .housing-stat-meta svg,
+.app-container.has-chat-skin .housing-action-btn svg {
+  color: #ff4f82;
+}
+
+.app-container.has-chat-skin .housing-section-extra {
+  color: #9a6f82;
+}
+
+.app-container.has-chat-skin .housing-command-card,
+.app-container.has-chat-skin .housing-chain-card,
+.app-container.has-chat-skin .housing-character-card,
+.app-container.has-chat-skin .housing-summary-card,
+.app-container.has-chat-skin .housing-empty-card,
+.app-container.has-chat-skin .housing-stat-card,
+.app-container.has-chat-skin .housing-agency-grid > div {
+  border: 1px solid rgba(255, 111, 151, 0.24) !important;
+  border-radius: 8px !important;
+  background: rgba(255, 255, 255, 0.88) !important;
+  box-shadow: 0 7px 16px rgba(255, 111, 151, 0.08) !important;
+}
+
+.app-container.has-chat-skin .housing-stat-card::before {
+  background: linear-gradient(90deg, #ff94b0 0%, #ff5c8c 52%, #ffc1d4 100%);
+}
+
+.app-container.has-chat-skin .housing-home-money span,
+.app-container.has-chat-skin .housing-selected-person,
+.app-container.has-chat-skin .housing-command-empty,
+.app-container.has-chat-skin .housing-command-hint,
+.app-container.has-chat-skin .housing-chain-detail-preview,
+.app-container.has-chat-skin .housing-dialogue-scroll,
+.app-container.has-chat-skin .housing-chain-notes {
+  border-color: rgba(255, 111, 151, 0.22);
+  background: rgba(255, 247, 250, 0.72);
+}
+
+.app-container.has-chat-skin .housing-action-btn {
+  min-height: 36px;
+  border-color: rgba(255, 111, 151, 0.28);
+  border-radius: 8px;
+  background: rgba(255, 247, 250, 0.88);
+  color: #ff4f82;
+}
+
+.app-container.has-chat-skin .housing-action-btn--primary,
+.app-container.has-chat-skin .housing-action-btn--info,
+.app-container.has-chat-skin .housing-action-btn--warning {
+  border-color: rgba(255, 79, 130, 0.42);
+  background: linear-gradient(180deg, #ff8bad 0%, #ff5c8c 100%);
+  color: #fff;
+  box-shadow: 0 5px 14px rgba(255, 114, 160, 0.16);
+}
+
+.app-container.has-chat-skin .housing-action-btn--primary svg,
+.app-container.has-chat-skin .housing-action-btn--info svg,
+.app-container.has-chat-skin .housing-action-btn--warning svg {
+  color: #fff;
+}
+
+.app-container.has-chat-skin .housing-action-btn--success {
+  color: #2f9c76;
+  background: #effaf4;
+  border-color: rgba(103, 207, 157, 0.32);
+}
+
+.app-container.has-chat-skin .housing-action-btn--danger {
+  color: #be4664;
+  background: #fff1f6;
+  border-color: rgba(255, 111, 151, 0.30);
+}
+
+.app-container.has-chat-skin .housing-action-btn--violet {
+  color: #9b6ac2;
+  background: #fbf4ff;
+  border-color: rgba(190, 148, 216, 0.32);
+}
+
+.app-container.has-chat-skin .housing-panel input,
+.app-container.has-chat-skin .housing-panel select,
+.app-container.has-chat-skin .housing-panel textarea {
+  border-color: rgba(255, 111, 151, 0.30) !important;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88) !important;
+  color: #342b34;
+}
+
+.app-container.has-chat-skin .housing-panel input:focus,
+.app-container.has-chat-skin .housing-panel select:focus,
+.app-container.has-chat-skin .housing-panel textarea:focus {
+  border-color: rgba(255, 79, 130, 0.72) !important;
+  box-shadow: 0 0 0 3px rgba(255, 111, 151, 0.16);
+}
+
+.app-container.has-chat-skin .housing-card-kicker,
+.app-container.has-chat-skin .housing-chain-kicker,
+.app-container.has-chat-skin .housing-field > span,
+.app-container.has-chat-skin .housing-home-desc,
+.app-container.has-chat-skin .housing-character-meta,
+.app-container.has-chat-skin .housing-chain-note,
+.app-container.has-chat-skin .housing-chain-notes,
+.app-container.has-chat-skin .housing-modal-subtitle,
+.app-container.has-chat-skin .housing-modal-copy {
+  color: #806273;
+}
+
+.app-container.has-chat-skin .housing-stat-value,
+.app-container.has-chat-skin .housing-home-title,
+.app-container.has-chat-skin .housing-selected-name,
+.app-container.has-chat-skin .housing-character-name,
+.app-container.has-chat-skin .housing-chain-title,
+.app-container.has-chat-skin .housing-ad-title,
+.app-container.has-chat-skin .housing-modal-title {
+  color: #2d2531;
+}
+
+.app-container.has-chat-skin .housing-pill,
+.app-container.has-chat-skin .housing-inline-notice {
+  border-color: rgba(255, 111, 151, 0.24) !important;
+  background: rgba(255, 240, 246, 0.92) !important;
+  color: #ff4f82 !important;
+}
+
+.app-container.has-chat-skin .housing-character-avatar {
+  color: #ff4f82;
+  background: linear-gradient(135deg, #fff0f6, #fff8fb);
+  border-color: rgba(255, 111, 151, 0.28);
+}
+
+.app-container.has-chat-skin .housing-chain-step.is-active span,
+.app-container.has-chat-skin .housing-chain-step.is-current span,
+.app-container.has-chat-skin .housing-score-track span {
+  background: linear-gradient(90deg, #ff94b0 0%, #ff5c8c 100%) !important;
+}
+
+.app-container.has-chat-skin .housing-chain-step.is-current em,
+.app-container.has-chat-skin .housing-chain-detail-toggle,
+.app-container.has-chat-skin .housing-chain-detail-toggle-action,
+.app-container.has-chat-skin .housing-dialogue-line span {
+  color: #ff4f82;
+}
+
+.app-container.has-chat-skin .housing-chain-detail-toggle {
+  border-color: rgba(255, 111, 151, 0.24);
+  background: rgba(255, 247, 250, 0.86);
+}
+
+.housing-modal-backdrop {
+  background: rgba(78, 45, 58, 0.28);
+  backdrop-filter: blur(4px);
+}
+
+.housing-modal-card {
+  border: 1px solid rgba(255, 111, 151, 0.30);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 254, 0.98) 0%, rgba(255, 247, 250, 0.98) 100%),
+    radial-gradient(rgba(255, 111, 151, 0.07) 1px, transparent 1px);
+  background-size: auto, 22px 22px;
+  box-shadow: 0 22px 60px rgba(255, 111, 151, 0.22);
+}
+
 @media (max-width: 980px) {
   .housing-workbench,
   .housing-agency-grid,
@@ -1027,7 +1241,11 @@
 
 @media (max-width: 640px) {
   .housing-panel {
-    padding: 16px !important;
+    padding: 16px 16px clamp(140px, 20vh, 190px) !important;
+  }
+
+  .app-container.has-chat-skin.is-foreground-disabled .housing-panel {
+    padding-bottom: 16px !important;
   }
 
   .housing-section-head,

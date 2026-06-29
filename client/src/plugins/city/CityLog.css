@@ -1,0 +1,116 @@
+.city-log-panel,
+.city-manager-panel {
+  color: #342b34;
+  background:
+    linear-gradient(180deg, rgba(255, 252, 254, 0.76) 0%, rgba(255, 249, 252, 0.94) 100%),
+    radial-gradient(rgba(255, 111, 151, 0.07) 1px, transparent 1px);
+  background-size: auto, 26px 26px;
+}
+
+.city-manager-panel {
+  width: 100% !important;
+  max-width: none !important;
+  padding: 18px !important;
+  box-sizing: border-box;
+}
+
+.city-log-tabs {
+  gap: 8px !important;
+  padding: 8px 14px 0 !important;
+  border-bottom: 1px solid rgba(255, 111, 151, 0.24) !important;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 254, 0.94) 0%, rgba(255, 247, 250, 0.92) 100%),
+    radial-gradient(rgba(255, 111, 151, 0.08) 1px, transparent 1px) !important;
+  background-size: auto, 22px 22px !important;
+}
+
+.city-log-tabs button {
+  min-height: 42px;
+  border: 1px solid rgba(255, 111, 151, 0.24) !important;
+  border-bottom-color: transparent !important;
+  border-radius: 8px 8px 0 0 !important;
+  background: rgba(255, 255, 255, 0.78) !important;
+  font-weight: 800 !important;
+}
+
+.city-log-feed {
+  background: transparent !important;
+}
+
+.city-log-main-panel,
+.city-log-announcement-panel,
+.city-log-feed > div,
+.city-manager-panel > div,
+.city-manager-panel details {
+  border: 1px solid rgba(255, 111, 151, 0.24) !important;
+  border-radius: 8px !important;
+  background: rgba(255, 255, 255, 0.88) !important;
+  box-shadow: 0 7px 16px rgba(255, 111, 151, 0.08) !important;
+}
+
+.city-log-main-panel > div:first-child,
+.city-log-announcement-panel > div:first-child,
+.city-manager-panel summary,
+.city-manager-panel > div > div:first-child {
+  border-bottom-color: rgba(255, 111, 151, 0.22) !important;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 254, 0.94) 0%, rgba(255, 247, 250, 0.92) 100%),
+    radial-gradient(rgba(255, 111, 151, 0.08) 1px, transparent 1px) !important;
+  background-size: auto, 22px 22px !important;
+}
+
+.city-log-panel h3,
+.city-manager-panel h3,
+.city-manager-panel h4 {
+  color: #2d2531 !important;
+  letter-spacing: 0;
+}
+
+.city-log-panel button,
+.city-manager-panel button {
+  border-radius: 8px !important;
+  font-weight: 800 !important;
+}
+
+.city-manager-panel button[style*="background-color"],
+.city-manager-panel button[style*="backgroundColor"] {
+  box-shadow: 0 5px 14px rgba(255, 114, 160, 0.14);
+}
+
+.city-manager-panel input,
+.city-manager-panel select,
+.city-manager-panel textarea {
+  border: 1px solid rgba(255, 111, 151, 0.30) !important;
+  border-radius: 8px !important;
+  background: rgba(255, 255, 255, 0.90) !important;
+  color: #342b34 !important;
+}
+
+.city-manager-panel input:focus,
+.city-manager-panel select:focus,
+.city-manager-panel textarea:focus {
+  outline: none;
+  border-color: rgba(255, 79, 130, 0.72) !important;
+  box-shadow: 0 0 0 3px rgba(255, 111, 151, 0.16);
+}
+
+.city-log-panel .city-scroll {
+  scrollbar-color: rgba(255, 111, 151, 0.42) transparent;
+}
+
+.city-log-panel .city-scroll::-webkit-scrollbar,
+.city-manager-panel::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.city-log-panel .city-scroll::-webkit-scrollbar-thumb,
+.city-manager-panel::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(255, 111, 151, 0.42);
+}
+
+.city-log-panel .city-scroll > div,
+.city-log-panel .city-scroll article {
+  border-color: rgba(255, 111, 151, 0.22) !important;
+}

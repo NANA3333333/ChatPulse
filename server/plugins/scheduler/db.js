@@ -41,7 +41,6 @@ function getSchedulerDb(userId) {
     if (!hasBatchSize) {
         db.exec("ALTER TABLE scheduled_tasks ADD COLUMN batch_size INTEGER DEFAULT 80");
     }
-
     const instance = {
         dbInstance: db,
         getTasks: (charId) => {

@@ -69,7 +69,6 @@ function registerCoreCityRoutes(app, deps) {
             const narrations = await regenerateActionNarrations(char, district, req.db, {
                 log: originalContent,
                 chat: '',
-                moment: '',
                 diary: ''
             }, {
                 currentCals: char.calories ?? 2000
@@ -156,7 +155,7 @@ function registerCoreCityRoutes(app, deps) {
             const chars = req.db.getCharacters().map(c => {
                 const emotion = deriveEmotion(c);
                 return {
-                    id: c.id, name: c.name, avatar: c.avatar,
+                    id: c.id, name: c.name, avatar: c.avatar, avatar_frame: c.avatar_frame || '',
                     calories: c.calories ?? 2000, city_status: c.city_status ?? 'idle',
                     location: c.location ?? 'home', sys_survival: c.sys_survival ?? 1, sys_city_social: c.sys_city_social ?? 1,
                     is_scheduled: c.is_scheduled ?? 1,

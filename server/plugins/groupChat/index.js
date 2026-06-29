@@ -11,16 +11,11 @@ function initGroupChatPlugin(app, context) {
         wss, getWsClients, authDb, authMiddleware,
         getUserDb, getEngine, getMemory, callLLM
     } = context;
-    const GROUP_HIDDEN_TAG_REGEX = /\[(?:CHAR_AFFINITY|AFFINITY|MOMENT|MOMENT_LIKE|MOMENT_COMMENT|DIARY|UNLOCK_DIARY|PRESSURE|TIMER|TRANSFER|DIARY_PASSWORD|Red Packet|REDPACKET_SEND)[^\]]*\]/gi;
+    const GROUP_HIDDEN_TAG_REGEX = /\[(?:CHAR_AFFINITY|AFFINITY|DIARY|UNLOCK_DIARY|PRESSURE|TIMER|TRANSFER|DIARY_PASSWORD|Red Packet|REDPACKET_SEND)[^\]]*\]/gi;
 
     function recordGroupTokenUsage(db, characterId, contextType, usage) {
         if (!usage || !characterId || !db?.addTokenUsage) return;
         db.addTokenUsage(characterId, contextType, usage.prompt_tokens || 0, usage.completion_tokens || 0);
-    }
-
-    function broadcastMomentUpdate(wsClients) {
-        const payload = JSON.stringify({ type: 'moment_update' });
-        wsClients.forEach(c => { if (c.readyState === 1) c.send(payload); });
     }
 
     function stripGroupHiddenTags(text) {
@@ -29,38 +24,6 @@ function initGroupChatPlugin(app, context) {
             .replace(/\[\s*\]/g, '')
             .replace(/\n{3,}/g, '\n\n')
             .trim();
-    }
-
-    function normalizeGeneratedMomentId(value) {
-        const text = String(value ?? '').trim();
-        if (!/^\d+$/.test(text)) return null;
-        const id = Number(text);
-        return Number.isSafeInteger(id) && id > 0 ? id : null;
-    }
-
-    function validateGeneratedMomentInteractions(db, text) {
-        const raw = String(text || '');
-        const likeRegex = /\[MOMENT_LIKE:\s*([^\]]*)\]/gi;
-        let likeMatch;
-        while ((likeMatch = likeRegex.exec(raw)) !== null) {
-            const momentId = normalizeGeneratedMomentId(likeMatch[1]);
-            if (!momentId || !db.getMoment?.(momentId)) {
-                throw new Error('Group AI returned invalid moment like target. Please retry.');
-            }
-        }
-
-        const commentRegex = /\[MOMENT_COMMENT:\s*([^\]]*)\]/gi;
-        let commentMatch;
-        while ((commentMatch = commentRegex.exec(raw)) !== null) {
-            const payload = String(commentMatch[1] || '');
-            const splitAt = payload.indexOf(':');
-            if (splitAt < 0) throw new Error('Group AI returned malformed moment comment tag. Please retry.');
-            const momentId = normalizeGeneratedMomentId(payload.slice(0, splitAt));
-            const comment = payload.slice(splitAt + 1).trim();
-            if (!momentId || !comment || !db.getMoment?.(momentId)) {
-                throw new Error('Group AI returned invalid moment comment target. Please retry.');
-            }
-        }
     }
 
     function normalizeGeneratedIntegerInRange(value, min, max) {
@@ -213,6 +176,13 @@ function initGroupChatPlugin(app, context) {
         return parsed;
     }
 
+    function normalizeGroupBooleanSetting(value) {
+        const text = String(value ?? '').trim().toLowerCase();
+        if (['1', 'true', 'yes', 'on'].includes(text)) return 1;
+        if (['0', 'false', 'no', 'off'].includes(text)) return 0;
+        return null;
+    }
+
     function normalizeGroupName(value) {
         if (typeof value !== 'string') return '';
         return value.trim();
@@ -346,10 +316,12 @@ function initGroupChatPlugin(app, context) {
     // 14.2.5 Update group settings (inject_limit, name, etc.)
     app.put('/api/groups/:id', authMiddleware, (req, res) => {
         const db = getUserDb(req.user.id);
+        const engine = getEngine(req.user.id);
+        const wsClients = getWsClients(req.user.id);
         try {
             const group = db.getGroup(req.params.id);
             if (!group) return res.status(404).json({ error: 'Group not found' });
-            const { inject_limit, name, context_msg_limit } = req.body;
+            const { inject_limit, name, context_msg_limit, group_proactive_enabled, group_interval_min, group_interval_max } = req.body;
             // Use raw SQL update since db wrapper doesn't have updateGroup
             const updates = [];
             const values = [];
@@ -374,11 +346,39 @@ function initGroupChatPlugin(app, context) {
                 updates.push('context_msg_limit = ?');
                 values.push(contextLimit);
             }
+            if (group_proactive_enabled !== undefined) {
+                const enabled = normalizeGroupBooleanSetting(group_proactive_enabled);
+                if (enabled === null) return res.status(400).json({ error: 'Invalid group proactive setting' });
+                updates.push('group_proactive_enabled = ?');
+                values.push(enabled);
+            }
+            let nextIntervalMin = group.group_interval_min ?? 10;
+            let nextIntervalMax = group.group_interval_max ?? 60;
+            if (group_interval_min !== undefined) {
+                const intervalMin = normalizeGroupIntegerSetting(group_interval_min, 1, 1440);
+                if (intervalMin === null) return res.status(400).json({ error: 'Invalid group proactive minimum interval' });
+                nextIntervalMin = intervalMin;
+                updates.push('group_interval_min = ?');
+                values.push(intervalMin);
+            }
+            if (group_interval_max !== undefined) {
+                const intervalMax = normalizeGroupIntegerSetting(group_interval_max, 1, 1440);
+                if (intervalMax === null) return res.status(400).json({ error: 'Invalid group proactive maximum interval' });
+                nextIntervalMax = intervalMax;
+                updates.push('group_interval_max = ?');
+                values.push(intervalMax);
+            }
+            if ((group_interval_min !== undefined || group_interval_max !== undefined) && nextIntervalMax < nextIntervalMin) {
+                return res.status(400).json({ error: 'Group proactive maximum interval cannot be lower than minimum interval' });
+            }
             if (updates.length > 0) {
                 values.push(req.params.id);
                 db.rawRun(`UPDATE group_chats SET ${updates.join(', ')} WHERE id = ?`, values);
                 if (context_msg_limit !== undefined && typeof db.clearGroupConversationDigest === 'function') {
                     db.clearGroupConversationDigest(req.params.id);
+                }
+                if (group_proactive_enabled !== undefined || group_interval_min !== undefined || group_interval_max !== undefined) {
+                    engine.scheduleGroupProactive(group.id, wsClients);
                 }
             }
             res.json({ success: true, group: db.getGroup(req.params.id) });
@@ -719,12 +719,6 @@ function initGroupChatPlugin(app, context) {
                             continue;
                         }
 
-                        const skipProfile = db.getUserProfile();
-                        let skipRate = skipProfile?.group_skip_rate;
-                        if (skipRate === undefined) skipRate = 0.50;
-                        if (skipRate > 1) skipRate = skipRate / 100;
-
-                        if (Math.random() < skipRate) continue;
                     }
 
                     // Broadcast "typing" indicator
@@ -892,7 +886,7 @@ function initGroupChatPlugin(app, context) {
                             '5. Red packet reactions stay in role.',
                             '6. Source boundaries matter: [PRIVATE SOURCE] can shape your feelings but is not public chat; [GROUP SOURCE] is public chat and can be replied to directly; [CITY SOURCE] is real-life experience, not a chat line.',
                             '7. Never mistake private/city snippets for someone literally speaking in this group right now. Do not invent message duplication, impersonation, or fake send errors unless the group history itself shows that.',
-                            '8. Optional hidden tags: [CHAR_AFFINITY:id:+3], [REDPACKET_SEND:lucky|50|5|新年快乐], [MOMENT:内容], [MOMENT_LIKE:MomentID], [MOMENT_COMMENT:MomentID:评论内容]'
+                            '8. Optional hidden tags: [CHAR_AFFINITY:id:+3], [REDPACKET_SEND:lucky|50|5|新年快乐]'
                         ].join('\n');
                         const systemPrompt =
                             stableGroupPrompt + '\n\n' +
@@ -956,7 +950,6 @@ function initGroupChatPlugin(app, context) {
                             const groupMemberIds = new Set((group.members || [])
                                 .map(member => String(member.member_id || '').trim())
                                 .filter(memberId => memberId && memberId !== 'user'));
-                            validateGeneratedMomentInteractions(db, cleanReply);
                             const generatedCharAffinityDeltas = parseGeneratedCharAffinityDeltas(db, cleanReply, {
                                 selfId: char.id,
                                 allowedTargetIds: groupMemberIds
@@ -982,36 +975,6 @@ function initGroupChatPlugin(app, context) {
                                 const newAffinity = Math.max(0, Math.min(100, currentGroupAffinity + delta));
                                 const updated = db.updateCharRelationship(char.id, targetId, groupSource, { affinity: newAffinity });
                                 if (updated) console.log('[Social] ' + char.name + ' -> ' + targetId + ': group affinity delta ' + delta + ', now ' + newAffinity);
-                            }
-
-                            // Parse [MOMENT:content] char posts to their Moments feed.
-                            const momentMatch = cleanReply.match(/\[MOMENT:\s*([\s\S]*?)\s*\]/i);
-                            if (momentMatch?.[1]) {
-                                db.addMoment(char.id, momentMatch[1].trim());
-                                console.log('[GroupChat] ' + char.name + ' posted a Moment from group chat.');
-                                broadcastMomentUpdate(wsClients);
-                            }
-
-                            // Parse [MOMENT_LIKE:id] char likes a Moment.
-                            const momentLikeRegex = /\[MOMENT_LIKE:\s*(\d+)\s*\]/gi;
-                            let mLikeMatch;
-                            while ((mLikeMatch = momentLikeRegex.exec(cleanReply)) !== null) {
-                                if (mLikeMatch[1]) {
-                                    db.toggleLike(parseInt(mLikeMatch[1], 10), char.id);
-                                    console.log('[GroupChat] ' + char.name + ' liked moment ' + mLikeMatch[1]);
-                                    broadcastMomentUpdate(wsClients);
-                                }
-                            }
-
-                            // Parse [MOMENT_COMMENT:id:content] char comments on a Moment.
-                            const momentCommentRegex = /\[MOMENT_COMMENT:\s*(\d+)\s*:\s*([^\]]+)\]/gi;
-                            let mCommentMatch;
-                            while ((mCommentMatch = momentCommentRegex.exec(cleanReply)) !== null) {
-                                if (mCommentMatch[1] && mCommentMatch[2]) {
-                                    db.addComment(parseInt(mCommentMatch[1], 10), char.id, mCommentMatch[2].trim());
-                                    console.log('[GroupChat] ' + char.name + ' commented on moment ' + mCommentMatch[1] + ': ' + mCommentMatch[2]);
-                                    broadcastMomentUpdate(wsClients);
-                                }
                             }
 
                             // Parse [DIARY:content] char writes a diary entry.
@@ -1207,7 +1170,7 @@ function initGroupChatPlugin(app, context) {
                                 });
                                 recordGroupTokenUsage(db, senderChar.id, 'group_feedback', usage);
                                 if (feedbackReply?.trim()) {
-                                    const clean = feedbackReply.trim().replace(/\[(?:CHAR_AFFINITY|AFFINITY|MOMENT|DIARY|UNLOCK_DIARY|PRESSURE|TIMER|TRANSFER|DIARY_PASSWORD|REDPACKET_SEND)[^\]]*\]/gi, '').trim();
+                                    const clean = feedbackReply.trim().replace(/\[(?:CHAR_AFFINITY|AFFINITY|DIARY|UNLOCK_DIARY|PRESSURE|TIMER|TRANSFER|DIARY_PASSWORD|REDPACKET_SEND)[^\]]*\]/gi, '').trim();
                                     if (clean) {
                                         const fbMsgId = db.addGroupMessage(groupId, senderChar.id, clean, senderChar.name, senderChar.avatar);
                                         const feedbackEmotionPatch = applyEmotionEvent(senderChar, 'group_character_message_sent');

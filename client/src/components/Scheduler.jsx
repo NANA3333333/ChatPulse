@@ -4,7 +4,6 @@ import { useLanguage } from '../LanguageContext';
 
 const actionOptions = [
     { value: 'chat', en: 'Proactive Chat', zh: '主动私聊' },
-    { value: 'moment', en: 'Post Moment', zh: '发布朋友圈' },
     { value: 'diary', en: 'Write Diary', zh: '写日记' },
     { value: 'memory_aggregation', en: 'Daily Memory Aggregation', zh: '每日记忆汇总' }
 ];
@@ -30,9 +29,15 @@ const buttonBase = {
     fontSize: '13px'
 };
 
-function Scheduler({ apiUrl, contacts }) {
+function Scheduler({ apiUrl, contacts = [], contact = null, variant = 'card' }) {
     const { lang } = useLanguage();
     const token = localStorage.getItem('cp_token') || '';
+    const isDrawerVariant = variant === 'drawer';
+    const lockedContact = contact || null;
+    const schedulerContacts = useMemo(() => {
+        if (lockedContact?.id) return [lockedContact];
+        return Array.isArray(contacts) ? contacts : [];
+    }, [contacts, lockedContact]);
 
     const [tasks, setTasks] = useState([]);
     const [isFormOpen, setIsFormOpen] = useState(false);
@@ -52,13 +57,13 @@ function Scheduler({ apiUrl, contacts }) {
 
     const resetForm = useCallback(() => {
         setEditId(null);
-        setFormCharId(contacts?.[0]?.id || '');
+        setFormCharId(schedulerContacts?.[0]?.id || '');
         setFormTime('09:00');
         setFormAction('chat');
         setFormPrompt('');
         setFormBatchSize(80);
         setFormEnabled(true);
-    }, [contacts]);
+    }, [schedulerContacts]);
 
     const fetchTasks = useCallback(async () => {
         const res = await fetch(`${apiUrl}/scheduler/all`, { headers: { Authorization: `Bearer ${token}` } });
@@ -78,14 +83,19 @@ function Scheduler({ apiUrl, contacts }) {
         fetchTasks().catch((e) => console.error('[Scheduler] load failed:', e));
     }, [fetchTasks, token]);
 
+    const visibleTasks = useMemo(() => {
+        if (!lockedContact?.id) return tasks;
+        return tasks.filter((task) => String(task.character_id) === String(lockedContact.id));
+    }, [tasks, lockedContact]);
+
     const dailyMemoryTasks = useMemo(
-        () => tasks.filter((task) => task.action_type === 'memory_aggregation' && Number(task.is_enabled) === 1),
-        [tasks]
+        () => visibleTasks.filter((task) => task.action_type === 'memory_aggregation' && Number(task.is_enabled) === 1),
+        [visibleTasks]
     );
 
     const getCharacterName = useCallback((characterId) => {
-        return contacts?.find((c) => String(c.id) === String(characterId))?.name || characterId;
-    }, [contacts]);
+        return schedulerContacts?.find((c) => String(c.id) === String(characterId))?.name || characterId;
+    }, [schedulerContacts]);
 
     const getActionLabel = useCallback((actionType) => {
         const found = actionOptions.find((item) => item.value === actionType);
@@ -110,7 +120,8 @@ function Scheduler({ apiUrl, contacts }) {
     };
 
     const saveTask = async () => {
-        if (!formCharId || !formTime || !formAction) {
+        const targetCharacterId = lockedContact?.id || formCharId;
+        if (!targetCharacterId || !formTime || !formAction) {
             alert(lang === 'en' ? 'Character, time, and action are required.' : '角色、时间和动作类型不能为空。');
             return;
         }
@@ -118,7 +129,7 @@ function Scheduler({ apiUrl, contacts }) {
         setIsSaving(true);
         try {
             const payload = {
-                character_id: formCharId,
+                character_id: targetCharacterId,
                 cron_expr: formTime,
                 action_type: formAction,
                 task_prompt: formPrompt,
@@ -186,16 +197,20 @@ function Scheduler({ apiUrl, contacts }) {
     };
 
     return (
-        <div style={cardStyle}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+        <div style={isDrawerVariant ? { ...cardStyle, marginTop: '10px', borderRadius: 0, borderLeft: 0, borderRight: 0, padding: '15px' } : cardStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isDrawerVariant ? 'flex-start' : 'center', gap: '12px', marginBottom: '16px', flexWrap: isDrawerVariant ? 'wrap' : 'nowrap' }}>
                 <div>
-                    <h2 style={{ margin: 0, fontSize: '18px' }}>
+                    <h2 style={{ margin: 0, fontSize: isDrawerVariant ? '15px' : '18px' }}>
                         {lang === 'en' ? 'Scheduled Tasks' : '定时任务'}
                     </h2>
                     <div style={{ marginTop: '6px', fontSize: '12px', color: '#666' }}>
-                        {lang === 'en'
-                            ? 'Create per-character timed actions. Daily memory aggregation is retained here. Overflow sweep is no longer shown as a separate card.'
-                            : '为每个角色创建定时动作。每日记忆汇总仍在这里展示，重复的长时记忆清扫卡片已移除。'}
+                        {lockedContact
+                            ? (lang === 'en'
+                                ? `Create timed actions for ${lockedContact.name || 'this character'}.`
+                                : `为 ${lockedContact.name || '当前角色'} 创建定时动作。`)
+                            : (lang === 'en'
+                                ? 'Create per-character timed actions. Daily memory aggregation is retained here. Overflow sweep is no longer shown as a separate card.'
+                                : '为每个角色创建定时动作。每日记忆汇总仍在这里展示，重复的长时记忆清扫卡片已移除。')}
                     </div>
                 </div>
                 <button type="button" style={{ ...buttonBase, background: 'var(--accent-color)', color: '#fff', borderColor: 'var(--accent-color)' }} onClick={openCreate}>
@@ -204,7 +219,7 @@ function Scheduler({ apiUrl, contacts }) {
                 </button>
             </div>
 
-            <div style={{ ...cardStyle, marginTop: 0, background: '#fafcff', borderColor: '#dbe7ff' }}>
+            <div style={{ ...cardStyle, marginTop: 0, padding: isDrawerVariant ? '14px' : cardStyle.padding, background: '#fafcff', borderColor: '#dbe7ff' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
                     <Brain size={16} color="#4f7cff" />
                     <strong>{lang === 'en' ? 'Daily Memory Aggregation' : '每日记忆汇总'}</strong>
@@ -234,15 +249,24 @@ function Scheduler({ apiUrl, contacts }) {
 
             {isFormOpen && (
                 <div style={{ marginTop: '16px', padding: '16px', border: '1px solid #eee', borderRadius: '8px', background: '#fafafa' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '12px' }}>
-                        <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '13px' }}>
-                            <span>{lang === 'en' ? 'Character' : '角色'}</span>
-                            <select value={formCharId} onChange={(e) => setFormCharId(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #ddd' }}>
-                                {contacts?.map((contact) => (
-                                    <option key={contact.id} value={contact.id}>{contact.name}</option>
-                                ))}
-                            </select>
-                        </label>
+                    <div style={{ display: 'grid', gridTemplateColumns: isDrawerVariant ? '1fr' : 'repeat(2, minmax(0, 1fr))', gap: '12px' }}>
+                        {lockedContact ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '13px' }}>
+                                <span>{lang === 'en' ? 'Character' : '角色'}</span>
+                                <div style={{ padding: '10px', borderRadius: '8px', border: '1px solid #eee', background: '#fff', color: '#333' }}>
+                                    {lockedContact.name || lockedContact.id}
+                                </div>
+                            </div>
+                        ) : (
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '13px' }}>
+                                <span>{lang === 'en' ? 'Character' : '角色'}</span>
+                                <select value={formCharId} onChange={(e) => setFormCharId(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #ddd' }}>
+                                    {schedulerContacts?.map((item) => (
+                                        <option key={item.id} value={item.id}>{item.name}</option>
+                                    ))}
+                                </select>
+                            </label>
+                        )}
                         <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '13px' }}>
                             <span>{lang === 'en' ? 'Time (HH:MM)' : '时间（HH:MM）'}</span>
                             <input type="time" value={formTime} onChange={(e) => setFormTime(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #ddd' }} />
@@ -306,12 +330,12 @@ function Scheduler({ apiUrl, contacts }) {
             )}
 
             <div style={{ marginTop: '18px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {tasks.length === 0 ? (
+                {visibleTasks.length === 0 ? (
                     <div style={{ fontSize: '13px', color: '#666' }}>
                         {lang === 'en' ? 'No scheduled tasks yet.' : '还没有定时任务。'}
                     </div>
                 ) : (
-                    tasks.map((task) => (
+                    visibleTasks.map((task) => (
                         <div key={task.id} style={{ border: '1px solid #eee', borderRadius: '8px', padding: '14px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start' }}>
                                 <div style={{ minWidth: 0 }}>

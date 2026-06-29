@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Plus, Trash2, ToggleLeft, ToggleRight, Save, DollarSign, Heart, Edit3, X, Power, Package, ShoppingBag, AlertTriangle } from 'lucide-react';
-import AuthenticatedImage from '../../components/AuthenticatedImage';
+import AvatarWithFrame from '../../components/AvatarWithFrame';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../../utils/avatar';
 import { deriveEmotion, derivePhysicalState } from '../../utils/emotion';
 import SchoolGrowthPanel from '../cityGrowth/SchoolGrowthPanel';
@@ -41,10 +41,10 @@ const CONFIG_LABELS = {
     city_announcement_limit: '公告获取条数',
     city_stranger_meet_prob: '陌生人相遇概率 (%)',
     city_chat_probability: '私聊消息概率',
-    city_moment_probability: '发朋友圈概率',
     city_diary_probability: '写日记概率',
 };
-const HIDDEN_CONFIG_KEYS = ['dlc_enabled', 'mayor_prompt', 'mayor_enabled', 'mayor_interval_hours', 'mayor_model_char_id', 'mayor_last_run_at', 'mayor_custom_endpoint', 'mayor_custom_key', 'mayor_custom_model', 'city_chat_probability', 'city_moment_probability', 'city_diary_probability', 'city_self_log_limit', 'city_social_log_limit', 'city_announcement_limit', 'city_stranger_meet_prob', 'tick_label', 'tick_interval_minutes'];
+const HIDDEN_CONFIG_KEYS = ['dlc_enabled', 'mayor_prompt', 'mayor_enabled', 'mayor_interval_hours', 'mayor_model_char_id', 'mayor_last_run_at', 'mayor_custom_endpoint', 'mayor_custom_key', 'mayor_custom_model', 'city_chat_probability', 'city_diary_probability', 'city_self_log_limit', 'city_social_log_limit', 'city_announcement_limit', 'city_stranger_meet_prob', 'tick_label', 'tick_interval_minutes'];
+const isHiddenConfigKey = (key) => HIDDEN_CONFIG_KEYS.includes(key) || /^city_[a-z]+_probability$/.test(String(key || ''));
 
 const EMPTY_DISTRICT = {
     id: '', name: '', emoji: '🏬', type: 'generic', description: '',
@@ -390,7 +390,7 @@ export default function CityManager({ apiUrl, onRefreshLogs }) {
     const mayorEnabled = config.mayor_enabled === '1' || config.mayor_enabled === 'true';
 
     return (
-        <div style={{ padding: '16px', maxWidth: '1100px', margin: '0 auto', overflowY: 'auto', height: '100%' }}>
+        <div className="city-manager-panel" style={{ padding: '16px', maxWidth: '1100px', margin: '0 auto', overflowY: 'auto', height: '100%' }}>
             {actionNotice?.message && (
                 <div style={{
                     position: 'sticky',
@@ -551,7 +551,7 @@ export default function CityManager({ apiUrl, onRefreshLogs }) {
                     <h3 style={{ margin: 0, fontSize: '16px' }}>经济调控</h3>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '10px', padding: '12px' }}>
-                    {Object.entries(config).filter(([k]) => !HIDDEN_CONFIG_KEYS.includes(k)).map(([key, value]) => (
+                    {Object.entries(config).filter(([k]) => !isHiddenConfigKey(k)).map(([key, value]) => (
                         <div key={key} style={{ padding: '8px', border: '1px solid #eee', borderRadius: '6px' }}>
                             <label style={labelStyle}>{CONFIG_LABELS[key] || key}</label>
                             <input style={inputStyle} defaultValue={value} onBlur={(e) => { if (e.target.value !== value) updateConfig(key, e.target.value); }} />
@@ -844,7 +844,13 @@ export default function CityManager({ apiUrl, onRefreshLogs }) {
                         const physical = derivePhysicalState(c);
                         return (
                         <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px', border: '1px solid #eee', borderRadius: '8px' }}>
-                            <AuthenticatedImage src={avatarSrc(c.avatar, apiUrl)} fallbackSrc={FALLBACK_AVATAR} alt="" style={{ width: '28px', height: '28px', borderRadius: '50%', objectFit: 'cover' }} />
+                            <AvatarWithFrame
+                                size={28}
+                                frame={c.avatar_frame}
+                                src={avatarSrc(c.avatar, apiUrl)}
+                                fallbackSrc={FALLBACK_AVATAR}
+                                alt=""
+                            />
                             <div style={{ flex: 1, minWidth: 0 }}>
                                 <div style={{ fontWeight: '500', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                                     <span>{c.name}</span>

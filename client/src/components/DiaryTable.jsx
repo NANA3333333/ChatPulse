@@ -119,7 +119,7 @@ function DiaryTable({ contact, apiUrl, onClose }) {
     };
 
     return (
-        <div className="memory-drawer" style={{ width: '380px', backgroundColor: '#fffdf5' }}>
+        <div className="memory-drawer diary-drawer">
             <div className="memory-header" style={{ backgroundColor: '#f6f1e3', borderBottomColor: '#e0d8c3' }}>
                 <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#5a4d3c' }}>
                     <BookOpen size={18} />

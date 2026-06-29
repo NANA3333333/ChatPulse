@@ -3,14 +3,15 @@ import ContactList from './components/ContactList';
 import ChatWindow from './components/ChatWindow';
 import CreateGroupModal from './components/CreateGroupModal';
 import AddCharacterModal from './components/AddCharacterModal';
+import PrivateChatJournalPanel from './components/PrivateChatJournalPanel';
 
 import './App.css';
-import { MessageSquare, Users, Compass, Settings, UserPlus, Globe, UsersRound, LogOut, Database, LibraryBig, Download, Upload, Wand2, RefreshCw, X, BookOpen } from 'lucide-react';
+import { MessageSquare, Users, Settings, UserPlus, Globe, UsersRound, LogOut, Database, LibraryBig, Download, Upload, Wand2, RefreshCw, X, BookOpen } from 'lucide-react';
 import { plugins } from './plugins';
 import { useLanguage } from './LanguageContext';
 import { useAuth } from './AuthContext';
 import Login from './components/Login';
-import AuthenticatedImage from './components/AuthenticatedImage';
+import AvatarWithFrame from './components/AvatarWithFrame';
 import { defaultAvatarUrl, resolveAvatarUrl } from './utils/avatar';
 
 // Allow VITE config if available, otherwise dynamically use the current host IP/Domain
@@ -25,6 +26,25 @@ const MODULE_LOAD_RETRY_BASE_MS = 800;
 const MODULE_LOAD_RETRY_MAX_MS = 5000;
 const MODULE_LOAD_AUTO_RELOAD_DELAY_MS = 500;
 const MODULE_LOAD_AUTO_RELOAD_PREFIX = 'chatpulse:auto-module-reload:';
+const RETIRED_THEME_STORAGE_KEYS = ['cp_theme', 'cp_theme_config', 'cp_custom_css'];
+const RETIRED_THEME_CSS_VARS = [
+  '--accent-color',
+  '--accent-hover',
+  '--bg-main',
+  '--bg-sidebar',
+  '--bg-contacts',
+  '--bg-chat-area',
+  '--bg-input',
+  '--text-primary',
+  '--text-secondary',
+  '--border-color',
+  '--sidebar-icon',
+  '--sidebar-icon-active',
+  '--bubble-user-bg',
+  '--bubble-user-text',
+  '--bubble-ai-bg',
+  '--bubble-ai-text',
+];
 
 function isLikelyModuleLoadError(error) {
   const message = String(error?.message || error || '');
@@ -39,6 +59,19 @@ function getModuleLoadErrorSignature(error) {
 
 function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function clearRetiredThemeOverrides() {
+  try {
+    RETIRED_THEME_STORAGE_KEYS.forEach(key => window.localStorage.removeItem(key));
+  } catch (error) {
+    console.warn('Failed to clear retired theme storage:', error);
+  }
+
+  const root = document.documentElement;
+  root.removeAttribute('data-theme');
+  RETIRED_THEME_CSS_VARS.forEach(key => root.style.removeProperty(key));
+  document.getElementById('chatpulse-custom-css')?.remove();
 }
 
 function lazyWithPreload(factory) {
@@ -77,10 +110,318 @@ function lazyWithPreload(factory) {
 const GroupChatWindow = lazyWithPreload(() => import('./components/GroupChatWindow'));
 const MemoTable = lazyWithPreload(() => import('./components/MemoTable'));
 const DiaryTable = lazyWithPreload(() => import('./components/DiaryTable'));
-const MomentsFeed = lazyWithPreload(() => import('./components/MomentsFeed'));
 const SettingsPanel = lazyWithPreload(() => import('./components/SettingsPanel'));
 const ChatSettingsDrawer = lazyWithPreload(() => import('./components/ChatSettingsDrawer'));
 const MemoryLibraryPanel = lazyWithPreload(() => import('./components/MemoryLibraryPanel'));
+
+const PRIVATE_CHAT_FOREGROUND_ENABLED_STORAGE_KEY = 'chatpulse:private-chat-foreground-enabled';
+const PRIVATE_CHAT_FOREGROUND_EXIT_MS = 960;
+const PRIVATE_CHAT_DECOR_STORAGE_KEY = 'chatpulse:private-chat-decor-adjustments:v3';
+const PRIVATE_CHAT_DECOR_EDITOR_STORAGE_KEY = 'chatpulse:private-chat-decor-editor-open';
+const PRIVATE_CHAT_DECOR_DEFAULTS = {
+  floor: { x: 32, y: 67, scale: 1.18 },
+  cottage: { x: -18, y: 27, scale: 1.27 },
+  cart: { x: 7, y: 29, scale: 1.38 },
+};
+const PRIVATE_CHAT_DECOR_TARGETS = [
+  { id: 'floor', label: '地板', selector: '[data-private-decor-id="floor"]' },
+  { id: 'cottage', label: '左小屋', selector: '[data-private-decor-id="cottage"]' },
+  { id: 'cart', label: '右栏杆', selector: '[data-private-decor-id="cart"]' },
+];
+
+function loadPrivateChatForegroundEnabled() {
+  try {
+    return window.localStorage.getItem(PRIVATE_CHAT_FOREGROUND_ENABLED_STORAGE_KEY) !== '0';
+  } catch (error) {
+    console.warn('Failed to load private chat foreground preference:', error);
+    return true;
+  }
+}
+
+function clampDecorScale(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.min(3, Math.max(0.25, parsed));
+}
+
+function normalizeDecorTransform(transform) {
+  return {
+    x: Number.isFinite(Number(transform?.x)) ? Number(transform.x) : 0,
+    y: Number.isFinite(Number(transform?.y)) ? Number(transform.y) : 0,
+    scale: clampDecorScale(transform?.scale ?? 1),
+  };
+}
+
+function loadPrivateChatDecorTransforms() {
+  try {
+    const raw = window.localStorage.getItem(PRIVATE_CHAT_DECOR_STORAGE_KEY);
+    if (!raw) return PRIVATE_CHAT_DECOR_DEFAULTS;
+    const parsed = JSON.parse(raw);
+    return Object.fromEntries(
+      PRIVATE_CHAT_DECOR_TARGETS.map(({ id }) => [
+        id,
+        normalizeDecorTransform(parsed?.[id] || PRIVATE_CHAT_DECOR_DEFAULTS[id]),
+      ])
+    );
+  } catch (error) {
+    console.warn('Failed to load private chat decor adjustments:', error);
+    return PRIVATE_CHAT_DECOR_DEFAULTS;
+  }
+}
+
+function isDecorTransformDefault(id, transform) {
+  const current = normalizeDecorTransform(transform);
+  const defaults = normalizeDecorTransform(PRIVATE_CHAT_DECOR_DEFAULTS[id]);
+  return Math.round((current.x - defaults.x) * 100) === 0
+    && Math.round((current.y - defaults.y) * 100) === 0
+    && Math.round((current.scale - defaults.scale) * 1000) === 0;
+}
+
+function buildDecorCssSnippet(transforms) {
+  const selectorMap = {
+    floor: '.private-chat-scene-decor__floor',
+    cottage: '.private-chat-scene-decor__cottage',
+    cart: '.private-chat-scene-decor__cart',
+  };
+
+  return PRIVATE_CHAT_DECOR_TARGETS.map(({ id, label }) => {
+    const transform = normalizeDecorTransform(transforms[id]);
+    return [
+      `/* ${label} */`,
+      `${selectorMap[id]} {`,
+      `  --decor-x: ${Math.round(transform.x)}px;`,
+      `  --decor-y: ${Math.round(transform.y)}px;`,
+      `  --decor-scale: ${Number(transform.scale.toFixed(3))};`,
+      `}`,
+    ].join('\n');
+  }).join('\n\n');
+}
+
+function hasPrimaryModelConfig(contact = {}) {
+  return Boolean(
+    String(contact.api_endpoint || '').trim()
+    && contact.api_key_configured === true
+    && String(contact.model_name || '').trim()
+  );
+}
+
+function PrivateChatDecorEditor({
+  open,
+  onOpenChange,
+  transforms,
+  setTransforms,
+  isPrivateChatView,
+}) {
+  const [selectedId, setSelectedId] = useState('floor');
+  const [boxes, setBoxes] = useState({});
+  const [copyStatus, setCopyStatus] = useState('');
+  const dragRef = useRef(null);
+
+  const selectedTransform = normalizeDecorTransform(transforms[selectedId]);
+
+  const measureDecor = useCallback(() => {
+    if (!isPrivateChatView) return;
+    const root = document.querySelector('.app-container.has-private-chat');
+    if (!root) return;
+
+    const rootRect = root.getBoundingClientRect();
+    const nextBoxes = {};
+    PRIVATE_CHAT_DECOR_TARGETS.forEach((target) => {
+      const element = root.querySelector(target.selector);
+      if (!element) return;
+      const rect = element.getBoundingClientRect();
+      nextBoxes[target.id] = {
+        left: rect.left - rootRect.left,
+        top: rect.top - rootRect.top,
+        width: rect.width,
+        height: rect.height,
+      };
+    });
+    setBoxes(nextBoxes);
+  }, [isPrivateChatView]);
+
+  useEffect(() => {
+    if (!open || !isPrivateChatView) return undefined;
+    const rafId = window.requestAnimationFrame(measureDecor);
+    const timeoutId = window.setTimeout(measureDecor, 120);
+    window.addEventListener('resize', measureDecor);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      window.clearTimeout(timeoutId);
+      window.removeEventListener('resize', measureDecor);
+    };
+  }, [open, isPrivateChatView, transforms, measureDecor]);
+
+  useEffect(() => {
+    if (!copyStatus) return undefined;
+    const timeoutId = window.setTimeout(() => setCopyStatus(''), 1400);
+    return () => window.clearTimeout(timeoutId);
+  }, [copyStatus]);
+
+  const updateTransform = useCallback((id, patch) => {
+    setTransforms((prev) => ({
+      ...prev,
+      [id]: normalizeDecorTransform({
+        ...(prev[id] || PRIVATE_CHAT_DECOR_DEFAULTS[id]),
+        ...patch,
+      }),
+    }));
+  }, [setTransforms]);
+
+  const startDrag = useCallback((event, id) => {
+    event.preventDefault();
+    setSelectedId(id);
+    const base = normalizeDecorTransform(transforms[id]);
+    dragRef.current = {
+      id,
+      startX: event.clientX,
+      startY: event.clientY,
+      base,
+    };
+
+    const handlePointerMove = (moveEvent) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      updateTransform(drag.id, {
+        x: drag.base.x + (moveEvent.clientX - drag.startX),
+        y: drag.base.y + (moveEvent.clientY - drag.startY),
+      });
+    };
+
+    const handlePointerUp = () => {
+      dragRef.current = null;
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+  }, [transforms, updateTransform]);
+
+  const handleWheelScale = useCallback((event, id) => {
+    event.preventDefault();
+    setSelectedId(id);
+    const current = normalizeDecorTransform(transforms[id]);
+    const step = event.shiftKey ? 0.02 : 0.06;
+    updateTransform(id, {
+      scale: current.scale + (event.deltaY > 0 ? -step : step),
+    });
+  }, [transforms, updateTransform]);
+
+  const resetDecor = useCallback((id) => {
+    updateTransform(id, PRIVATE_CHAT_DECOR_DEFAULTS[id]);
+  }, [updateTransform]);
+
+  const resetAllDecor = useCallback(() => {
+    setTransforms(PRIVATE_CHAT_DECOR_DEFAULTS);
+    window.localStorage.removeItem(PRIVATE_CHAT_DECOR_STORAGE_KEY);
+  }, [setTransforms]);
+
+  const copyDecorCss = useCallback(async () => {
+    const snippet = buildDecorCssSnippet(transforms);
+    try {
+      await navigator.clipboard.writeText(snippet);
+      setCopyStatus('已复制 CSS');
+    } catch (error) {
+      console.warn('Failed to copy private chat decor CSS:', error);
+      window.prompt('复制这些 CSS 变量：', snippet);
+      setCopyStatus('已弹出复制框');
+    }
+  }, [transforms]);
+
+  if (!isPrivateChatView) return null;
+
+  return (
+    <>
+      {open && (
+        <div className="private-decor-editor" aria-label="私聊素材调试面板">
+          <div className="private-decor-editor__stage">
+            {PRIVATE_CHAT_DECOR_TARGETS.map((target) => {
+              const box = boxes[target.id];
+              if (!box) return null;
+              return (
+                <button
+                  key={target.id}
+                  type="button"
+                  className={`private-decor-editor__box ${selectedId === target.id ? 'is-selected' : ''}`}
+                  style={{
+                    left: `${box.left}px`,
+                    top: `${box.top}px`,
+                    width: `${box.width}px`,
+                    height: `${box.height}px`,
+                  }}
+                  onPointerDown={(event) => startDrag(event, target.id)}
+                  onWheel={(event) => handleWheelScale(event, target.id)}
+                  title={`${target.label}：拖动移动，滚轮缩放`}
+                >
+                  <span>{target.label}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="private-decor-editor__panel">
+            <div className="private-decor-editor__header">
+              <strong>素材调试</strong>
+              <button type="button" onClick={() => onOpenChange(false)} aria-label="关闭素材调试">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="private-decor-editor__hint">拖动选中框移动，滚轮缩放，Shift + 滚轮细调。</div>
+            <div className="private-decor-editor__tabs">
+              {PRIVATE_CHAT_DECOR_TARGETS.map((target) => (
+                <button
+                  key={target.id}
+                  type="button"
+                  className={selectedId === target.id ? 'is-selected' : ''}
+                  onClick={() => setSelectedId(target.id)}
+                >
+                  {target.label}
+                </button>
+              ))}
+            </div>
+            <div className="private-decor-editor__fields">
+              <label>
+                X
+                <input
+                  type="number"
+                  value={Math.round(selectedTransform.x)}
+                  onChange={(event) => updateTransform(selectedId, { x: Number(event.target.value) })}
+                />
+              </label>
+              <label>
+                Y
+                <input
+                  type="number"
+                  value={Math.round(selectedTransform.y)}
+                  onChange={(event) => updateTransform(selectedId, { y: Number(event.target.value) })}
+                />
+              </label>
+              <label>
+                缩放
+                <input
+                  type="number"
+                  min="0.25"
+                  max="3"
+                  step="0.05"
+                  value={Number(selectedTransform.scale.toFixed(2))}
+                  onChange={(event) => updateTransform(selectedId, { scale: Number(event.target.value) })}
+                />
+              </label>
+            </div>
+            <div className="private-decor-editor__actions">
+              <button type="button" onClick={() => resetDecor(selectedId)}>重置当前</button>
+              <button type="button" onClick={resetAllDecor}>全部清空</button>
+              <button type="button" onClick={copyDecorCss}>复制 CSS</button>
+            </div>
+            {copyStatus && <div className="private-decor-editor__status">{copyStatus}</div>}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 
 function PanelFallback() {
   return (
@@ -123,7 +464,7 @@ function DrawerFallback({ type = 'settings', contact, lang = 'zh', onClose }) {
   }
   if (type === 'diary') {
     return (
-      <aside className="memory-drawer drawer-loading-fallback diary" style={{ width: '380px', backgroundColor: '#fffdf5' }}>
+      <aside className="memory-drawer diary-drawer drawer-loading-fallback diary">
         <div className="memory-header" style={{ backgroundColor: '#f6f1e3', borderBottomColor: '#e0d8c3' }}>
           <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#5a4d3c' }}>
             <BookOpen size={18} />
@@ -140,7 +481,7 @@ function DrawerFallback({ type = 'settings', contact, lang = 'zh', onClose }) {
     );
   }
   return (
-    <aside className="memory-drawer drawer-loading-fallback" style={{ width: '320px', backgroundColor: '#f7f7f7' }}>
+    <aside className="memory-drawer chat-settings-drawer drawer-loading-fallback">
       <div className="memory-header">
         <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Settings size={18} />
@@ -154,6 +495,16 @@ function DrawerFallback({ type = 'settings', contact, lang = 'zh', onClose }) {
         <p className="loading-text">{lang === 'en' ? 'Loading settings...' : '加载设置中...'}</p>
       </div>
     </aside>
+  );
+}
+
+function PrivateChatDrawerShell({ type, children }) {
+  return (
+    <div className="private-chat-drawer-shell" data-drawer-type={type}>
+      <div className="private-chat-drawer-shell__content">
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -208,7 +559,7 @@ class AppErrorBoundary extends React.Component {
     let storage = null;
     try {
       storage = window.sessionStorage;
-    } catch (e) {
+    } catch {
       this.setState({ autoReloading: false });
       return;
     }
@@ -224,7 +575,7 @@ class AppErrorBoundary extends React.Component {
         return;
       }
       storage.setItem(storageKey, '1');
-    } catch (e) {
+    } catch {
       this.setState({ autoReloading: false });
       return;
     }
@@ -258,9 +609,9 @@ class AppErrorBoundary extends React.Component {
         <Wrapper
           className={isDrawer ? 'memory-drawer drawer-loading-fallback' : 'panel-error-state panel-loading-state'}
           style={{
-            width: isDrawer ? '360px' : '100%',
+            width: isDrawer ? 'var(--private-chat-drawer-width, 360px)' : '100%',
             minWidth: 0,
-            flex: isDrawer ? '0 0 360px' : 1,
+            flex: isDrawer ? '0 0 var(--private-chat-drawer-width, 360px)' : 1,
             height: '100%',
             boxSizing: 'border-box',
             display: 'flex',
@@ -302,9 +653,9 @@ class AppErrorBoundary extends React.Component {
       <Wrapper
         className={isDrawer ? 'memory-drawer drawer-error' : 'panel-error-state'}
         style={{
-          width: isDrawer ? '360px' : '100%',
+          width: isDrawer ? 'var(--private-chat-drawer-width, 360px)' : '100%',
           minWidth: 0,
-          flex: isDrawer ? '0 0 360px' : 1,
+          flex: isDrawer ? '0 0 var(--private-chat-drawer-width, 360px)' : 1,
           height: '100%',
           boxSizing: 'border-box',
           display: 'flex',
@@ -373,14 +724,83 @@ function App() {
   const [globalAnnouncement, setGlobalAnnouncement] = useState(null);
   const [groupChatEnabled, setGroupChatEnabled] = useState(false); // Auto-detected: true if Group Chat DLC is loaded
   const [redpacketClaimEvent, setRedpacketClaimEvent] = useState(null);
-  const [hasNewMoments, setHasNewMoments] = useState(false); // Moments notification
   const [generatingSchedules, setGeneratingSchedules] = useState({});
   const [hiddenMessagesCount, setHiddenMessagesCount] = useState(0);
+  const [privateChatForegroundEnabled, setPrivateChatForegroundEnabled] = useState(loadPrivateChatForegroundEnabled);
+  const [privateChatForegroundExiting, setPrivateChatForegroundExiting] = useState(false);
+  const privateChatForegroundExitTimerRef = useRef(null);
+  const [privateChatDecorTransforms, setPrivateChatDecorTransforms] = useState(loadPrivateChatDecorTransforms);
+  const [privateChatDecorEditorOpen, setPrivateChatDecorEditorOpen] = useState(() => {
+    const search = new URLSearchParams(window.location.search);
+    return search.get('decorEditor') === '1'
+      || window.localStorage.getItem(PRIVATE_CHAT_DECOR_EDITOR_STORAGE_KEY) === '1';
+  });
+
+  const setPrivateChatDecorEditorOpenPersisted = useCallback((valueOrUpdater) => {
+    setPrivateChatDecorEditorOpen((previous) => {
+      const next = typeof valueOrUpdater === 'function' ? valueOrUpdater(previous) : valueOrUpdater;
+      window.localStorage.setItem(PRIVATE_CHAT_DECOR_EDITOR_STORAGE_KEY, next ? '1' : '0');
+      return next;
+    });
+  }, []);
+
+  const getPrivateChatDecorStyle = useCallback((id) => {
+    const transform = normalizeDecorTransform(privateChatDecorTransforms[id]);
+    return {
+      '--decor-x': `${Math.round(transform.x)}px`,
+      '--decor-y': `${Math.round(transform.y)}px`,
+      '--decor-scale': Number(transform.scale.toFixed(3)),
+    };
+  }, [privateChatDecorTransforms]);
+
+  const clearPrivateChatForegroundExitTimer = useCallback(() => {
+    if (privateChatForegroundExitTimerRef.current !== null) {
+      window.clearTimeout(privateChatForegroundExitTimerRef.current);
+      privateChatForegroundExitTimerRef.current = null;
+    }
+  }, []);
+
+  const handlePrivateChatForegroundToggle = useCallback(() => {
+    clearPrivateChatForegroundExitTimer();
+
+    if (privateChatForegroundEnabled) {
+      setPrivateChatForegroundEnabled(false);
+      setPrivateChatForegroundExiting(true);
+      privateChatForegroundExitTimerRef.current = window.setTimeout(() => {
+        setPrivateChatForegroundExiting(false);
+        privateChatForegroundExitTimerRef.current = null;
+      }, PRIVATE_CHAT_FOREGROUND_EXIT_MS);
+      return;
+    }
+
+    setPrivateChatForegroundEnabled(true);
+    setPrivateChatForegroundExiting(false);
+  }, [clearPrivateChatForegroundExitTimer, privateChatForegroundEnabled]);
+
+  useEffect(() => {
+    return () => clearPrivateChatForegroundExitTimer();
+  }, [clearPrivateChatForegroundExitTimer]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        PRIVATE_CHAT_FOREGROUND_ENABLED_STORAGE_KEY,
+        privateChatForegroundEnabled ? '1' : '0'
+      );
+    } catch (error) {
+      console.warn('Failed to save private chat foreground preference:', error);
+    }
+  }, [privateChatForegroundEnabled]);
+
   const effectiveUser = useMemo(() => ({ ...(authUser || {}), ...(userProfile || {}) }), [authUser, userProfile]);
   const visiblePlugins = plugins.filter(p => !p.condition || p.condition(effectiveUser));
   const experimentalPlugins = visiblePlugins.filter(p => p.position === 'experiment');
   const regularPlugins = visiblePlugins.filter(p => p.position !== 'experiment');
   const activeChatContact = contacts.find(c => c.id === activeContactId) || activeContactSnapshot;
+
+  useEffect(() => {
+    clearRetiredThemeOverrides();
+  }, []);
 
   // Use a ref to track the active contact ID without causing useEffect re-renders when it changes.
   const activeContactRef = useRef(activeContactId);
@@ -485,6 +905,15 @@ function App() {
     }, delay);
   }, [fetchContacts]);
 
+  useEffect(() => {
+    if (!token) return undefined;
+    const handleRefreshContacts = () => {
+      fetchContacts();
+    };
+    window.addEventListener('refresh_contacts', handleRefreshContacts);
+    return () => window.removeEventListener('refresh_contacts', handleRefreshContacts);
+  }, [fetchContacts, token]);
+
   const removeDeletedContact = useCallback((deletedId) => {
     if (!deletedId) return;
     const targetId = String(deletedId);
@@ -549,11 +978,6 @@ function App() {
         })
         .then(data => {
           setUserProfile(data);
-          if (data.theme) localStorage.setItem('cp_theme', data.theme);
-          if (data.theme_config) {
-            localStorage.setItem('cp_theme_config', typeof data.theme_config === 'string' ? data.theme_config : JSON.stringify(data.theme_config));
-          }
-          if (data.custom_css) localStorage.setItem('cp_custom_css', data.custom_css);
           if (data.avatar) localStorage.setItem('cp_avatar', data.avatar);
         })
         .catch(err => {
@@ -676,11 +1100,6 @@ function App() {
             setTimeout(() => window.location.reload(), 500);
           } else if (msg.type === 'redpacket_claim') {
             setRedpacketClaimEvent({ ...msg.data, _ts: Date.now() });
-          } else if (msg.type === 'moment_update') {
-            // If we aren't currently viewing moments, show the red dot
-            if (activeTabRef.current !== 'moments') {
-              setHasNewMoments(true);
-            }
           } else if (msg.type === 'memory_update') {
             console.log('[WS] Memory update received for character:', msg.characterId);
             window.dispatchEvent(new CustomEvent('memory_update', { detail: { characterId: msg.characterId } }));
@@ -769,42 +1188,27 @@ function App() {
     }
   }, [incomingMessageQueue]);
 
-  // Apply Dynamic Theme & Custom CSS
   useEffect(() => {
-    if (userProfile) {
-      if (userProfile.theme) {
-        document.documentElement.setAttribute('data-theme', userProfile.theme);
-      }
-
-      // Apply theme_config JSON mapping to CSS variables
-      if (userProfile.theme_config) {
-        try {
-          const themeObj = typeof userProfile.theme_config === 'string' ? JSON.parse(userProfile.theme_config) : userProfile.theme_config;
-          for (const [key, value] of Object.entries(themeObj)) {
-            if (key.startsWith('--')) {
-              document.documentElement.style.setProperty(key, value);
-            }
-          }
-        } catch (e) {
-          console.error("Failed to parse theme_config", e);
-        }
-      }
-
-      // Apply custom raw CSS
-      if (userProfile.custom_css) {
-        let styleTag = document.getElementById('chatpulse-custom-css');
-        if (!styleTag) {
-          styleTag = document.createElement('style');
-          styleTag.id = 'chatpulse-custom-css';
-          document.head.appendChild(styleTag);
-        }
-        styleTag.textContent = userProfile.custom_css;
-      } else {
-        const styleTag = document.getElementById('chatpulse-custom-css');
-        if (styleTag) styleTag.textContent = '';
-      }
+    const hasCustomTransform = PRIVATE_CHAT_DECOR_TARGETS.some(({ id }) => (
+      !isDecorTransformDefault(id, privateChatDecorTransforms[id])
+    ));
+    if (hasCustomTransform) {
+      window.localStorage.setItem(PRIVATE_CHAT_DECOR_STORAGE_KEY, JSON.stringify(privateChatDecorTransforms));
+    } else {
+      window.localStorage.removeItem(PRIVATE_CHAT_DECOR_STORAGE_KEY);
     }
-  }, [userProfile]);
+  }, [privateChatDecorTransforms]);
+
+  useEffect(() => {
+    const handleDecorEditorShortcut = (event) => {
+      if (!event.ctrlKey || !event.shiftKey || event.key.toLowerCase() !== 'd') return;
+      event.preventDefault();
+      setPrivateChatDecorEditorOpenPersisted((open) => !open);
+    };
+
+    window.addEventListener('keydown', handleDecorEditorShortcut);
+    return () => window.removeEventListener('keydown', handleDecorEditorShortcut);
+  }, [setPrivateChatDecorEditorOpenPersisted]);
 
   useEffect(() => {
     const activePlugin = plugins.find(p => p.id === activeTab);
@@ -814,6 +1218,19 @@ function App() {
   }, [activeTab, effectiveUser]);
 
   const isViewingList = (activeTab === 'contacts' || (activeTab === 'chats' && !activeContactId && !activeGroupId));
+  const isPrivateChatView = activeTab === 'chats' && !!activeContactId;
+  const isChatSceneView = activeTab === 'chats' && (!!activeContactId || !!activeGroupId);
+  const isContactsSceneView = activeTab === 'contacts';
+  const isStaticPixelSceneView = activeTab === 'memory_library' || activeTab === 'mcp_lab' || activeTab === 'settings' || activeTab === 'admin' || activeTab === 'housing_social';
+  const isBarePixelSceneView = activeTab === 'pixel_world' || activeTab === 'city';
+  const activePluginMeta = visiblePlugins.find(p => p.id === activeTab);
+  const ActivePluginIcon = activePluginMeta?.icon;
+  const hasPixelSceneView = isChatSceneView || isContactsSceneView || isStaticPixelSceneView;
+  const hasPixelSkinView = hasPixelSceneView || isBarePixelSceneView || activeTab === 'chats';
+  const hasForegroundSceneView = hasPixelSceneView && privateChatForegroundEnabled;
+  const isForegroundExitingSceneView = hasPixelSceneView && !privateChatForegroundEnabled && privateChatForegroundExiting;
+  const shouldRenderForegroundScene = hasForegroundSceneView || isForegroundExitingSceneView;
+  const isForegroundLayoutLifted = shouldRenderForegroundScene;
 
   if (!token) {
     return <Login apiUrl={API_URL} />;
@@ -828,7 +1245,7 @@ function App() {
   }
 
   return (
-    <div className={`app-container tab-${activeTab} ${activeContactId || activeGroupId ? 'has-active-chat' : 'no-active-chat'} ${isViewingList ? 'viewing-list' : 'viewing-content'}`}>
+    <div className={`app-container tab-${activeTab} ${activeContactId || activeGroupId ? 'has-active-chat' : 'no-active-chat'} ${isViewingList ? 'viewing-list' : 'viewing-content'} ${hasPixelSkinView ? 'has-chat-skin has-private-chat' : ''} ${isPrivateChatView ? 'is-private-chat-scene' : ''} ${isContactsSceneView ? 'is-contacts-scene' : ''} ${isStaticPixelSceneView ? 'is-static-pixel-scene' : ''} ${isBarePixelSceneView ? 'is-bare-pixel-scene' : ''} ${activeGroupId && activeTab === 'chats' ? 'is-group-chat-scene' : ''} ${hasForegroundSceneView ? 'is-foreground-enabled' : 'is-foreground-disabled'} ${isForegroundExitingSceneView ? 'is-foreground-exiting' : ''} ${isForegroundLayoutLifted ? 'is-foreground-lifted' : ''} ${privateChatDecorEditorOpen ? 'is-decor-editing' : ''}`}>
       {globalAnnouncement && (
         <div style={{ position: 'absolute', top: 0, left: '70px', right: 0, zIndex: 9999, background: 'var(--primary, #07c160)', color: 'white', padding: '10px 20px', textAlign: 'center', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '10px' }}>
           <span style={{ fontWeight: 'bold' }}>📢</span>
@@ -836,23 +1253,66 @@ function App() {
           <button onClick={() => setGlobalAnnouncement(null)} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.8)', cursor: 'pointer', marginLeft: 'auto', fontSize: '20px', padding: '0 5px' }}>&times;</button>
         </div>
       )}
+      {shouldRenderForegroundScene && (
+        <>
+          <div className="private-chat-floor-decor" aria-hidden="true">
+            <img
+              className="private-chat-scene-decor__floor"
+              data-private-decor-id="floor"
+              style={getPrivateChatDecorStyle('floor')}
+              src="/assets/ui/private-chat/pixel-foreground-floor-ai-grid.png?v=20260626"
+              alt=""
+            />
+          </div>
+          <div className="private-chat-scene-decor" aria-hidden="true">
+            <img
+              className="private-chat-scene-decor__cottage"
+              data-private-decor-id="cottage"
+              style={getPrivateChatDecorStyle('cottage')}
+              src="/assets/ui/private-chat/pixel-left-cottage-house.png?v=20260626b"
+              alt=""
+            />
+            <img
+              className="private-chat-scene-decor__cart"
+              data-private-decor-id="cart"
+              style={getPrivateChatDecorStyle('cart')}
+              src="/assets/ui/private-chat/pixel-right-garden-sign.png?v=20260626b"
+              alt=""
+            />
+            <div className="private-chat-pet-lane" />
+          </div>
+          <PrivateChatDecorEditor
+            open={privateChatDecorEditorOpen}
+            onOpenChange={setPrivateChatDecorEditorOpenPersisted}
+            transforms={privateChatDecorTransforms}
+            setTransforms={setPrivateChatDecorTransforms}
+            isPrivateChatView={hasForegroundSceneView}
+          />
+        </>
+      )}
       {/* 1. Very Left Sidebar (Navigation) */}
       <nav className="sidebar-nav">
+        <div className="sidebar-brand" aria-label="ChatPulse">
+          <MessageSquare size={22} />
+          <span>ChatPulse</span>
+        </div>
         <div className="my-avatar" onClick={() => setActiveTab('settings')} style={{ cursor: 'pointer' }}>
-          <AuthenticatedImage src={resolveAvatarUrl(effectiveUser?.avatar, API_URL, effectiveUser?.name || 'User')} fallbackSrc={defaultAvatarUrl(effectiveUser?.name || 'User')} alt="Me" />
+          <AvatarWithFrame
+            size={40}
+            frame={effectiveUser?.avatar_frame}
+            src={resolveAvatarUrl(effectiveUser?.avatar, API_URL, effectiveUser?.name || 'User')}
+            fallbackSrc={defaultAvatarUrl(effectiveUser?.name || 'User')}
+            alt="Me"
+          />
         </div>
         <div className="nav-icons">
-          <button className={`nav-icon ${activeTab === 'chats' ? 'active' : ''}`} onClick={() => setActiveTab('chats')} title={lang === 'en' ? 'Chats — View conversations' : '聊天 — 查看会话列表'}>
+          <button className={`nav-icon ${activeTab === 'chats' ? 'active' : ''}`} data-label={lang === 'en' ? 'Chats' : '聊天'} onClick={() => setActiveTab('chats')} title={lang === 'en' ? 'Chats — View conversations' : '聊天 — 查看会话列表'}>
             <MessageSquare size={24} />
           </button>
-          <button className={`nav-icon ${activeTab === 'contacts' ? 'active' : ''}`} onClick={() => setActiveTab('contacts')} title={lang === 'en' ? 'Contacts — Manage characters & groups' : '通讯录 — 管理角色和群聊'}>
+          <button className={`nav-icon ${activeTab === 'contacts' ? 'active' : ''}`} data-label={lang === 'en' ? 'Contacts' : '联系人'} onClick={() => setActiveTab('contacts')} title={lang === 'en' ? 'Contacts — Manage characters & groups' : '通讯录 — 管理角色和群聊'}>
             <Users size={24} />
           </button>
-          <button className={`nav-icon ${activeTab === 'discover' ? 'active' : ''}`} onClick={() => { setActiveTab('discover'); setHasNewMoments(false); }} title={lang === 'en' ? 'Discover — Moments feed' : '发现 — 朋友圈动态'} style={{ position: 'relative' }}>
-            <Compass size={24} />
-            {hasNewMoments && <div style={{ position: 'absolute', top: '10px', right: '10px', width: '8px', height: '8px', backgroundColor: 'var(--danger)', borderRadius: '50%' }} />}
-          </button>
-          <button className={`nav-icon ${activeTab === 'memory_library' ? 'active' : ''}`} onClick={() => setActiveTab('memory_library')} title={lang === 'en' ? 'Memory Library — Classification and forgetting' : '记忆库 — 分类与遗忘曲线'}>
+          <button className={`nav-icon ${activeTab === 'memory_library' ? 'active' : ''}`} data-label={lang === 'en' ? 'Memory' : '记忆库'} onClick={() => setActiveTab('memory_library')} title={lang === 'en' ? 'Memory Library — Classification and forgetting' : '记忆库 — 分类与遗忘曲线'}>
             <LibraryBig size={24} />
           </button>
         </div>
@@ -860,34 +1320,52 @@ function App() {
           {experimentalPlugins.map(Plugin => {
             const Icon = Plugin.icon;
             return (
-              <button key={Plugin.id} className={`nav-icon ${activeTab === Plugin.id ? 'active' : ''}`} onClick={() => setActiveTab(Plugin.id)} title={lang === 'en' ? Plugin.name_en : Plugin.name_zh} style={{ color: Plugin.color || 'inherit' }}>
+              <button key={Plugin.id} className={`nav-icon ${activeTab === Plugin.id ? 'active' : ''}`} data-label={lang === 'en' ? Plugin.name_en : Plugin.name_zh} onClick={() => setActiveTab(Plugin.id)} title={lang === 'en' ? Plugin.name_en : Plugin.name_zh} style={activeTab === Plugin.id ? undefined : { color: Plugin.color || 'inherit' }}>
                 <Icon size={24} />
               </button>
             );
           })}
-          <button className="nav-icon" onClick={toggleLanguage} title={t('Toggle Language')}>
+          <button className="nav-icon" data-label={lang === 'en' ? 'Chinese' : '语言切换'} onClick={toggleLanguage} title={t('Toggle Language')}>
             <Globe size={24} />
             <span style={{ fontSize: '10px', marginTop: '4px', fontWeight: 'bold' }}>{lang === 'en' ? '中' : 'EN'}</span>
           </button>
-          <button className={`nav-icon ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')} title={lang === 'en' ? 'Settings — Global configuration' : '设置 — 全局设置'}>
+          <button className={`nav-icon ${activeTab === 'settings' ? 'active' : ''}`} data-label={lang === 'en' ? 'Settings' : '设置'} onClick={() => setActiveTab('settings')} title={lang === 'en' ? 'Settings — Global configuration' : '设置 — 全局设置'}>
             <Settings size={24} />
           </button>
           {regularPlugins.map(Plugin => {
             const Icon = Plugin.icon;
             return (
-              <button key={Plugin.id} className={`nav-icon ${activeTab === Plugin.id ? 'active' : ''}`} onClick={() => setActiveTab(Plugin.id)} title={lang === 'en' ? Plugin.name_en : Plugin.name_zh} style={{ color: Plugin.color || 'inherit' }}>
+              <button key={Plugin.id} className={`nav-icon ${activeTab === Plugin.id ? 'active' : ''}`} data-label={lang === 'en' ? Plugin.name_en : Plugin.name_zh} onClick={() => setActiveTab(Plugin.id)} title={lang === 'en' ? Plugin.name_en : Plugin.name_zh} style={activeTab === Plugin.id ? undefined : { color: Plugin.color || 'inherit' }}>
                 <Icon size={24} />
               </button>
             );
           })}
-          <button className="nav-icon" onClick={() => logout(API_URL)} title={lang === 'en' ? 'Logout' : '退出登录'} style={{ color: '#ff4d4f' }}>
+          <button className="nav-icon" data-label={lang === 'en' ? 'Logout' : '退出登录'} onClick={() => logout(API_URL)} title={lang === 'en' ? 'Logout' : '退出登录'} style={{ color: '#ff4d4f' }}>
             <LogOut size={24} />
           </button>
         </div>
       </nav>
 
       {/* 2. Middle Column (List) */}
-      <div className="middle-column" style={activeTab === 'contacts' ? { width: 'auto', flex: 1, borderRight: 'none' } : {}}>
+      <div className="middle-column" data-panel-title={activeTab === 'chats' ? (lang === 'en' ? 'Private Chat' : '私聊') : ''}>
+        {activeTab === 'chats' && (
+          <div className="middle-column-heading">
+            <h2>{lang === 'en' ? 'Private Chat' : '私聊'}</h2>
+            <button
+              type="button"
+              className={`foreground-toggle ${privateChatForegroundEnabled ? 'is-on' : 'is-off'}`}
+              aria-label={privateChatForegroundEnabled ? '关闭前景' : '开启前景'}
+              aria-pressed={privateChatForegroundEnabled}
+              title={privateChatForegroundEnabled ? '关闭前景' : '开启前景'}
+              onClick={handlePrivateChatForegroundToggle}
+            >
+              <span className="foreground-toggle__text">前景</span>
+              <span className="foreground-toggle__track" aria-hidden="true">
+                <span className="foreground-toggle__thumb" />
+              </span>
+            </button>
+          </div>
+        )}
         <div className="search-bar-container">
           <input type="text" className="search-bar" placeholder={t('Search') || 'Search'} />
         </div>
@@ -918,7 +1396,7 @@ function App() {
           )}
           {activeTab === 'chats' && groupChatEnabled && groups.length > 0 && (
             <div style={{ borderTop: '1px solid #eee' }}>
-              <div style={{ padding: '5px 15px', color: '#999', fontSize: '11px' }}>
+              <div style={{ padding: '5px 15px', color: 'var(--text-secondary)', fontSize: '11px' }}>
                 {lang === 'en' ? 'Group Chats' : '群聊'}
               </div>
               {groups.map(g => (
@@ -937,10 +1415,22 @@ function App() {
                       const memberAvatar = memberId === 'user'
                         ? resolveAvatarUrl(userProfile?.avatar, API_URL, memberName)
                         : resolveAvatarUrl(member?.avatar, API_URL, memberName);
-                      return <AuthenticatedImage key={idx} src={memberAvatar} fallbackSrc={defaultAvatarUrl(memberName)} alt="" style={{ width: g.members.length === 1 ? '42px' : '32px', height: g.members.length === 1 ? '42px' : '32px', borderRadius: '50%', marginLeft: idx > 0 ? '-12px' : '0', border: g.members.length === 1 ? 'none' : '2px solid #fff', zIndex: 10 - idx, objectFit: 'cover', backgroundColor: '#fff' }} />;
+                      const memberFrame = memberId === 'user' ? userProfile?.avatar_frame : member?.avatar_frame;
+                      return (
+                        <AvatarWithFrame
+                          key={idx}
+                          size={g.members.length === 1 ? 42 : 32}
+                          frame={memberFrame}
+                          src={memberAvatar}
+                          fallbackSrc={defaultAvatarUrl(memberName)}
+                          alt=""
+                          style={{ marginLeft: idx > 0 ? '-12px' : '0', zIndex: 10 - idx }}
+                          imageStyle={{ border: g.members.length === 1 ? '1px solid rgba(255, 111, 151, 0.28)' : '2px solid #fff' }}
+                        />
+                      );
                     })}
                     {g.members?.length > 3 && (
-                      <div style={{ width: '32px', height: '32px', borderRadius: '50%', marginLeft: '-12px', border: '2px solid #fff', zIndex: 6, backgroundColor: '#f0f0f0', color: '#888', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 'bold', flexShrink: 0 }}>
+                      <div style={{ width: '32px', height: '32px', borderRadius: '50%', marginLeft: '-12px', border: '2px solid #fff', zIndex: 6, backgroundColor: '#f0f0f0', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 'bold', flexShrink: 0 }}>
                         +{g.members.length - 3}
                       </div>
                     )}
@@ -948,81 +1438,140 @@ function App() {
                   </div>
                   <div className="contact-info">
                     <div className="contact-name">{g.name}</div>
-                    <div className="contact-preview" style={{ fontSize: '12px', color: '#999' }}>({g.members?.length || 0})</div>
+                    <div className="contact-preview" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>({g.members?.length || 0})</div>
                   </div>
                 </div>
               ))}
             </div>
           )}
           {activeTab === 'contacts' && (
-            <div style={{ paddingTop: '10px' }}>
-
-              <div style={{ padding: '5px 15px', color: '#999', fontSize: '13px', backgroundColor: '#ebebeb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>{t('All Contacts') || 'All Contacts'}</span>
+            <div className="contacts-page-shell">
+              <div className="contacts-page-header">
+                <div className="contacts-page-title">
+                  <span>{lang === 'en' ? 'Contacts' : '联系人'}</span>
+                  <h2>{lang === 'en' ? 'Address Book' : '通讯录'}</h2>
+                </div>
                 <button
+                  type="button"
+                  className="contacts-page-icon-button"
                   onClick={() => setShowAddCharModal(true)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-color)', padding: 0 }}
                   title={lang === 'en' ? 'Add new AI character' : '添加新的 AI 角色'}
+                  aria-label={lang === 'en' ? 'Add new AI character' : '添加新的 AI 角色'}
                 >
-                  <UserPlus size={16} />
+                  <UserPlus size={18} />
                 </button>
               </div>
-              {contacts.map(c => (
-                <div key={c.id} className="contact-item" onClick={() => { setActiveContactId(c.id); setActiveContactSnapshot(c); setActiveTab('chats'); }}>
-                  <div className="contact-avatar">
-                    <AuthenticatedImage src={resolveAvatarUrl(c.avatar, API_URL, c.name || c.id || 'User')} fallbackSrc={defaultAvatarUrl(c.name || c.id || 'User')} alt={c.name} style={{ objectFit: 'cover' }} />
-                  </div>
-                  <div className="contact-info" style={{ display: 'flex', alignItems: 'center' }}>
-                    <span className="contact-name" style={{ fontSize: '16px' }}>{c.name}</span>
-                  </div>
+
+              <section className="contacts-page-section">
+                <div className="contacts-page-section__head">
+                  <span>{lang === 'en' ? 'Private Contacts' : '私聊联系人'}</span>
+                  <span className="contacts-page-count">{contacts.length}</span>
                 </div>
-              ))}
-              {groupChatEnabled && (<>
-                <div style={{ padding: '5px 15px', color: '#999', fontSize: '13px', backgroundColor: '#ebebeb', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
-                  <span>{lang === 'en' ? 'Group Chats' : '群聊'}</span>
-                  <button
-                    onClick={() => setShowCreateGroupModal(true)}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-color)', padding: 0 }}
-                    title={lang === 'en' ? 'Create Group' : '创建群聊'}
-                  >
-                    <UsersRound size={16} />
-                  </button>
+                <div className="contacts-page-grid">
+                  {contacts.map((c) => {
+                    const isOnline = hasPrimaryModelConfig(c);
+                    const statusLabel = isOnline ? (lang === 'en' ? 'Online' : '在线') : (lang === 'en' ? 'Offline' : '离线');
+                    const configLabel = isOnline
+                      ? (c.model_name || c.model || (lang === 'en' ? 'Ready' : '主 API 已配置'))
+                      : (lang === 'en' ? 'No primary API key' : '缺少主 API 有效 key');
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className={`contacts-page-card ${isOnline ? 'is-online' : 'is-offline'}`}
+                        onClick={() => { setActiveContactId(c.id); setActiveContactSnapshot(c); setActiveTab('chats'); }}
+                      >
+                        <span className="contacts-page-card__avatar">
+                          <AvatarWithFrame
+                            size={52}
+                            frame={c.avatar_frame}
+                            src={resolveAvatarUrl(c.avatar, API_URL, c.name || c.id || 'User')}
+                            fallbackSrc={defaultAvatarUrl(c.name || c.id || 'User')}
+                            alt={c.name}
+                          />
+                          <span className={`contacts-page-status-dot ${isOnline ? 'online' : 'offline'}`} />
+                        </span>
+                        <span className="contacts-page-card__body">
+                          <span className="contacts-page-card__topline">
+                            <span className="contacts-page-card__name">{c.name}</span>
+                            <span className={`contacts-page-card__status ${isOnline ? 'online' : 'offline'}`}>{statusLabel}</span>
+                          </span>
+                          <span className="contacts-page-card__meta">{configLabel}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
-                {groups.map(g => (
-                  <div key={g.id} className="contact-item" onClick={() => { setActiveGroupId(g.id); setActiveContactId(null); setActiveContactSnapshot(null); setActiveTab('chats'); }}>
-                    <div className="contact-avatar" style={{ width: 'auto', minWidth: '42px', height: '42px', display: 'flex', alignItems: 'center' }}>
-                      {g.members?.slice(0, 3).map((memberObj, idx) => {
-                        const memberId = typeof memberObj === 'object' ? memberObj.member_id : memberObj;
-                        const member = contacts.find(c => String(c.id) === String(memberId));
-                        const memberName = memberId === 'user'
-                          ? userProfile?.name || 'User'
-                          : member?.name || memberId || 'User';
-                        const memberAvatar = memberId === 'user'
-                          ? resolveAvatarUrl(userProfile?.avatar, API_URL, memberName)
-                          : resolveAvatarUrl(member?.avatar, API_URL, memberName);
-                        return <AuthenticatedImage key={idx} src={memberAvatar} fallbackSrc={defaultAvatarUrl(memberName)} alt="" style={{ width: g.members.length === 1 ? '42px' : '32px', height: g.members.length === 1 ? '42px' : '32px', borderRadius: '50%', marginLeft: idx > 0 ? '-12px' : '0', border: g.members.length === 1 ? 'none' : '2px solid #fff', zIndex: 10 - idx, objectFit: 'cover', backgroundColor: '#fff' }} />;
-                      })}
-                      {g.members?.length > 3 && (
-                        <div style={{ width: '32px', height: '32px', borderRadius: '50%', marginLeft: '-12px', border: '2px solid #fff', zIndex: 6, backgroundColor: '#f0f0f0', color: '#888', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 'bold', flexShrink: 0 }}>
-                          +{g.members.length - 3}
-                        </div>
-                      )}
-                      {(!g.members || g.members.length === 0) && <div style={{ width: '42px', height: '42px', backgroundColor: '#e1e1e1', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><UsersRound size={20} style={{ color: '#fff' }} /></div>}
-                    </div>
-                    <div className="contact-info" style={{ display: 'flex', alignItems: 'center' }}>
-                      <span className="contact-name" style={{ fontSize: '16px' }}>{g.name}</span>
-                    </div>
+              </section>
+
+              {groupChatEnabled && (
+                <section className="contacts-page-section contacts-page-section--groups">
+                  <div className="contacts-page-section__head">
+                    <span>{lang === 'en' ? 'Group Chats' : '群聊'}</span>
+                    <button
+                      type="button"
+                      className="contacts-page-small-action"
+                      onClick={() => setShowCreateGroupModal(true)}
+                      title={lang === 'en' ? 'Create Group' : '创建群聊'}
+                      aria-label={lang === 'en' ? 'Create Group' : '创建群聊'}
+                    >
+                      <UsersRound size={16} />
+                    </button>
                   </div>
-                ))}
-              </>)}
-            </div>
-          )}
-          {activeTab === 'discover' && (
-            <div className="contact-item active">
-              <Compass size={24} style={{ marginRight: '10px', color: 'var(--accent-color)' }} />
-              <div className="contact-info">
-                <div className="contact-name">{t('Moments')}</div>
-              </div>
+                  <div className="contacts-page-grid">
+                    {groups.map((g) => (
+                      <button
+                        key={g.id}
+                        type="button"
+                        className="contacts-page-card contacts-page-card--group"
+                        onClick={() => { setActiveGroupId(g.id); setActiveContactId(null); setActiveContactSnapshot(null); setActiveTab('chats'); }}
+                      >
+                        <span className="contacts-page-group-avatar">
+                          {g.members?.slice(0, 3).map((memberObj, idx) => {
+                            const memberId = typeof memberObj === 'object' ? memberObj.member_id : memberObj;
+                            const member = contacts.find(c => String(c.id) === String(memberId));
+                            const memberName = memberId === 'user'
+                              ? userProfile?.name || 'User'
+                              : member?.name || memberId || 'User';
+                            const memberAvatar = memberId === 'user'
+                              ? resolveAvatarUrl(userProfile?.avatar, API_URL, memberName)
+                              : resolveAvatarUrl(member?.avatar, API_URL, memberName);
+                            const memberFrame = memberId === 'user' ? userProfile?.avatar_frame : member?.avatar_frame;
+                            return (
+                              <AvatarWithFrame
+                                key={`${memberId}-${idx}`}
+                                className="contacts-page-group-avatar__frame"
+                                size={34}
+                                frame={memberFrame}
+                                src={memberAvatar}
+                                fallbackSrc={defaultAvatarUrl(memberName)}
+                                alt=""
+                                style={{ marginLeft: idx > 0 ? '-12px' : '0', zIndex: 10 - idx }}
+                                imageClassName="contacts-page-group-avatar__image"
+                              />
+                            );
+                          })}
+                          {g.members?.length > 3 && (
+                            <span className="contacts-page-group-avatar__more">+{g.members.length - 3}</span>
+                          )}
+                          {(!g.members || g.members.length === 0) && (
+                            <span className="contacts-page-group-avatar__empty">
+                              <UsersRound size={20} />
+                            </span>
+                          )}
+                        </span>
+                        <span className="contacts-page-card__body">
+                          <span className="contacts-page-card__topline">
+                            <span className="contacts-page-card__name">{g.name}</span>
+                            <span className="contacts-page-card__status online">{g.members?.length || 0}</span>
+                          </span>
+                          <span className="contacts-page-card__meta">{lang === 'en' ? 'Tap to enter group chat' : '点击进入群聊'}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
             </div>
           )}
           {activeTab === 'settings' && (
@@ -1041,6 +1590,14 @@ function App() {
               </div>
             </div>
           )}
+          {activeTab === 'mcp_lab' && activePluginMeta && ActivePluginIcon && (
+            <div className="contact-item active">
+              <ActivePluginIcon size={24} style={{ marginRight: '10px', color: 'var(--accent-color)' }} />
+              <div className="contact-info">
+                <div className="contact-name">{lang === 'en' ? activePluginMeta.name_en : activePluginMeta.name_zh}</div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1055,7 +1612,7 @@ function App() {
                 const Plugin = visiblePlugins.find(p => p.id === activeTab);
                 const PluginComponent = Plugin.component;
                 return (
-                  <div style={{ flex: 1, height: '100%', overflowY: 'auto', minWidth: 0, minHeight: 0 }}>
+                  <div className="plugin-content-shell" style={{ flex: 1, height: '100%', overflowY: 'auto', minWidth: 0, minHeight: 0 }}>
                     <PluginComponent apiUrl={API_URL} userProfile={effectiveUser} />
                   </div>
                 );
@@ -1074,19 +1631,16 @@ function App() {
                     onBack={() => setActiveTab('chats')}
                   />
                 </div>
-              ) : activeTab === 'discover' ? (
-                <div style={{ flex: 1, height: '100%', overflowY: 'auto', minWidth: 0, minHeight: 0 }}>
-                  <MomentsFeed apiUrl={API_URL} userProfile={effectiveUser} onBack={() => setActiveTab('chats')} />
-                </div>
               ) : activeTab === 'memory_library' ? (
                 <MemoryLibraryPanel apiUrl={API_URL} contacts={contacts} />
               ) : activeContactId && activeTab === 'chats' ? (
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'row', height: '100%', minWidth: 0 }}>
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                <div className="private-chat-workspace" style={{ flex: 1, display: 'flex', flexDirection: 'row', height: '100%', minWidth: 0 }}>
+                  <div className="private-chat-main" style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                     <ChatWindow
                       contact={activeChatContact}
                       allContacts={contacts}
                       userAvatar={effectiveUser?.avatar}
+                      userAvatarFrame={effectiveUser?.avatar_frame}
                       apiUrl={API_URL}
                       incomingMessageQueue={incomingMessageQueue}
                       engineState={engineState}
@@ -1100,68 +1654,86 @@ function App() {
                       onSwitchTab={setActiveTab}
                       isGeneratingSchedule={generatingSchedules[activeContactId]}
                       onMessagesChange={setHiddenMessagesCount}
+                      isPrivateChatForegroundEnabled={isForegroundLayoutLifted}
+                      chatLayoutKey={activeDrawer || 'journal'}
                     />
                   </div>
-                  {activeDrawer === 'memo' && (
-                    <AppErrorBoundary
-                      variant="drawer"
-                      resetKey={`drawer:memo:${activeChatContact?.id || ''}`}
-                      lang={lang}
-                      title={`${activeChatContact?.name || (lang === 'en' ? 'Character' : '角色')} ${lang === 'en' ? "'s Memories" : '的记忆'}`}
-                      onClose={() => setActiveDrawer(null)}
-                    >
-                      <Suspense fallback={<DrawerFallback type="memo" contact={activeChatContact} lang={lang} onClose={() => setActiveDrawer(null)} />}>
-                        <MemoTable
-                          contact={activeChatContact}
-                          apiUrl={API_URL}
+                  <div className="private-chat-side-slot" data-slot-view={activeDrawer || 'journal'}>
+                    {!activeDrawer && (
+                      <PrivateChatJournalPanel
+                        contact={activeChatContact}
+                        lang={lang}
+                        onOpenDiary={() => toggleChatDrawer('diary')}
+                      />
+                    )}
+                    {activeDrawer === 'memo' && (
+                      <PrivateChatDrawerShell type="memo">
+                        <AppErrorBoundary
+                          variant="drawer"
+                          resetKey={`drawer:memo:${activeChatContact?.id || ''}`}
+                          lang={lang}
+                          title={`${activeChatContact?.name || (lang === 'en' ? 'Character' : '角色')} ${lang === 'en' ? "'s Memories" : '的记忆'}`}
                           onClose={() => setActiveDrawer(null)}
-                        />
-                      </Suspense>
-                    </AppErrorBoundary>
-                  )}
-                  {activeDrawer === 'diary' && (
-                    <AppErrorBoundary
-                      variant="drawer"
-                      resetKey={`drawer:diary:${activeChatContact?.id || ''}`}
-                      lang={lang}
-                      title={`${activeChatContact?.name || (lang === 'en' ? 'Character' : '角色')} ${lang === 'en' ? "'s Diary" : '的日记'}`}
-                      onClose={() => setActiveDrawer(null)}
-                    >
-                      <Suspense fallback={<DrawerFallback type="diary" contact={activeChatContact} lang={lang} onClose={() => setActiveDrawer(null)} />}>
-                        <DiaryTable
-                          contact={activeChatContact}
-                          apiUrl={API_URL}
+                        >
+                          <Suspense fallback={<DrawerFallback type="memo" contact={activeChatContact} lang={lang} onClose={() => setActiveDrawer(null)} />}>
+                            <MemoTable
+                              contact={activeChatContact}
+                              apiUrl={API_URL}
+                              onClose={() => setActiveDrawer(null)}
+                            />
+                          </Suspense>
+                        </AppErrorBoundary>
+                      </PrivateChatDrawerShell>
+                    )}
+                    {activeDrawer === 'diary' && (
+                      <PrivateChatDrawerShell type="diary">
+                        <AppErrorBoundary
+                          variant="drawer"
+                          resetKey={`drawer:diary:${activeChatContact?.id || ''}`}
+                          lang={lang}
+                          title={`${activeChatContact?.name || (lang === 'en' ? 'Character' : '角色')} ${lang === 'en' ? "'s Diary" : '的日记'}`}
                           onClose={() => setActiveDrawer(null)}
-                        />
-                      </Suspense>
-                    </AppErrorBoundary>
-                  )}
-                  {activeDrawer === 'settings' && (
-                    <AppErrorBoundary
-                      variant="drawer"
-                      resetKey={`drawer:settings:${activeChatContact?.id || ''}`}
-                      lang={lang}
-                      title={lang === 'en' ? 'Chat Settings' : '聊天设置'}
-                      onClose={() => setActiveDrawer(null)}
-                    >
-                      <Suspense fallback={<DrawerFallback type="settings" contact={activeChatContact} lang={lang} onClose={() => setActiveDrawer(null)} />}>
-                        <ChatSettingsDrawer
-                          contact={activeChatContact}
-                          apiUrl={API_URL}
+                        >
+                          <Suspense fallback={<DrawerFallback type="diary" contact={activeChatContact} lang={lang} onClose={() => setActiveDrawer(null)} />}>
+                            <DiaryTable
+                              contact={activeChatContact}
+                              apiUrl={API_URL}
+                              onClose={() => setActiveDrawer(null)}
+                            />
+                          </Suspense>
+                        </AppErrorBoundary>
+                      </PrivateChatDrawerShell>
+                    )}
+                    {activeDrawer === 'settings' && (
+                      <PrivateChatDrawerShell type="settings">
+                        <AppErrorBoundary
+                          variant="drawer"
+                          resetKey={`drawer:settings:${activeChatContact?.id || ''}`}
+                          lang={lang}
+                          title={lang === 'en' ? 'Chat Settings' : '聊天设置'}
                           onClose={() => setActiveDrawer(null)}
-                          onClearHistory={() => {
-                            setActiveDrawer(null);
-                            fetchContacts(); // Re-pull character data so stats show as reset immediately
-                          }}
-                          isGeneratingSchedule={!!generatingSchedules[activeContactId]}
-                          messagesHideStateCount={hiddenMessagesCount}
-                        />
-                      </Suspense>
-                    </AppErrorBoundary>
-                  )}
+                        >
+                          <Suspense fallback={<DrawerFallback type="settings" contact={activeChatContact} lang={lang} onClose={() => setActiveDrawer(null)} />}>
+                            <ChatSettingsDrawer
+                              contact={activeChatContact}
+                              contacts={contacts}
+                              apiUrl={API_URL}
+                              onClose={() => setActiveDrawer(null)}
+                              onClearHistory={() => {
+                                setActiveDrawer(null);
+                                fetchContacts(); // Re-pull character data so stats show as reset immediately
+                              }}
+                              isGeneratingSchedule={!!generatingSchedules[activeContactId]}
+                              messagesHideStateCount={hiddenMessagesCount}
+                            />
+                          </Suspense>
+                        </AppErrorBoundary>
+                      </PrivateChatDrawerShell>
+                    )}
+                  </div>
                 </div>
               ) : activeGroupId && activeTab === 'chats' ? (
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'row', height: '100%', minWidth: 0 }}>
+                <div className="group-chat-workspace" style={{ flex: 1, display: 'flex', flexDirection: 'row', height: '100%', minWidth: 0 }}>
                   <GroupChatWindow
                     group={groups.find(g => g.id === activeGroupId)}
                     apiUrl={API_URL}

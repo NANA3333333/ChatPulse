@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { AlertCircle, ChevronDown, ChevronRight, RotateCcw, Volume2 } from 'lucide-react';
-import AuthenticatedImage from './AuthenticatedImage';
+import AvatarWithFrame from './AvatarWithFrame';
 import { useLanguage } from '../LanguageContext';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 
@@ -107,7 +107,7 @@ function BlockedSystemMessage({ name }) {
             }}>
                 🚫 {name} 已将你拉黑。消息已发出，但对方不会收到。
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb' }}>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                 尝试转账来解锁对话。
             </div>
         </div>
@@ -400,12 +400,12 @@ function TransferCardInteractive({ content, isUser, apiUrl }) {
                 <span style={{ fontSize: '24px' }}>💰</span>
                 <div>
                     <div style={{ fontWeight: '600', fontSize: '15px', color: '#e67e22' }}>¥{amount}</div>
-                    <div style={{ fontSize: '12px', color: '#999' }}>{note}</div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{note}</div>
                 </div>
             </div>
             {/* Status badge shown when claimed or refunded */}
             {(isClaimed || isRefunded) && (
-                <div style={{ fontSize: '12px', color: '#999', textAlign: 'center', padding: '4px 0' }}>
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', textAlign: 'center', padding: '4px 0' }}>
                     {isClaimed
                         ? (lang === 'en' ? '✅ Claimed' : '✅ 已领取')
                         : (lang === 'en' ? '↩️ Refunded' : '↩️ 已退回')}
@@ -428,7 +428,7 @@ function TransferCardInteractive({ content, isUser, apiUrl }) {
             )}
             {/* Sender sees waiting status when still pending */}
             {tid && isPending && !actionDone && isUser && (
-                <div style={{ fontSize: '11px', color: '#bbb', textAlign: 'center', marginTop: '4px', fontStyle: 'italic' }}>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', marginTop: '4px', fontStyle: 'italic' }}>
                     {lang === 'en' ? '⏳ Waiting for response...' : '⏳ 等待对方回应...'}
                 </div>
             )}
@@ -436,7 +436,7 @@ function TransferCardInteractive({ content, isUser, apiUrl }) {
     );
 }
 
-function MessageBubble({ message, avatar, characterName, apiUrl, onRetry, contacts }) {
+function MessageBubble({ message, avatar, avatarFrame, characterName, apiUrl, onRetry, contacts }) {
     const isUser = message.role === 'user';
     const content = message.content || '';  // null-safe: old DB records may have null content
     const { lang } = useLanguage();
@@ -528,7 +528,7 @@ function MessageBubble({ message, avatar, characterName, apiUrl, onRetry, contac
             <div style={{ textAlign: 'center', margin: '8px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px' }}>
                 <span style={{
                     fontSize: '12px',
-                    color: isApiError ? '#c0392b' : '#aaa',
+                    color: isApiError ? '#c0392b' : 'var(--text-muted)',
                     backgroundColor: isApiError ? '#fff1f1' : '#f0f0f0',
                     padding: '5px 12px',
                     borderRadius: '10px',
@@ -564,9 +564,10 @@ function MessageBubble({ message, avatar, characterName, apiUrl, onRetry, contac
         <>
             <div className={`message-wrapper ${isUser ? 'user' : 'character'}`}>
                 <div className="message-avatar">
-                    <AuthenticatedImage
+                    <AvatarWithFrame
+                        size={36}
+                        frame={avatarFrame}
                         src={resolveAvatarUrl(avatar, apiUrl, isUser ? 'User' : (characterName || message.character_id || 'User'))}
-                        style={{ objectFit: 'cover' }}
                         alt="Avatar"
                         fallbackSrc={defaultAvatarUrl(isUser ? 'User' : (characterName || message.character_id || 'User'))}
                     />
@@ -583,40 +584,43 @@ function MessageBubble({ message, avatar, characterName, apiUrl, onRetry, contac
                                 const cardId = parts[1];
                                 const cardName = parts[2];
                                 let cardAvatar = parts.slice(3).join(':');
+                                let cardAvatarFrame = '';
 
                                 // Fetch real-time avatar if available to fix stale URLs in old messages
                                 if (contacts && Array.isArray(contacts)) {
                                     const match = contacts.find(c => String(c.id) === String(cardId));
                                     if (match && match.avatar) cardAvatar = match.avatar;
+                                    if (match && match.avatar_frame) cardAvatarFrame = match.avatar_frame;
                                 }
 
                                 return (
-                                    <div className="message-bubble" style={{ padding: 0, overflow: 'hidden', backgroundColor: '#fff', color: '#333', textAlign: 'left', width: '220px', boxSizing: 'border-box', border: '1px solid #eaeaea' }}>
+                                    <div className="message-bubble" style={{ padding: 0, overflow: 'hidden', backgroundColor: '#fff', color: 'var(--text-warm)', textAlign: 'left', width: '220px', boxSizing: 'border-box', border: '1px solid #eaeaea' }}>
                                         <div style={{ padding: '12px 15px', display: 'flex', alignItems: 'center', gap: '12px', borderBottom: '1px solid #f0f0f0' }}>
-                                            <AuthenticatedImage
+                                            <AvatarWithFrame
+                                                size={40}
+                                                frame={cardAvatarFrame}
                                                 src={resolveAvatarUrl(cardAvatar.replace(']', ''), apiUrl, cardName || cardId || 'User')}
                                                 alt={cardName}
-                                                style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover' }}
                                                 fallbackSrc={defaultAvatarUrl(cardName || cardId || 'User')}
                                             />
                                             <div style={{ fontSize: '16px', fontWeight: '400' }}>{cardName}</div>
                                         </div>
-                                        <div style={{ padding: '4px 15px 6px', fontSize: '12px', color: '#999' }}>
+                                        <div style={{ padding: '4px 15px 6px', fontSize: '12px', color: 'var(--text-secondary)' }}>
                                             {lang === 'en' ? 'Contact card' : '个人名片'}
                                         </div>
                                     </div>
                                 );
                             }
-                            return <div className="message-bubble">{content}</div>;
+                            return <div className="message-bubble regular-message-bubble">{content}</div>;
                         })()
                     ) : (
-                        <div className="message-bubble">
+                        <div className="message-bubble regular-message-bubble">
                             {content}
                         </div>
                     )}
                     {message.timestamp && (
                         <div style={{
-                            fontSize: '11px', color: '#bbb', marginTop: '4px',
+                            fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px',
                             display: 'flex', gap: '6px', alignItems: 'center',
                             justifyContent: isUser ? 'flex-end' : 'flex-start'
                         }}>

@@ -104,8 +104,8 @@ function MemoTable({ contact, apiUrl, onClose }) {
         event.target.value = '';
         if (!file) return;
         if (!window.confirm(lang === 'en'
-            ? `Import this character archive into ${contact.name}?\n\nThis will replace chats, memories, moments, moment interactions, and diaries, then rebuild the Qdrant memory index.`
-            : `确定把这个角色包导入到 ${contact.name} 吗？\n\n这会覆盖当前角色的聊天记录、记忆、朋友圈及互动、日记，并重建 Qdrant 记忆索引。`)) return;
+            ? `Import this character archive into ${contact.name}?\n\nThis will replace chats, memories, and diaries, then rebuild the Qdrant memory index.`
+            : `确定把这个角色包导入到 ${contact.name} 吗？\n\n这会覆盖当前角色的聊天记录、记忆和日记，并重建 Qdrant 记忆索引。`)) return;
 
         setIsImporting(true);
         try {
@@ -130,8 +130,8 @@ function MemoTable({ contact, apiUrl, onClose }) {
                 ? ''
                 : (lang === 'en' ? '\nMemory index rebuild needs attention.' : '\n记忆索引重建需要检查。');
             alert(lang === 'en'
-                ? `Import complete. Messages: ${counts.messages || 0}, memories: ${counts.memories || 0}, moments: ${counts.moments || 0}, diaries: ${counts.diaries || 0}.${indexNote}`
-                : `导入完成。聊天 ${counts.messages || 0} 条，记忆 ${counts.memories || 0} 条，朋友圈 ${counts.moments || 0} 条，日记 ${counts.diaries || 0} 条。${indexNote}`);
+                ? `Import complete. Messages: ${counts.messages || 0}, memories: ${counts.memories || 0}, diaries: ${counts.diaries || 0}.${indexNote}`
+                : `导入完成。聊天 ${counts.messages || 0} 条，记忆 ${counts.memories || 0} 条，日记 ${counts.diaries || 0} 条。${indexNote}`);
             window.dispatchEvent(new Event('refresh_contacts'));
             window.location.reload();
         } catch (e) {
@@ -188,7 +188,7 @@ function MemoTable({ contact, apiUrl, onClose }) {
                         className="memory-action-btn"
                         onClick={handleExportCharacterArchive}
                         disabled={isBusy}
-                        title={lang === 'en' ? 'Export chats, memories, moments, diaries, and rebuildable Qdrant memory index data' : '导出聊天、记忆、朋友圈、日记，以及可重建 Qdrant 索引的记忆数据'}
+                        title={lang === 'en' ? 'Export chats, memories, diaries, and rebuildable Qdrant memory index data' : '导出聊天、记忆、日记，以及可重建 Qdrant 索引的记忆数据'}
                     >
                         <Download size={14} /> {isExporting ? (lang === 'en' ? 'Exporting...' : '导出中...') : (lang === 'en' ? 'Export all' : '导出全部')}
                     </button>

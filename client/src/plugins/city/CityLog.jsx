@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     Activity,
     AlertCircle,
@@ -21,9 +21,10 @@ import {
     RotateCcw,
 } from 'lucide-react';
 import CityManager from './CityManager';
-import AuthenticatedImage from '../../components/AuthenticatedImage';
+import AvatarWithFrame from '../../components/AvatarWithFrame';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../../utils/avatar';
 import { deriveEmotion, derivePhysicalState } from '../../utils/emotion';
+import './CityLog.css';
 
 const FALLBACK_AVATAR = defaultAvatarUrl('User');
 const avatarSrc = (url, apiUrl) => resolveAvatarUrl(url, apiUrl) || FALLBACK_AVATAR;
@@ -31,9 +32,9 @@ const avatarSrc = (url, apiUrl) => resolveAvatarUrl(url, apiUrl) || FALLBACK_AVA
 const tabStyle = (active) => ({
     padding: '10px 16px',
     border: 'none',
-    borderBottom: active ? '2px solid #ff9800' : '2px solid transparent',
+    borderBottom: active ? '2px solid #ff4f82' : '2px solid transparent',
     backgroundColor: 'transparent',
-    color: active ? '#ff9800' : '#888',
+    color: active ? '#ff4f82' : '#806273',
     cursor: 'pointer',
     fontSize: '14px',
     fontWeight: active ? '600' : '400',
@@ -270,6 +271,7 @@ export default function CityLog({ apiUrl }) {
     const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
     const refreshTimerRef = React.useRef(null);
     const token = localStorage.getItem('cp_token') || '';
+    const characterById = useMemo(() => new Map(characters.map(c => [String(c.id), c])), [characters]);
 
     useEffect(() => {
         const onResize = () => setIsMobile(window.innerWidth <= 768);
@@ -411,7 +413,7 @@ export default function CityLog({ apiUrl }) {
     };
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+        <div className="city-log-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
             <style>{`
                 .city-scroll {
                     scrollbar-width: thin;
@@ -437,7 +439,7 @@ export default function CityLog({ apiUrl }) {
                     background-clip: padding-box;
                 }
             `}</style>
-            <div style={{ display: 'flex', borderBottom: '1px solid #eee', padding: '0 12px', backgroundColor: '#fff', overflowX: 'auto', gap: '8px' }}>
+            <div className="city-log-tabs" style={{ display: 'flex', borderBottom: '1px solid #eee', padding: '0 12px', backgroundColor: '#fff', overflowX: 'auto', gap: '8px' }}>
                 <button style={tabStyle(tab === 'feed')} onClick={() => setTab('feed')}>
                     <Activity size={14} style={{ verticalAlign: 'middle', marginRight: '4px' }} />实时动态
                 </button>
@@ -446,13 +448,14 @@ export default function CityLog({ apiUrl }) {
                 </button>
             </div>
 
-            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            <div className="city-log-content" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
                 {tab === 'manage' ? (
                     <CityManager apiUrl={apiUrl} onRefreshLogs={fetchData} />
                 ) : loading ? (
                     <div style={{ padding: '40px', textAlign: 'center', color: '#999' }}>加载中...</div>
                 ) : (
                     <div
+                        className="city-log-feed"
                         style={{
                             padding: isMobile ? '10px' : '16px',
                             display: 'flex',
@@ -464,6 +467,7 @@ export default function CityLog({ apiUrl }) {
                         }}
                     >
                         <div
+                            className="city-log-main-panel"
                             style={{
                                 flex: isMobile ? 'none' : 2.2,
                                 minHeight: isMobile ? '56vh' : 0,
@@ -511,7 +515,7 @@ export default function CityLog({ apiUrl }) {
                                 </div>
                             )}
                             <div className="city-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: '12px', position: 'relative', zIndex: 1 }}>
-                                <div style={{ flex: isMobile ? 'none' : 0.9, minHeight: isMobile ? '28vh' : 0, display: 'flex', flexDirection: 'column', border: '1px solid #f3e8dc', borderRadius: '10px', overflow: 'hidden', background: '#fffaf5' }}>
+                                <div className="city-log-announcement-panel" style={{ flex: isMobile ? 'none' : 0.9, minHeight: isMobile ? '28vh' : 0, display: 'flex', flexDirection: 'column', border: '1px solid #f3e8dc', borderRadius: '10px', overflow: 'hidden', background: '#fffaf5' }}>
                                     <div style={{ padding: '10px 14px', borderBottom: '1px solid #f3e8dc', background: 'linear-gradient(to right, #fff7ed, #fff)' }}>
                                         <h3 style={{ margin: 0, fontSize: isMobile ? '13px' : '14px', display: 'flex', alignItems: 'center', gap: '6px', color: '#c2410c' }}>
                                             <AlertCircle size={15} color="#f97316" /> 公告区
@@ -637,6 +641,7 @@ export default function CityLog({ apiUrl }) {
                                                             const hackerIntelView = splitHackerIntelContent(log.content);
                                                             const hasHiddenHackerIntel = hackerIntelView.hasIntel;
                                                             const displayContent = hasHiddenHackerIntel ? hackerIntelView.visible : log.content;
+                                                            const logCharacter = characterById.get(String(log.character_id));
                                                             return (
                                                                 <div
                                                                     key={log.id}
@@ -660,7 +665,13 @@ export default function CityLog({ apiUrl }) {
                                                                             : {}),
                                                                     }}
                                                                 >
-                                                                    <AuthenticatedImage src={avatarSrc(log.char_avatar, apiUrl)} fallbackSrc={FALLBACK_AVATAR} alt="" style={{ width: isMobile ? '32px' : '36px', height: isMobile ? '32px' : '36px', borderRadius: '50%', objectFit: 'cover' }} />
+                                                                    <AvatarWithFrame
+                                                                        size={isMobile ? 32 : 36}
+                                                                        frame={logCharacter?.avatar_frame || log.char_avatar_frame}
+                                                                        src={avatarSrc(log.char_avatar, apiUrl)}
+                                                                        fallbackSrc={FALLBACK_AVATAR}
+                                                                        alt=""
+                                                                    />
                                                                     <div style={{ flex: 1, minWidth: 0 }}>
                                                                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '3px' }}>
                                                                             <span style={{ fontWeight: '600', fontSize: isMobile ? '12px' : '13px', color: isSocial ? '#7b1fa2' : undefined }}>
@@ -917,7 +928,13 @@ export default function CityLog({ apiUrl }) {
                                     return (
                                         <div key={c.id} style={{ padding: isMobile ? '8px' : '10px', border: '1px solid #eee', borderRadius: '8px', marginBottom: '8px' }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                                                <AuthenticatedImage src={avatarSrc(c.avatar, apiUrl)} fallbackSrc={FALLBACK_AVATAR} alt="" style={{ width: isMobile ? '26px' : '28px', height: isMobile ? '26px' : '28px', borderRadius: '50%', objectFit: 'cover' }} />
+                                                <AvatarWithFrame
+                                                    size={isMobile ? 26 : 28}
+                                                    frame={c.avatar_frame}
+                                                    src={avatarSrc(c.avatar, apiUrl)}
+                                                    fallbackSrc={FALLBACK_AVATAR}
+                                                    alt=""
+                                                />
                                                 <span style={{ fontWeight: '500', flex: 1, minWidth: 0, fontSize: isMobile ? '12px' : '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
                                                 <span style={{ fontSize: '10px', color: emotion.color, fontWeight: '700', flexShrink: 0 }}>{emotion.emoji} {emotion.label}</span>
                                                 <span style={{ fontSize: '10px', color: physical.color, fontWeight: '700', flexShrink: 0 }}>{physical.emoji} {physical.label}</span>

@@ -27,7 +27,6 @@ const GENERATED_CITY_ACTION_PAYLOAD_KEYS = [
     'intent',
     'log',
     'chat',
-    'moment',
     'diary',
     'prompt',
     'goal',
@@ -129,7 +128,6 @@ function getDefaultGuidelines(userName = '用户') {
 5. Hidden tag protocol:
    - timer: [TIMER:min]
    - transfer: [TRANSFER:amount|note] amount <= wallet
-   - moments: [MOMENT:text] [MOMENT_LIKE:id] [MOMENT_COMMENT:id:text]
    - diary: [DIARY:text] only for a meaningful new thought; [DIARY_PASSWORD:value] only if you willingly reveal it; if user sincerely asks to read it, output [UNLOCK_DIARY]
    - relationship: [AFFINITY:+1] or [AFFINITY:-1] (integer -100..100); [CHAR_AFFINITY:characterId:+1] or [CHAR_AFFINITY:characterId:-1] (integer -100..100)
    - state: [PRESSURE:0] (integer 0..4), [MOOD_DELTA:+2] or [MOOD_DELTA:-2] (integer -12..12), [PRESSURE_DELTA:+1] or [PRESSURE_DELTA:-1] (integer -2..2). Use concrete digits only; never output N placeholders.
@@ -139,7 +137,7 @@ function getDefaultGuidelines(userName = '用户') {
    - web: optional realism protocol. If, as the character, you feel this specific reply would be more natural, vivid, or higher-quality after checking something online, first say a brief in-character line and append [WEB_SEARCH_INTENT:{"reason":"","query_hint":""}]. The system will search and let you continue with the results. Omit this tag whenever you can reply naturally without extra online context.
    - web: query_hint should be a concise real search phrase. Use this for believable phone/web-check behavior, not for every factual question. Never mention backend/API/key/tooling.
    - tts: optional private-chat speech request. Use [TTS_INTENT:{"style":"soft|playful|comforting|serious","reason":"short reason","priority":1}] only when hearing this exact reply in your voice would materially improve the emotional effect. Use it rarely. Do not use it for routine acknowledgements, factual answers, web-search drafts, system/event replies, or every affectionate line.
-   - city: prefer [CITY_ACTION:{"district_id":"","district_type":"","log":"","chat":"","moment":"","diary":""}] for any private-chat-triggered commercial-street action signal
+   - city: prefer [CITY_ACTION:{"district_id":"","district_type":"","log":"","chat":"","diary":""}] for any private-chat-triggered commercial-street action signal
    - city: [CITY_INTENT:...] is legacy compatibility only; if you use it, write only an explicit district id/name/type signal such as home / restaurant / convenience / factory / school / hospital / park / mall / casino / street / hacker_space / rest / food / work / education / medical / leisure / shopping / gambling / wander, never a full sentence
 6. Emotion judgement:
    - Prefer the emotion that dominates this exact reply, not the prettiest one.
@@ -1768,38 +1766,6 @@ function getEngine(userId) {
         return normalizeGeneratedIntegerInRange(value, 0, 4);
     }
 
-    function normalizeGeneratedMomentId(value) {
-        const text = String(value ?? '').trim();
-        if (!/^\d+$/.test(text)) return null;
-        const id = Number(text);
-        return Number.isSafeInteger(id) && id > 0 ? id : null;
-    }
-
-    function validateGeneratedMomentInteractions(text) {
-        const raw = String(text || '');
-        const likeRegex = /\[MOMENT_LIKE:\s*([^\]]*)\]/gi;
-        let likeMatch;
-        while ((likeMatch = likeRegex.exec(raw)) !== null) {
-            const momentId = normalizeGeneratedMomentId(likeMatch[1]);
-            if (!momentId || !db.getMoment?.(momentId)) {
-                throw new Error('AI returned invalid moment like target. Please retry.');
-            }
-        }
-
-        const commentRegex = /\[MOMENT_COMMENT:\s*([^\]]*)\]/gi;
-        let commentMatch;
-        while ((commentMatch = commentRegex.exec(raw)) !== null) {
-            const payload = String(commentMatch[1] || '');
-            const splitAt = payload.indexOf(':');
-            if (splitAt < 0) throw new Error('AI returned malformed moment comment tag. Please retry.');
-            const momentId = normalizeGeneratedMomentId(payload.slice(0, splitAt));
-            const comment = payload.slice(splitAt + 1).trim();
-            if (!momentId || !comment || !db.getMoment?.(momentId)) {
-                throw new Error('AI returned invalid moment comment target. Please retry.');
-            }
-        }
-    }
-
     function addUsageTotals(baseUsage, extraUsage) {
         if (!extraUsage) return baseUsage || null;
         const next = baseUsage ? { ...baseUsage } : { prompt_tokens: 0, completion_tokens: 0 };
@@ -1838,7 +1804,7 @@ function getEngine(userId) {
 
     function stripHiddenTagsForVisibleMessage(text) {
         return String(text || '')
-            .replace(/\[(?:TIMER|TRANSFER|MOMENT|MOMENT_LIKE|MOMENT_COMMENT|DIARY|UNLOCK_DIARY|AFFINITY|CHAR_AFFINITY|PRESSURE|PRESSURE_DELTA|JEALOUSY|MOOD_DELTA|EMOTION_REASON|EMOTION_STATE|CITY_INTENT|CITY_ACTION|WEB_SEARCH_INTENT|DIARY_PASSWORD|REDPACKET_SEND|Red Packet)[^\]]*\]/gi, '')
+            .replace(/\[(?:TIMER|TRANSFER|DIARY|UNLOCK_DIARY|AFFINITY|CHAR_AFFINITY|PRESSURE|PRESSURE_DELTA|JEALOUSY|MOOD_DELTA|EMOTION_REASON|EMOTION_STATE|CITY_INTENT|CITY_ACTION|WEB_SEARCH_INTENT|DIARY_PASSWORD|REDPACKET_SEND|Red Packet)[^\]]*\]/gi, '')
             .replace(/\[TTS_INTENT:\s*[\s\S]*?\]/gi, '')
             .replace(/\[\s*\]/g, '')
             .replace(/\n{3,}/g, '\n\n')
@@ -3944,7 +3910,6 @@ ${dynamicPromptBase}`;
                 : null;
             const generatedAffinityDelta = parseGeneratedAffinityDelta(generatedText);
             const generatedCharAffinityDeltas = parseGeneratedCharAffinityDeltas(generatedText, { selfId: character.id });
-            validateGeneratedMomentInteractions(generatedText);
 
             if (generatedText) {
                 // Check for self-scheduled timer tags like [TIMER: 60]
@@ -3994,16 +3959,6 @@ ${dynamicPromptBase}`;
                     } else {
                         console.log(`[Engine] ${charCheck.name} transfer of 楼${amount} was BLOCKED (insufficient wallet). No message sent.`);
                     }
-                }
-
-                // Check for Moment tags
-                const momentRegex = /\[MOMENT:\s*([\s\S]*?)\s*\]/i;
-                const momentMatch = generatedText.match(momentRegex);
-                if (momentMatch && momentMatch[1]) {
-                    const momentContent = momentMatch[1].trim();
-                    console.log(`[Engine] ${charCheck.name} posted a Moment. chars=${momentContent.length}`);
-                    db.addMoment(character.id, momentContent);
-                    broadcastEvent(wsClients, { type: 'moment_update' });
                 }
 
                 // Check for Diary tags
@@ -4104,27 +4059,6 @@ ${dynamicPromptBase}`;
                     broadcastEvent(wsClients, { type: 'refresh_contacts' });
                 }
 
-                // Check for Moment interactions: LIKES
-                const momentLikeRegex = /\[MOMENT_LIKE:\s*(\d+)\s*\]/gi;
-                let mLikeMatch;
-                while ((mLikeMatch = momentLikeRegex.exec(generatedText)) !== null) {
-                    if (mLikeMatch[1]) {
-                        db.toggleLike(parseInt(mLikeMatch[1], 10), character.id);
-                        broadcastEvent(wsClients, { type: 'moment_update' });
-                    }
-                }
-
-                // Check for Moment interactions: COMMENTS
-                const momentCommentRegex = /\[MOMENT_COMMENT:\s*(\d+)\s*:\s*([^\]]+)\]/gi;
-                let mCommentMatch;
-                while ((mCommentMatch = momentCommentRegex.exec(generatedText)) !== null) {
-                    if (mCommentMatch[1] && mCommentMatch[2]) {
-                        db.addComment(parseInt(mCommentMatch[1], 10), character.id, mCommentMatch[2].trim());
-                        console.log(`[Engine] ${charCheck.name} commented on moment ${mCommentMatch[1]}. chars=${String(mCommentMatch[2] || '').trim().length}`);
-                        broadcastEvent(wsClients, { type: 'moment_update' });
-                    }
-                }
-
                 // Check for CHAR_AFFINITY changes (inter-character affinity from private chat context)
                 for (const { targetId, delta } of generatedCharAffinityDeltas) {
                     const source = `private:${character.id}`;
@@ -4170,7 +4104,7 @@ ${dynamicPromptBase}`;
                 const ttsIntent = parseTtsIntentTag(generatedText);
 
                 // Strip all tags from the final text message using a global regex
-                const globalStripRegex = /\[(?:TIMER|TRANSFER|MOMENT|MOMENT_LIKE|MOMENT_COMMENT|DIARY|UNLOCK_DIARY|AFFINITY|CHAR_AFFINITY|PRESSURE|PRESSURE_DELTA|JEALOUSY|MOOD_DELTA|EMOTION_REASON|EMOTION_STATE|CITY_INTENT|CITY_ACTION|WEB_SEARCH_INTENT|TTS_INTENT|DIARY_PASSWORD|REDPACKET_SEND|Red Packet)[^\]]*\]/gi;
+                const globalStripRegex = /\[(?:TIMER|TRANSFER|DIARY|UNLOCK_DIARY|AFFINITY|CHAR_AFFINITY|PRESSURE|PRESSURE_DELTA|JEALOUSY|MOOD_DELTA|EMOTION_REASON|EMOTION_STATE|CITY_INTENT|CITY_ACTION|WEB_SEARCH_INTENT|TTS_INTENT|DIARY_PASSWORD|REDPACKET_SEND|Red Packet)[^\]]*\]/gi;
                 generatedText = generatedText.replace(globalStripRegex, '').replace(/\[\s*\]/g, '').replace(/\n{3,}/g, '\n\n').trim();
                 generatedText = stripTtsIntentTags(generatedText);
                 generatedText = stripHistoryMetadataPrefixFromOutput(generatedText);
@@ -4713,8 +4647,7 @@ ${dynamicPromptBase}`;
 
         for (const char of characters) {
             if (char.id !== activeCharacterId && char.status === 'active' && char.sys_jealousy !== 0) {
-                const userProfile = db.getUserProfile();
-                const jealousyChance = userProfile?.jealousy_chance ?? 0.05;
+                const jealousyChance = 0.05;
                 if (Math.random() < jealousyChance) {
                     // Accumulate jealousy_level (0-100)
                     const newLevel = Math.min(100, (char.jealousy_level || 0) + 20);
@@ -4813,11 +4746,11 @@ ${dynamicPromptBase}`;
     function scheduleGroupProactive(groupId, wsClients) {
         if (GROUP_AUTONOMY_DISABLED) return;
         stopGroupProactiveTimer(groupId);
-        const profile = db.getUserProfile();
-        if (!profile?.group_proactive_enabled) return;
+        const group = db.getGroup(groupId);
+        if (!group?.group_proactive_enabled) return;
 
-        const minMs = Math.max(1, profile.group_interval_min || 10) * 60 * 1000;
-        const maxMs = Math.max(minMs, (profile.group_interval_max || 60) * 60 * 1000);
+        const minMs = Math.max(1, group.group_interval_min || 10) * 60 * 1000;
+        const maxMs = Math.max(minMs, (group.group_interval_max || 60) * 60 * 1000);
         const delay = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
 
         console.log(`[GroupProactive] Group ${groupId}: next fire in ${Math.round(delay / 60000)} min`);
@@ -4838,11 +4771,10 @@ ${dynamicPromptBase}`;
     }
 
     async function triggerGroupProactive(groupId, wsClients) {
-        const profile = db.getUserProfile();
-        if (!profile?.group_proactive_enabled) return;
-
         const group = db.getGroup(groupId);
         if (!group) return;
+        if (!group.group_proactive_enabled) return;
+        const profile = db.getUserProfile();
 
         // Pick a random eligible char member
         const charMembers = group.members.filter(m => m.member_id !== 'user');

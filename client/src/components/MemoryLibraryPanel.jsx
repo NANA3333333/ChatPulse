@@ -883,11 +883,56 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
     const [externalImportLoading, setExternalImportLoading] = useState(false);
     const [externalImportCommitting, setExternalImportCommitting] = useState(false);
     const [openGroups, setOpenGroups] = useState({ category_user_profile: true, source_commercial_street: true, source_group_chat: true, forgetting_fast: true, time_bound_timeline: true });
+    const [memoryStatus, setMemoryStatus] = useState(null);
+    const [memoryStatusLoading, setMemoryStatusLoading] = useState(false);
+    const [memoryStatusError, setMemoryStatusError] = useState('');
 
     const headers = useMemo(() => ({
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`
     }), []);
+
+    const getMemoryBackendLabel = useCallback((backend) => {
+        const labels = {
+            'qdrant-primary-with-vectra-fallback': { en: 'Qdrant primary / vectra fallback', zh: 'Qdrant 主检索 / vectra 兜底' },
+            'vectra-fallback-only': { en: 'vectra fallback only', zh: '仅使用 vectra 兜底' },
+            'qdrant-online-collection-pending': { en: 'Qdrant online / collection pending', zh: 'Qdrant 在线 / 集合待建立' },
+            'vectra-fallback-active': { en: 'vectra fallback active', zh: 'vectra 兜底中' },
+        };
+        return labels[backend]?.[lang] || backend || '-';
+    }, [lang]);
+
+    const getMemoryStatusNote = useCallback((status) => {
+        const code = status?.statusNoteCode || '';
+        const notes = {
+            'collection_pending_existing_memories': {
+                en: 'Qdrant is online, but this account has not built its vector collection yet.',
+                zh: 'Qdrant 已在线，但这个账号的向量集合还没有建立。'
+            },
+            'collection_pending_first_memory': {
+                en: 'Qdrant is online. Your vector collection will appear after the first memory is written or indexed.',
+                zh: 'Qdrant 已在线。等第一批记忆被写入或建立索引后，你的向量集合就会出现。'
+            }
+        };
+        if (notes[code]) return notes[code][lang];
+        return status?.statusNote || '';
+    }, [lang]);
+
+    const loadMemoryStatus = useCallback(async () => {
+        setMemoryStatusLoading(true);
+        setMemoryStatusError('');
+        try {
+            const res = await fetch(`${apiUrl}/user/memory-status`, { headers });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.success) throw new Error(data.error || 'Failed to load memory engine status');
+            setMemoryStatus(data.status || null);
+        } catch (e) {
+            console.error('Failed to fetch memory status:', e);
+            setMemoryStatusError(e.message || 'Failed to load memory engine status');
+        } finally {
+            setMemoryStatusLoading(false);
+        }
+    }, [apiUrl, headers]);
 
     useEffect(() => {
         let cancelled = false;
@@ -953,6 +998,11 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
             setLoading(false);
         }
     }, [activeCharacterId, apiUrl, contacts, headers, libraryViewMode]);
+
+    const refreshAll = useCallback(() => {
+        loadData();
+        loadMemoryStatus();
+    }, [loadData, loadMemoryStatus]);
 
     const scheduleProgressRefresh = useCallback((delay = 700) => {
         if (progressRefreshRef.current) {
@@ -1052,6 +1102,10 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
     useEffect(() => {
         loadData();
     }, [loadData]);
+
+    useEffect(() => {
+        loadMemoryStatus();
+    }, [loadMemoryStatus]);
 
     useEffect(() => {
         loadActiveMaintenanceRun();
@@ -2087,6 +2141,16 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
         fast_forgetting: fastForgetting,
         on_curve_forgetting: onCurveForgetting
     };
+    const searchableMemories = Number(memoryStatus?.indexedPoints || 0);
+    const recalledMemories = Number(memoryStatus?.everRetrievedMemoriesCount || 0);
+    const ragRecallRate = searchableMemories > 0
+        ? Math.round((recalledMemories / searchableMemories) * 100)
+        : 0;
+    const ragRecallTitle = searchableMemories > 0 ? `${ragRecallRate}%` : '等待数据';
+    const ragRecallDetail = searchableMemories > 0
+        ? `${formatNumber(searchableMemories)} 条可检索记忆里，已经有 ${formatNumber(recalledMemories)} 条至少被想起来过一次。`
+        : '等记忆开始被检索后，这里会显示召回率。';
+    const memoryStatusNote = getMemoryStatusNote(memoryStatus);
 
     return (
         <div className="memory-library-page">
@@ -2096,8 +2160,8 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                     <h2>{activeCharacter ? `${activeCharacter.name} 的记忆库统计` : '分类记忆与遗忘曲线'}</h2>
                     <p>{activeCharacter ? '正在显示这个角色的分类记忆和遗忘曲线条目。' : '每个分类先加载代表性条目；遗忘区按距离阈值从近到远排列。'}</p>
                 </div>
-                <button className="memory-lib-button ghost" onClick={loadData} disabled={loading}>
-                    <RefreshCw size={16} /> {loading ? '刷新中' : '刷新'}
+                <button className="memory-lib-button ghost" onClick={refreshAll} disabled={loading || memoryStatusLoading}>
+                    <RefreshCw size={16} /> {(loading || memoryStatusLoading) ? '刷新中' : '刷新'}
                 </button>
             </div>
 
@@ -2195,6 +2259,48 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                     value={formatNumber(viewStats.forgetting_total)}
                     detail={`${libraryViewMode === 'new' ? '按正式记忆计算' : '按承载卡片计算'}：快遗忘 ${formatNumber(viewStats.fast_forgetting)} / 曲线中 ${formatNumber(viewStats.on_curve_forgetting)}`}
                 />
+            </div>
+
+            <div className="memory-lib-section memory-lib-engine-status">
+                <div className="memory-lib-section-head">
+                    <div>
+                        <div className="memory-lib-section-title"><Database size={16} /> 记忆引擎状态</div>
+                        <p>RAG 和向量检索的健康状态。</p>
+                    </div>
+                    {memoryStatusLoading && <span className="memory-lib-status-pill muted">刷新中</span>}
+                </div>
+                <div className="memory-lib-engine-grid">
+                    <div>
+                        <span>后端模式</span>
+                        <strong>{memoryStatus ? getMemoryBackendLabel(memoryStatus.backend) : '加载中...'}</strong>
+                    </div>
+                    <div>
+                        <span>连接状态</span>
+                        <strong className={memoryStatus?.enabled === false || memoryStatus?.reachable === false ? 'offline' : 'online'}>
+                            {memoryStatus?.enabled === false ? '已关闭' : memoryStatus?.reachable ? '在线' : '离线'}
+                        </strong>
+                    </div>
+                    <div>
+                        <span>可检索记忆</span>
+                        <strong>{formatNumber(searchableMemories)}</strong>
+                    </div>
+                    <div>
+                        <span>RAG 召回率</span>
+                        <strong>{ragRecallTitle}</strong>
+                    </div>
+                </div>
+                <div className="memory-lib-engine-note">
+                    {ragRecallDetail} 这个口径比较严：看的是整个记忆库里，有多少条记忆至少被检索出来过一次。
+                </div>
+                {memoryStatusNote && (
+                    <div className="memory-lib-engine-alert warning">状态说明：{memoryStatusNote}</div>
+                )}
+                {memoryStatus?.lastError && (
+                    <div className="memory-lib-engine-alert error">最近状态说明：{memoryStatus.lastError}</div>
+                )}
+                {memoryStatusError && (
+                    <div className="memory-lib-engine-alert error">{memoryStatusError}</div>
+                )}
             </div>
 
             <div className="memory-lib-section">

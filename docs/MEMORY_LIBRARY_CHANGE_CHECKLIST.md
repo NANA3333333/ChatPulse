@@ -6,7 +6,7 @@
 
 修改前必须明确这三层，不要混用名称：
 
-- 源原文：原始私聊、群聊、city 日志、日记、朋友圈等原始文本。它们存放在各自来源表里。
+- 源原文：原始私聊、群聊、city 日志、日记等原始文本。它们存放在各自来源表里。
 - 记忆卡片：`memories.summary/content`，是模型从源原文抽取出来的记忆，不是原文。
 - 新版记忆库：`memories.consolidation_summary`，是小模型从旧记忆卡片归纳出的正式记忆文本。现在 RAG、历史记忆统计、时间线和记忆库前端默认都只读取它；旧 `summary/content` 只作为迁移来源和只读备份，不再作为 RAG fallback。
 - 索引文本：embedding/Qdrant 使用的拼接文本，可以由记忆卡片和元信息重建，不是数据库真相。
@@ -150,10 +150,10 @@ npm exec eslint -- src/App.jsx src/components/MemoryLibraryPanel.jsx
 
 因此导入导出修改后必须确认：
 
-- 聊天记录、记忆、日记、朋友圈相关数据都包含在角色归档里。
+- 聊天记录、记忆、日记相关数据都包含在角色归档里。
 - replace 模式会清理该角色旧数据。
 - 导入后能重建或继续使用记忆索引。
-- 不要只导入 `memories`，忽略 messages/diaries/moments。
+- 不要只导入 `memories`，忽略 messages/diaries。
 
 ## 如果改 schema
 

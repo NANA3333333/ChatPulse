@@ -117,14 +117,6 @@ function init(app, context) {
                                     await engine.triggerProactiveMessage(task.character_id, extraInstruct, wsClients);
                                 } catch (e) { console.error('[Scheduler] Chat task failed:', e); }
                             }
-                        } else if (task.action_type === 'moment') {
-                            if (engine.triggerProactiveMessage) {
-                                try {
-                                    const wsClients = context.getWsClients(userId);
-                                    const extraInstruct = `强制要求：请发一条朋友圈（Moment），内容关于：“${task.task_prompt || '你现在在做什么'}”。你必须且只能使用 [MOMENT: 正文] 标签来发布，不要附带任何私聊解释文字，严格遵从你的性格。`;
-                                    await engine.triggerProactiveMessage(task.character_id, extraInstruct, wsClients);
-                                } catch (e) { console.error('[Scheduler] Moment task failed:', e); }
-                            }
                         } else if (task.action_type === 'diary') {
                             if (engine.triggerProactiveMessage) {
                                 try {

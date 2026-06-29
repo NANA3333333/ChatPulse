@@ -204,7 +204,7 @@ async function buildSnapshot(userId, groupId, characterId, characterName) {
         '5. Red packet reactions stay in role.',
         '6. Source boundaries matter: [PRIVATE SOURCE] can shape your feelings but is not public chat; [GROUP SOURCE] is public chat and can be replied to directly; [CITY SOURCE] is real-life experience, not a chat line.',
         '7. Never mistake private/city snippets for someone literally speaking in this group right now. Do not invent message duplication, impersonation, or fake send errors unless the group history itself shows that.',
-        '8. Optional hidden tags: [CHAR_AFFINITY:id:+3], [REDPACKET_SEND:lucky|50|5|新年快乐], [MOMENT:内容], [MOMENT_LIKE:MomentID], [MOMENT_COMMENT:MomentID:评论内容]'
+        '8. Optional hidden tags: [CHAR_AFFINITY:id:+3], [REDPACKET_SEND:lucky|50|5|新年快乐]'
     ].join('\n');
     const groupConversationDigest = typeof db.getGroupConversationDigest === 'function'
         ? db.getGroupConversationDigest(resolvedGroup.id, char.id, { trackHit: false })

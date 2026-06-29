@@ -39,7 +39,7 @@ server/
     chat/                # private chat orchestration
     memory/              # memory extraction, search, digest, vector adapters
     characters/          # character profile/state rules
-    moments/             # moments API/business rules
+    diaries/             # diary API/business rules
   db/
     connection.js
     repositories/        # narrow DB access modules
@@ -60,7 +60,7 @@ client/src/
     chat/
     groups/
     characters/
-    moments/
+    diaries/
     settings/
   plugins/
   shared/
@@ -77,7 +77,7 @@ Large components should be split by responsibility, not by arbitrary size. For e
 2. Extract WebSocket client management from `server/index.js` into `server/realtime/wsClients.js`.
 3. Split `server/engine.js` into prompt building, RAG planning/retrieval, timer scheduling, tag parsing, and outbound event broadcasting.
 4. Split `server/memory.js` into embeddings, vector stores, search/ranking, extraction, digest, and sweep jobs.
-5. Split `server/db.js` into repositories by aggregate: users/auth, characters, messages, memories, moments, diaries, debug logs.
+5. Split `server/db.js` into repositories by aggregate: users/auth, characters, messages, memories, diaries, debug logs.
 6. Split `server/plugins/city/index.js` into routes, tick scheduler, grant actions, social collisions, medical recovery, and hook registration.
 7. Split `client/src/App.jsx` into app shell, contact/group selection, realtime event handling, and API clients.
 8. Split large frontend panels (`SettingsPanel.jsx`, `ChatSettingsDrawer.jsx`, `GroupChatWindow.jsx`) by screen sections and hooks.

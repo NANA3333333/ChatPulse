@@ -1,4 +1,4 @@
-const CITY_ACTION_NARRATION_FIELDS = ['action', 'log', 'chat', 'moment', 'diary'];
+const CITY_ACTION_NARRATION_FIELDS = ['action', 'log', 'chat', 'diary'];
 const CITY_ACTION_STRUCTURED_FIELDS = ['quest_intent'];
 const CITY_ACTION_LOOSE_MARKER_KEYS = [...CITY_ACTION_NARRATION_FIELDS, ...CITY_ACTION_STRUCTURED_FIELDS];
 

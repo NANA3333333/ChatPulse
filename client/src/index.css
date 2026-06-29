@@ -2,7 +2,7 @@
     font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
     line-height: 1.5;
     font-weight: 400;
-    color: #2f3d4d;
+    color: #f0a3c4;
 }
 
 body {
@@ -37,8 +37,8 @@ body {
     --login-pink-soft: #fff0f6;
     --login-pink-line: #f9bfd0;
     --login-cream: #fffaf7;
-    --login-ink: #6d4751;
-    --login-muted: #b39aa1;
+    --login-ink: #f0a3c4;
+    --login-muted: #f4b6cf;
     --login-mint: #87c97b;
     --login-blue: #8fc9ef;
     --login-yellow: #f3ca6c;
@@ -259,7 +259,7 @@ body {
     border-image-slice: 16 fill;
     border-image-width: 6px;
     border-image-repeat: stretch;
-    color: #7a555c;
+    color: #f0a3c4;
     background: transparent;
     cursor: pointer;
     font-size: 22px;
@@ -277,12 +277,12 @@ body {
 }
 
 .login-mode-switch button:hover {
-    color: #df668d;
+    color: #f0a3c4;
     background: rgba(255, 250, 252, 0.72);
 }
 
 .login-mode-switch button.active {
-    color: #dc5e89;
+    color: #f0a3c4;
     border-image-source: url("/assets/ui/login-pixel/frame-tab-active-soft.png?v=soft-tabs-20260625");
     background: transparent;
     box-shadow: 0 3px 0 rgba(239, 142, 178, 0.28);
@@ -294,6 +294,18 @@ body {
     margin: 0 auto;
     image-rendering: auto;
     filter: drop-shadow(0 1px 0 rgba(255, 238, 245, 0.72));
+}
+
+.login-tab-text {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: inherit;
+    font-family: "Courier New", "Microsoft YaHei", monospace;
+    font-size: 20px;
+    font-weight: 950;
+    line-height: 1;
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
 .login-mode-switch button:focus-visible,
@@ -324,7 +336,7 @@ body {
     gap: 10px;
     margin-bottom: 12px;
     min-height: 32px;
-    color: #6b424a;
+    color: #f0a3c4;
     letter-spacing: 0;
 }
 
@@ -343,6 +355,27 @@ body {
 
 .login-hint-img {
     height: auto;
+}
+
+.login-label-text {
+    display: inline-flex;
+    align-items: center;
+    color: #f0a3c4;
+    font-family: "Courier New", "Microsoft YaHei", monospace;
+    font-size: 24px;
+    font-weight: 950;
+    line-height: 1;
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+
+.login-hint-text {
+    display: inline-flex;
+    align-items: center;
+    color: #f0a3c4;
+    font-family: "Courier New", "Microsoft YaHei", monospace;
+    font-size: 13px;
+    font-weight: 900;
+    line-height: 1;
 }
 
 .login-input-shell {
@@ -397,7 +430,7 @@ body {
     box-sizing: border-box;
     padding: 0 22px 0 92px;
     border: 0;
-    color: #6b424a;
+    color: #f0a3c4;
     background: transparent;
     font: inherit;
     font-family: "Courier New", "Microsoft YaHei", monospace;
@@ -412,7 +445,7 @@ body {
 
 .login-form input:disabled {
     cursor: not-allowed;
-    color: #b8aaad;
+    color: #f4b6cf;
 }
 
 .login-input-shell:has(input:disabled) {
@@ -433,6 +466,11 @@ body {
     display: block;
     pointer-events: none;
     transform: translateY(-50%);
+    color: #f0a3c4;
+    font-family: "Courier New", "Microsoft YaHei", monospace;
+    font-size: 16px;
+    font-weight: 850;
+    line-height: 1;
     opacity: 1;
     transition: opacity 120ms ease;
 }
@@ -475,7 +513,7 @@ body {
     padding: 0 118px 9px 86px;
     border: 0;
     border-radius: 0;
-    color: #ffffff;
+    color: #ffeaf3;
     background: url("/assets/ui/login-pixel/submit-button-preview-bg-dots.png?v=preview-bg-dots-20260625") center / 100% 100% no-repeat;
     box-shadow: none;
     cursor: pointer;
@@ -534,12 +572,24 @@ body {
     width: 8px;
     height: 8px;
     border-radius: 1px;
-    background: #ffffff;
+    background: #ffeaf3;
     box-shadow: none;
 }
 
 .login-submit-text-img {
     height: 30px;
+}
+
+.login-submit-text {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #ffeaf3;
+    font-family: "Courier New", "Microsoft YaHei", monospace;
+    font-size: 22px;
+    font-weight: 950;
+    line-height: 1;
+    text-shadow: 0 2px 0 rgba(235, 77, 129, 0.25);
 }
 
 .login-loading-pips i {
@@ -880,5 +930,9 @@ body {
 
     .login-submit-text-img {
         height: 28px;
+    }
+
+    .login-submit-text {
+        font-size: 20px;
     }
 }

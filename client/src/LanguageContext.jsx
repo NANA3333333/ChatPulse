@@ -15,7 +15,6 @@ const translations = {
     // Tabs
     'Chats': { en: 'Chats', zh: '聊天' },
     'Contacts': { en: 'Contacts', zh: '联系人' },
-    'Moments': { en: 'Moments', zh: '朋友圈' },
     'Settings': { en: 'Settings', zh: '设置' },
 
     // Settings Panel
@@ -27,7 +26,6 @@ const translations = {
     'Name': { en: 'Name', zh: '名称' },
     'Avatar URL': { en: 'Avatar URL', zh: '头像 URL' },
     'Bio': { en: 'Bio', zh: '个性签名' },
-    'Theme': { en: 'Theme', zh: '主题' },
 
     // Add / Edit Character Form
     'Persona': { en: 'Persona', zh: '角色设定 (Persona)' },
@@ -56,9 +54,6 @@ const translations = {
     'Secret Diary': { en: 'Secret Diary', zh: '私密日记本' },
     'Send Transfer': { en: 'Send Transfer', zh: '发送转账/红包' },
     'Hide Old Messages': { en: 'Hide Old Messages', zh: '隐藏旧消息' },
-    'No moments yet': { en: 'No moments yet. Your friends are quiet today.', zh: '还没有任何动态哦。' },
-    'Share something new': { en: 'Share something new...', zh: '说点什么...' },
-    'Post': { en: 'Post', zh: '发布' },
     'Type a message': { en: 'Type a message...', zh: '输入消息...' },
     'Connecting': { en: 'Connecting...', zh: '连接中...' },
     'Thinking': { en: 'Thinking...', zh: '对方正在输入...' },

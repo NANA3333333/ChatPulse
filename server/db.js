@@ -22,28 +22,6 @@ function buildDefaultAvatarUrl(seed = 'User') {
     return `https://api.dicebear.com/7.x/shapes/svg?seed=${safeSeed}&backgroundColor=e8f0ff,fff5d6,e9f7ef,f5eafa,f1f5f9`;
 }
 
-const DEFAULT_USER_THEME = 'light';
-const DEFAULT_USER_THEME_CONFIG = Object.freeze({
-    '--bg-main': '#F0F4F8',
-    '--bg-sidebar': '#D6E4F0',
-    '--bg-contacts': '#E8F1F8',
-    '--bg-chat-area': '#F5F9FC',
-    '--bg-input': '#FFFFFF',
-    '--text-primary': '#5b9cdc',
-    '--text-secondary': '#7F9BAD',
-    '--bubble-user-bg': '#B8D8F0',
-    '--bubble-user-text': '#1A3A4A',
-    '--bubble-ai-bg': '#FAE8F0',
-    '--bubble-ai-text': '#3D2A35',
-    '--accent-color': '#85C1E9',
-    '--accent-hover': '#5DADE2',
-    '--border-color': '#C8DFF0',
-    '--sidebar-icon': '#f97b7b',
-    '--sidebar-icon-active': '#4cbff0'
-});
-const DEFAULT_USER_THEME_CONFIG_JSON = JSON.stringify(DEFAULT_USER_THEME_CONFIG);
-const DEFAULT_USER_CUSTOM_CSS = '';
-
 function getUserDb(userId) {
     if (!userId) throw new Error("getUserDb requires a valid userId");
     if (deletingUserDbIds.has(String(userId))) {
@@ -454,6 +432,7 @@ function getUserDb(userId) {
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             avatar TEXT,
+            avatar_frame TEXT DEFAULT '',
             persona TEXT,
             world_info TEXT,
             api_endpoint TEXT,
@@ -476,6 +455,7 @@ function getUserDb(userId) {
             initial_affinity INTEGER DEFAULT 50,
             status TEXT DEFAULT 'active',
             pressure_level INTEGER DEFAULT 0,
+            created_at INTEGER DEFAULT 0,
             last_user_msg_time INTEGER DEFAULT 0,
             is_blocked INTEGER DEFAULT 0,
             system_prompt TEXT,
@@ -635,16 +615,6 @@ function getUserDb(userId) {
         CREATE INDEX IF NOT EXISTS idx_external_memory_role_bindings_memory
             ON external_memory_role_bindings(memory_id);
 
-        CREATE TABLE IF NOT EXISTS moments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            character_id TEXT NOT NULL,
-            content TEXT NOT NULL,
-            image_url TEXT,
-            visibility TEXT DEFAULT 'all',
-            timestamp INTEGER NOT NULL,
-            likes INTEGER DEFAULT 0
-        );
-
         CREATE TABLE IF NOT EXISTS diaries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             character_id TEXT NOT NULL,
@@ -658,14 +628,9 @@ function getUserDb(userId) {
             id TEXT PRIMARY KEY DEFAULT 'default',
             name TEXT DEFAULT 'User',
             avatar TEXT,
+            avatar_frame TEXT DEFAULT '',
             bio TEXT DEFAULT '',
-            theme TEXT DEFAULT 'light',
             group_msg_limit INTEGER DEFAULT 20,
-            group_skip_rate INTEGER DEFAULT 10,
-            group_proactive_enabled INTEGER DEFAULT 0,
-            group_interval_max INTEGER DEFAULT 60,
-            theme_config TEXT DEFAULT '{}',
-            custom_css TEXT DEFAULT '',
             banner TEXT,
             private_msg_limit_for_group INTEGER DEFAULT 3,
             serper_api_key TEXT DEFAULT '',
@@ -677,22 +642,6 @@ function getUserDb(userId) {
             memory_maintenance_batch_size INTEGER DEFAULT 30,
             memory_maintenance_max_tokens INTEGER DEFAULT 8000
         );
-        CREATE TABLE IF NOT EXISTS moment_likes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            moment_id INTEGER NOT NULL,
-            liker_id TEXT NOT NULL,
-            timestamp INTEGER NOT NULL,
-            UNIQUE(moment_id, liker_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS moment_comments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            moment_id INTEGER NOT NULL,
-            author_id TEXT NOT NULL,
-            content TEXT NOT NULL,
-            timestamp INTEGER NOT NULL
-        );
-
         CREATE TABLE IF NOT EXISTS character_friends (
             char1_id TEXT NOT NULL,
             char2_id TEXT NOT NULL,
@@ -872,6 +821,9 @@ function getUserDb(userId) {
             name TEXT NOT NULL,
             avatar TEXT,
             context_msg_limit INTEGER DEFAULT 60,
+            group_proactive_enabled INTEGER DEFAULT 0,
+            group_interval_min INTEGER DEFAULT 10,
+            group_interval_max INTEGER DEFAULT 60,
             created_at INTEGER NOT NULL
         );
 
@@ -950,6 +902,13 @@ function getUserDb(userId) {
         // Add system_prompt for existing DBs (Migration)
         try {
             db.prepare('ALTER TABLE characters ADD COLUMN system_prompt TEXT').run();
+        } catch (e) {
+            // Ignore error if column already exists
+        }
+
+        // Add created_at for newly created characters. Existing characters keep 0 so the UI can be honest.
+        try {
+            db.prepare('ALTER TABLE characters ADD COLUMN created_at INTEGER DEFAULT 0').run();
         } catch (e) {
             // Ignore error if column already exists
         }
@@ -1277,20 +1236,30 @@ function getUserDb(userId) {
             db.prepare('ALTER TABLE user_profile ADD COLUMN private_msg_limit_for_group INTEGER DEFAULT 3').run();
         } catch (e) { }
 
-        // Add group_skip_rate to user_profile (% chance a char skips reply in group chat)
-        try {
-            db.prepare('ALTER TABLE user_profile ADD COLUMN group_skip_rate INTEGER DEFAULT 10').run();
-        } catch (e) { }
+        // Add per-group proactive settings.
+        try { db.prepare('ALTER TABLE group_chats ADD COLUMN group_proactive_enabled INTEGER DEFAULT 0').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE group_chats ADD COLUMN group_interval_min INTEGER DEFAULT 10').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE group_chats ADD COLUMN group_interval_max INTEGER DEFAULT 60').run(); } catch (e) { }
 
-        // Add jealousy_chance to user_profile (% chance a char gets jealous when user talks to someone else)
+        // Move the retired global group proactive setting onto existing groups.
         try {
-            db.prepare('ALTER TABLE user_profile ADD COLUMN jealousy_chance INTEGER DEFAULT 5').run();
+            const legacyGroupProactive = db.prepare(`
+                SELECT group_proactive_enabled, group_interval_min, group_interval_max
+                FROM user_profile
+                WHERE id = ?
+            `).get('default');
+            if (Number(legacyGroupProactive?.group_proactive_enabled || 0) === 1) {
+                const min = Math.max(1, Math.min(1440, Number(legacyGroupProactive.group_interval_min || 10)));
+                const max = Math.max(min, Math.min(1440, Number(legacyGroupProactive.group_interval_max || 60)));
+                db.prepare(`
+                    UPDATE group_chats
+                    SET group_proactive_enabled = 1,
+                        group_interval_min = ?,
+                        group_interval_max = ?
+                    WHERE COALESCE(group_proactive_enabled, 0) = 0
+                `).run(min, max);
+            }
         } catch (e) { }
-
-        // Add group proactive settings
-        try { db.prepare('ALTER TABLE user_profile ADD COLUMN group_proactive_enabled INTEGER DEFAULT 0').run(); } catch (e) { }
-        try { db.prepare('ALTER TABLE user_profile ADD COLUMN group_interval_min INTEGER DEFAULT 10').run(); } catch (e) { }
-        try { db.prepare('ALTER TABLE user_profile ADD COLUMN group_interval_max INTEGER DEFAULT 60').run(); } catch (e) { }
 
         // Add wallet fields
         try { db.prepare('ALTER TABLE characters ADD COLUMN wallet REAL DEFAULT 200').run(); } catch (e) { }
@@ -1301,18 +1270,22 @@ function getUserDb(userId) {
         // Add refunded column to private_transfers (for refund feature)
         try { db.prepare('ALTER TABLE private_transfers ADD COLUMN refunded INTEGER DEFAULT 0').run(); } catch (e) { }
 
-        // Add theme and custom_css for UI skinning
-        try { db.prepare('ALTER TABLE user_profile ADD COLUMN theme TEXT DEFAULT "default"').run(); } catch (e) { }
-        try { db.prepare('ALTER TABLE user_profile ADD COLUMN custom_css TEXT DEFAULT ""').run(); } catch (e) { }
-        try { db.prepare('ALTER TABLE user_profile ADD COLUMN theme_config TEXT DEFAULT "{}"').run(); } catch (e) { }
+        // Remove retired theme editor fields from older user databases when SQLite supports it.
+        try { db.prepare('ALTER TABLE user_profile DROP COLUMN theme').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile DROP COLUMN custom_css').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile DROP COLUMN theme_config').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile DROP COLUMN group_skip_rate').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile DROP COLUMN jealousy_chance').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile DROP COLUMN group_proactive_enabled').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile DROP COLUMN group_interval_min').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile DROP COLUMN group_interval_max').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE characters ADD COLUMN avatar_frame TEXT DEFAULT ""').run(); } catch (e) { }
+        try { db.prepare('ALTER TABLE user_profile ADD COLUMN avatar_frame TEXT DEFAULT ""').run(); } catch (e) { }
         try { db.prepare('ALTER TABLE user_profile ADD COLUMN response_style_constitution TEXT DEFAULT ""').run(); } catch (e) { }
 
         // Add per-group inject_limit (how many messages from this group get injected into private/other group contexts)
         try { db.prepare('ALTER TABLE group_chats ADD COLUMN inject_limit INTEGER DEFAULT 5').run(); } catch (e) { }
 
-        // Moments DLC: token limit and reaction rate
-        try { db.prepare('ALTER TABLE user_profile ADD COLUMN moments_token_limit INTEGER DEFAULT 500').run(); } catch (e) { }
-        try { db.prepare('ALTER TABLE user_profile ADD COLUMN moments_reaction_rate INTEGER DEFAULT 30').run(); } catch (e) { }
         try { db.prepare('ALTER TABLE user_profile ADD COLUMN serper_api_key TEXT DEFAULT ""').run(); } catch (e) { }
         try { db.prepare('ALTER TABLE user_profile ADD COLUMN web_search_keys_json TEXT DEFAULT "{}"').run(); } catch (e) { }
         try { db.prepare('ALTER TABLE user_profile ADD COLUMN web_search_provider TEXT DEFAULT "auto"').run(); } catch (e) { }
@@ -1321,8 +1294,6 @@ function getUserDb(userId) {
         try { db.prepare('ALTER TABLE user_profile ADD COLUMN memory_maintenance_model_name TEXT DEFAULT ""').run(); } catch (e) { }
         try { db.prepare('ALTER TABLE user_profile ADD COLUMN memory_maintenance_batch_size INTEGER DEFAULT 30').run(); } catch (e) { }
         try { db.prepare('ALTER TABLE user_profile ADD COLUMN memory_maintenance_max_tokens INTEGER DEFAULT 8000').run(); } catch (e) { }
-        // Track last moment posted by each character (cooldown)
-        try { db.prepare('ALTER TABLE characters ADD COLUMN last_moment_at INTEGER DEFAULT 0').run(); } catch (e) { }
         // Enhanced jealousy system
         try { db.prepare('ALTER TABLE characters ADD COLUMN jealousy_level INTEGER DEFAULT 0').run(); } catch (e) { }
         try { db.prepare("ALTER TABLE characters ADD COLUMN jealousy_target TEXT DEFAULT ''").run(); } catch (e) { }
@@ -1405,12 +1376,12 @@ function getUserDb(userId) {
     }
 
     const characterColumns = [
-        'id', 'name', 'avatar', 'persona', 'world_info', 'api_endpoint',
+        'id', 'name', 'avatar', 'avatar_frame', 'persona', 'world_info', 'api_endpoint',
         'api_key', 'model_name', 'memory_api_endpoint', 'memory_api_key',
         'memory_model_name', 'tts_enabled', 'tts_provider', 'tts_api_key', 'tts_voice', 'tts_model', 'tts_endpoint', 'tts_trigger_mode', 'tts_autoplay',
         'interval_min', 'interval_max', 'affinity', 'initial_affinity',
-        'status', 'pressure_level', 'last_user_msg_time', 'is_blocked', 'system_prompt', 'max_tokens',
-        'sys_proactive', 'sys_timer', 'sys_pressure', 'sys_jealousy', 'is_diary_unlocked', 'diary_password', 'wallet', 'emoji', 'last_moment_at',
+        'status', 'pressure_level', 'created_at', 'last_user_msg_time', 'is_blocked', 'system_prompt', 'max_tokens',
+        'sys_proactive', 'sys_timer', 'sys_pressure', 'sys_jealousy', 'is_diary_unlocked', 'diary_password', 'wallet', 'emoji',
         'jealousy_level', 'jealousy_target', 'city_reply_pending', 'city_ignore_streak', 'city_last_outreach_at', 'city_post_ignore_reaction',
         'city_status_started_at', 'city_status_until_at', 'city_medical_last_recovery_at',
         'stat_int', 'stat_sta', 'stat_cha', 'energy', 'sleep_debt', 'sleep_pressure', 'mood', 'stress', 'social_need', 'explicit_emotion_state', 'health', 'satiety', 'stomach_load', 'work_distraction', 'sleep_disruption', 'llm_debug_capture',
@@ -1622,6 +1593,10 @@ function getUserDb(userId) {
             if (!fields.includes('llm_debug_capture')) {
                 fields.push('llm_debug_capture');
                 values.push(1);
+            }
+            if (!fields.includes('created_at')) {
+                fields.push('created_at');
+                values.push(Date.now());
             }
 
             const placeholders = fields.map(() => '?').join(', ');
@@ -1933,6 +1908,55 @@ function getUserDb(userId) {
             .all(characterId, sinceTimestamp);
     }
 
+    function inferCharacterCreatedAtFromId(characterId) {
+        const match = String(characterId || '').match(/^char-(\d{12,14})(?:\D|$)/);
+        const timestamp = Number(match?.[1] || 0);
+        if (!Number.isSafeInteger(timestamp)) return 0;
+        if (timestamp < Date.UTC(2020, 0, 1) || timestamp > Date.UTC(2100, 0, 1)) return 0;
+        return timestamp;
+    }
+
+    function getCharacterMessageStats(characterId) {
+        const cleanCharacterId = String(characterId || '').trim();
+        if (!cleanCharacterId) {
+            return {
+                first_message_at: 0,
+                last_message_at: 0,
+                private_message_count: 0,
+                user_message_count: 0,
+                character_message_count: 0
+            };
+        }
+        const inferredCreatedAt = inferCharacterCreatedAtFromId(cleanCharacterId);
+        const earliestExpectedMessageAt = inferredCreatedAt
+            ? Math.max(0, inferredCreatedAt - 24 * 60 * 60 * 1000)
+            : 0;
+        const row = db.prepare(`
+            SELECT
+                MIN(CASE WHEN role IN ('user', 'character', 'assistant') AND timestamp > 0 THEN timestamp END) AS first_message_at,
+                MIN(CASE
+                    WHEN role IN ('user', 'character', 'assistant')
+                      AND timestamp > 0
+                      AND (? = 0 OR timestamp >= ?)
+                    THEN timestamp
+                END) AS first_valid_message_at,
+                MAX(CASE WHEN role IN ('user', 'character', 'assistant') AND timestamp > 0 THEN timestamp END) AS last_message_at,
+                COUNT(CASE WHEN role IN ('user', 'character', 'assistant') THEN 1 END) AS private_message_count,
+                COUNT(CASE WHEN role = 'user' THEN 1 END) AS user_message_count,
+                COUNT(CASE WHEN role IN ('character', 'assistant') THEN 1 END) AS character_message_count
+            FROM messages
+            WHERE character_id = ?
+              AND COALESCE(hidden, 0) = 0
+        `).get(earliestExpectedMessageAt, earliestExpectedMessageAt, cleanCharacterId) || {};
+        return {
+            first_message_at: Number(row.first_valid_message_at || row.first_message_at || 0),
+            last_message_at: Number(row.last_message_at || 0),
+            private_message_count: Number(row.private_message_count || 0),
+            user_message_count: Number(row.user_message_count || 0),
+            character_message_count: Number(row.character_message_count || 0)
+        };
+    }
+
     function getRecentUserConversationIntel(spyCharacterId, options = {}) {
         const sinceHours = Math.max(1, Number(options.sinceHours || 5));
         const maxMessages = Math.max(1, Number(options.maxMessages || 20));
@@ -2205,21 +2229,6 @@ function getUserDb(userId) {
         db.prepare('DELETE FROM memories WHERE character_id = ?').run(characterId);
     }
 
-    function clearMoments(characterId) {
-        // Delete likes and comments ON this character's moments
-        const momentIds = db.prepare('SELECT id FROM moments WHERE character_id = ?').all(characterId).map(m => m.id);
-        if (momentIds.length > 0) {
-            const placeholders = momentIds.map(() => '?').join(', ');
-            db.prepare(`DELETE FROM moment_likes WHERE moment_id IN (${placeholders})`).run(...momentIds);
-            db.prepare(`DELETE FROM moment_comments WHERE moment_id IN (${placeholders})`).run(...momentIds);
-        }
-        // Delete the moments themselves
-        db.prepare('DELETE FROM moments WHERE character_id = ?').run(characterId);
-        // Also remove this character's likes and comments on OTHER people's moments
-        db.prepare('DELETE FROM moment_likes WHERE liker_id = ?').run(characterId);
-        db.prepare('DELETE FROM moment_comments WHERE author_id = ?').run(characterId);
-    }
-
     function clearDiaries(characterId) {
         db.prepare('DELETE FROM diaries WHERE character_id = ?').run(characterId);
     }
@@ -2241,17 +2250,8 @@ function getUserDb(userId) {
         if (!character) return null;
         const messages = db.prepare('SELECT * FROM messages WHERE character_id = ? ORDER BY timestamp ASC').all(characterId);
         const memories = db.prepare('SELECT * FROM memories WHERE character_id = ? ORDER BY created_at ASC').all(characterId);
-        const moments = db.prepare('SELECT * FROM moments WHERE character_id = ? ORDER BY timestamp ASC').all(characterId);
         const diaries = db.prepare('SELECT * FROM diaries WHERE character_id = ? ORDER BY timestamp ASC').all(characterId);
-        const momentIds = moments.map(moment => moment.id).filter(Boolean);
-        let moment_likes = [];
-        let moment_comments = [];
-        if (momentIds.length > 0) {
-            const placeholders = momentIds.map(() => '?').join(', ');
-            moment_likes = db.prepare(`SELECT * FROM moment_likes WHERE moment_id IN (${placeholders}) ORDER BY timestamp ASC`).all(...momentIds);
-            moment_comments = db.prepare(`SELECT * FROM moment_comments WHERE moment_id IN (${placeholders}) ORDER BY timestamp ASC`).all(...momentIds);
-        }
-        return { character, messages, memories, moments, moment_likes, moment_comments, diaries };
+        return { character, messages, memories, diaries };
     }
 
     // ─── Memory Queries ─────────────────────────────────────────────────────
@@ -2479,59 +2479,7 @@ function getUserDb(userId) {
         tx(ids);
     }
 
-    // ─── Phase 3: Moments & Diaries ──────────────────────────────────────────
-
-    function getMoments() {
-        return db.prepare('SELECT * FROM moments ORDER BY timestamp DESC LIMIT 100').all();
-    }
-
-    function getMomentsSince(characterId, sinceTimestamp = 0) {
-        const friends = getFriends(characterId) || [];
-        const friendIds = friends.map(f => f.id);
-        const authors = [characterId, 'user', ...friendIds];
-        const placeholders = authors.map(() => '?').join(',');
-        return db.prepare(`SELECT * FROM moments WHERE character_id IN (${placeholders}) AND timestamp >= ? ORDER BY timestamp ASC`)
-            .all(...authors, sinceTimestamp);
-    }
-
-    function getCharacterMoments(characterId) {
-        return db.prepare('SELECT * FROM moments WHERE character_id = ? ORDER BY timestamp DESC').all(characterId);
-    }
-
-    function getMoment(momentId) {
-        const id = normalizePositiveRowId(momentId, 'moment id');
-        return db.prepare('SELECT * FROM moments WHERE id = ? LIMIT 1').get(id) || null;
-    }
-
-    function deleteMoment(momentId) {
-        const id = normalizePositiveRowId(momentId, 'moment id');
-        const info = db.prepare('DELETE FROM moments WHERE id = ?').run(id);
-        if ((info.changes || 0) > 0) {
-            db.prepare('DELETE FROM moment_likes WHERE moment_id = ?').run(id);
-            db.prepare('DELETE FROM moment_comments WHERE moment_id = ?').run(id);
-        }
-        return info.changes || 0;
-    }
-
-    function addMoment(characterId, content, imageUrl = null, visibility = 'all') {
-        const authorId = String(characterId || '').trim();
-        const safeContent = typeof content === 'string' ? content.trim() : '';
-        if (!authorId || (authorId !== 'user' && !getCharacter(authorId))) {
-            const error = new Error('Moment author not found');
-            error.status = 404;
-            throw error;
-        }
-        if (!safeContent) {
-            const error = new Error('Moment content required');
-            error.status = 400;
-            throw error;
-        }
-        const info = db.prepare(`
-        INSERT INTO moments (character_id, content, image_url, visibility, timestamp) 
-        VALUES (?, ?, ?, ?, ?)
-    `).run(authorId, safeContent, imageUrl, visibility, Date.now());
-        return info.lastInsertRowid;
-    }
+    // ─── Diaries ───────────────────────────────────────────────────────────
 
     function getDiaries(characterId) {
         return db.prepare('SELECT * FROM diaries WHERE character_id = ? ORDER BY timestamp DESC').all(characterId);
@@ -2607,155 +2555,6 @@ function getUserDb(userId) {
         return { success: false, reason: 'Wrong password.' };
     }
 
-    function normalizeSocialActorId(actorId, label = 'actor') {
-        const id = String(actorId || '').trim();
-        if (!id || (id !== 'user' && !getCharacter(id))) {
-            const error = new Error(`${label} not found`);
-            error.status = 404;
-            throw error;
-        }
-        return id;
-    }
-
-    // Toggle like: user_id = 'user' for the human user, or char id
-    function toggleLike(momentId, likerId) {
-        const id = normalizePositiveRowId(momentId, 'moment id');
-        const moment = db.prepare('SELECT id FROM moments WHERE id = ? LIMIT 1').get(id);
-        if (!moment) {
-            const error = new Error('Moment not found');
-            error.status = 404;
-            throw error;
-        }
-        const actorId = normalizeSocialActorId(likerId, 'Moment liker');
-        const existing = db.prepare('SELECT id FROM moment_likes WHERE moment_id=? AND liker_id=?').get(id, actorId);
-        if (existing) {
-            db.prepare('DELETE FROM moment_likes WHERE id=?').run(existing.id);
-            return false; // unliked
-        } else {
-            db.prepare('INSERT INTO moment_likes(moment_id,liker_id,timestamp) VALUES(?,?,?)').run(id, actorId, Date.now());
-            return true; // liked
-        }
-    }
-
-    function getLikesForMoment(momentId) {
-        const id = normalizePositiveRowId(momentId, 'moment id');
-        return db.prepare('SELECT liker_id FROM moment_likes WHERE moment_id=?').all(id);
-    }
-
-    function addComment(momentId, authorId, content) {
-        const id = normalizePositiveRowId(momentId, 'moment id');
-        const moment = db.prepare('SELECT id FROM moments WHERE id = ? LIMIT 1').get(id);
-        if (!moment) {
-            const error = new Error('Moment not found');
-            error.status = 404;
-            throw error;
-        }
-        const actorId = normalizeSocialActorId(authorId, 'Moment comment author');
-        const comment = typeof content === 'string' ? content.trim() : '';
-        if (!comment) {
-            const error = new Error('content required');
-            error.status = 400;
-            throw error;
-        }
-        const info = db.prepare('INSERT INTO moment_comments(moment_id,author_id,content,timestamp) VALUES(?,?,?,?)').run(id, actorId, comment, Date.now());
-        return info.lastInsertRowid;
-    }
-
-    function getComments(momentId) {
-        const id = normalizePositiveRowId(momentId, 'moment id');
-        return db.prepare('SELECT * FROM moment_comments WHERE moment_id=? ORDER BY timestamp ASC').all(id);
-    }
-
-    // ─── Moments Context Builder for LLM Injection ─────────────────────────
-    function getMomentsContextForChar(charId, charLimit = 500) {
-        if (charLimit <= 0) return '';
-
-        const allChars = getCharacters();
-        const userProfile = getUserProfile();
-        const userName = userProfile?.name || 'User';
-
-        // Helper: resolve name by id
-        const resolveName = (id) => {
-            if (id === 'user') return userName;
-            const c = allChars.find(ch => ch.id === id);
-            return c?.name || '???';
-        };
-
-        // Helper: format a single moment with likes & comments
-        const formatMoment = (m) => {
-            const timeAgo = formatTimeAgo(m.timestamp);
-            const likers = getLikesForMoment(m.id).map(l => resolveName(l.liker_id));
-            const comments = getComments(m.id).map(c => `${resolveName(c.author_id)}: ${c.content}`);
-            let line = `  [ID:${m.id}] "${m.content}" (${timeAgo})`;
-            if (likers.length > 0) line += ` ❤️ ${likers.join(', ')}`;
-            if (comments.length > 0) line += `\n    评论: ${comments.join(' | ')}`;
-            return line;
-        };
-
-        // Helper: simple time ago
-        function formatTimeAgo(ts) {
-            const diffMin = Math.floor((Date.now() - ts) / 60000);
-            if (diffMin < 60) return `${diffMin}分钟前`;
-            const diffH = Math.floor(diffMin / 60);
-            if (diffH < 24) return `${diffH}小时前`;
-            return `${Math.floor(diffH / 24)}天前`;
-        }
-
-        // Collect moments from 3 sources: own, user's, acquainted chars'
-        const ownMoments = db.prepare('SELECT * FROM moments WHERE character_id = ? ORDER BY timestamp DESC LIMIT 10').all(charId);
-        const userMoments = db.prepare("SELECT * FROM moments WHERE character_id = 'user' ORDER BY timestamp DESC LIMIT 10").all();
-        const acquaintedCharIds = allChars
-            .filter(c => c.id !== charId && !c.is_blocked && isCharAcquainted(charId, c.id))
-            .map(c => c.id);
-        const friendMoments = [];
-        for (const fId of acquaintedCharIds) {
-            const fms = db.prepare('SELECT * FROM moments WHERE character_id = ? ORDER BY timestamp DESC LIMIT 5').all(fId);
-            friendMoments.push(...fms);
-        }
-
-        let result = '====== [朋友圈动态 / Moments Feed] ======';
-        let totalLen = result.length;
-
-        // Build sections, respecting char limit
-        const sections = [
-            { label: `[你的朋友圈]`, moments: ownMoments },
-            { label: `[${userName}的朋友圈]`, moments: userMoments },
-        ];
-        // Group friend moments by char
-        const friendByChar = {};
-        for (const fm of friendMoments) {
-            if (!friendByChar[fm.character_id]) friendByChar[fm.character_id] = [];
-            friendByChar[fm.character_id].push(fm);
-        }
-        for (const [fId, fms] of Object.entries(friendByChar)) {
-            sections.push({ label: `[${resolveName(fId)}的朋友圈]`, moments: fms });
-        }
-
-        for (const section of sections) {
-            if (section.moments.length === 0) continue;
-            const sectionHeader = `\n${section.label}:`;
-            if (totalLen + sectionHeader.length > charLimit) break;
-            result += sectionHeader;
-            totalLen += sectionHeader.length;
-            for (const m of section.moments) {
-                const line = '\n' + formatMoment(m);
-                if (totalLen + line.length > charLimit) break;
-                result += line;
-                totalLen += line.length;
-            }
-        }
-
-        // Mark which moments the char has already liked/commented
-        const charLiked = db.prepare('SELECT moment_id FROM moment_likes WHERE liker_id = ?').all(charId).map(r => r.moment_id);
-        const charCommented = db.prepare('SELECT DISTINCT moment_id FROM moment_comments WHERE author_id = ?').all(charId).map(r => r.moment_id);
-        if (charLiked.length > 0) result += `\n(你已点赞的朋友圈ID: ${charLiked.join(', ')})`;
-        if (charCommented.length > 0) result += `\n(你已评论过的朋友圈ID: ${charCommented.join(', ')})`;
-
-        result += '\n===========================================';
-        return result;
-    }
-
-
     // ─── User Profile ───────────────────────────────────────────────────────
 
     function getUserProfile() {
@@ -2763,19 +2562,25 @@ function getUserDb(userId) {
         if (!profile) {
             db.prepare(`
                 INSERT INTO user_profile
-                    (id, name, avatar, theme, theme_config, custom_css)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (id, name, avatar)
+                VALUES (?, ?, ?)
             `).run(
                 'default',
                 'User',
-                buildDefaultAvatarUrl('User'),
-                DEFAULT_USER_THEME,
-                DEFAULT_USER_THEME_CONFIG_JSON,
-                DEFAULT_USER_CUSTOM_CSS
+                buildDefaultAvatarUrl('User')
             );
             profile = db.prepare('SELECT * FROM user_profile WHERE id = ?').get('default');
         }
         if (profile) {
+            delete profile.theme;
+            delete profile.theme_config;
+            delete profile.custom_css;
+            delete profile.group_skip_rate;
+            delete profile.jealousy_chance;
+            delete profile.group_proactive_enabled;
+            delete profile.group_interval_min;
+            delete profile.group_interval_max;
+
             const profileAvatar = String(profile.avatar || '').trim();
             if (!profileAvatar || profileAvatar.includes('/notionists/svg')) {
                 profile.avatar = buildDefaultAvatarUrl(profile.name || 'User');
@@ -2789,13 +2594,6 @@ function getUserDb(userId) {
                     '可以保留角色性格，但表达方式必须有变化感。',
                     '除非角色本来就极度依赖表情，否则emoji默认少用，并避免固定排列。'
                 ].join('\n');
-            }
-            // Older DBs may still store percentages as whole numbers instead of 0-1 decimals.
-            if (typeof profile.group_skip_rate === 'number' && profile.group_skip_rate > 1) {
-                profile.group_skip_rate = profile.group_skip_rate / 100;
-            }
-            if (typeof profile.jealousy_chance === 'number' && profile.jealousy_chance > 1) {
-                profile.jealousy_chance = profile.jealousy_chance / 100;
             }
         }
         return profile;
@@ -2814,47 +2612,16 @@ function getUserDb(userId) {
         return Math.max(min, Math.min(max, parsed));
     }
 
-    function normalizeProfileBoolean(value, fallback = 0) {
-        const text = String(value ?? '').trim().toLowerCase();
-        if (['1', 'true', 'yes', 'on'].includes(text)) return 1;
-        if (['0', 'false', 'no', 'off'].includes(text)) return 0;
-        return fallback ? 1 : 0;
-    }
-
     function normalizeUserProfilePatch(data) {
         const normalizedData = { ...data };
         if (normalizedData.group_msg_limit !== undefined) {
             normalizedData.group_msg_limit = normalizeProfileInteger(normalizedData.group_msg_limit, 20, 1, 200);
-        }
-        if (normalizedData.group_skip_rate !== undefined) {
-            normalizedData.group_skip_rate = normalizeProfileNumber(normalizedData.group_skip_rate, 0, 0, 1);
-        }
-        if (normalizedData.group_proactive_enabled !== undefined) {
-            normalizedData.group_proactive_enabled = normalizeProfileBoolean(normalizedData.group_proactive_enabled, 0);
-        }
-        if (normalizedData.group_interval_min !== undefined) {
-            normalizedData.group_interval_min = normalizeProfileInteger(normalizedData.group_interval_min, 10, 1, 1440);
-        }
-        if (normalizedData.group_interval_max !== undefined) {
-            normalizedData.group_interval_max = normalizeProfileInteger(normalizedData.group_interval_max, 60, 1, 1440);
-        }
-        if (normalizedData.group_interval_min !== undefined && normalizedData.group_interval_max !== undefined && normalizedData.group_interval_max < normalizedData.group_interval_min) {
-            normalizedData.group_interval_max = normalizedData.group_interval_min;
-        }
-        if (normalizedData.jealousy_chance !== undefined) {
-            normalizedData.jealousy_chance = normalizeProfileNumber(normalizedData.jealousy_chance, 0, 0, 1);
         }
         if (normalizedData.wallet !== undefined) {
             normalizedData.wallet = +normalizeProfileNumber(normalizedData.wallet, 0, 0, 1000000000).toFixed(2);
         }
         if (normalizedData.private_msg_limit_for_group !== undefined) {
             normalizedData.private_msg_limit_for_group = normalizeProfileInteger(normalizedData.private_msg_limit_for_group, 3, 0, 50);
-        }
-        if (normalizedData.moments_token_limit !== undefined) {
-            normalizedData.moments_token_limit = normalizeProfileInteger(normalizedData.moments_token_limit, 500, 0, 10000);
-        }
-        if (normalizedData.moments_reaction_rate !== undefined) {
-            normalizedData.moments_reaction_rate = normalizeProfileInteger(normalizedData.moments_reaction_rate, 0, 0, 100);
         }
         if (normalizedData.memory_maintenance_batch_size !== undefined) {
             normalizedData.memory_maintenance_batch_size = normalizeProfileInteger(normalizedData.memory_maintenance_batch_size, 30, 10, 100);
@@ -2866,7 +2633,7 @@ function getUserDb(userId) {
     }
 
     function updateUserProfile(data) {
-        const allowedFields = ['name', 'avatar', 'banner', 'bio', 'theme', 'custom_css', 'theme_config', 'group_msg_limit', 'group_skip_rate', 'group_proactive_enabled', 'group_interval_min', 'group_interval_max', 'jealousy_chance', 'wallet', 'private_msg_limit_for_group', 'moments_token_limit', 'moments_reaction_rate', 'serper_api_key', 'web_search_keys_json', 'web_search_provider', 'memory_maintenance_api_endpoint', 'memory_maintenance_api_key', 'memory_maintenance_model_name', 'memory_maintenance_batch_size', 'memory_maintenance_max_tokens'];
+        const allowedFields = ['name', 'avatar', 'avatar_frame', 'banner', 'bio', 'group_msg_limit', 'wallet', 'private_msg_limit_for_group', 'serper_api_key', 'web_search_keys_json', 'web_search_provider', 'memory_maintenance_api_endpoint', 'memory_maintenance_api_key', 'memory_maintenance_model_name', 'memory_maintenance_batch_size', 'memory_maintenance_max_tokens'];
         const fields = Object.keys(data).filter(k => allowedFields.includes(k));
         if (fields.length === 0) return;
         const normalizedData = normalizeUserProfilePatch(data);
@@ -2937,20 +2704,6 @@ function getUserDb(userId) {
     // Clear all private transfers involving this character
     function clearTransfers(charId) {
         db.prepare('DELETE FROM private_transfers WHERE char_id = ? OR sender_id = ? OR recipient_id = ?').run(charId, charId, charId);
-    }
-
-    // Clear moment likes & comments on this character's moments, and by this character
-    function clearMomentInteractions(charId) {
-        // Delete likes/comments ON this char's moments
-        const momentIds = db.prepare('SELECT id FROM moments WHERE character_id = ?').all(charId).map(r => r.id);
-        if (momentIds.length > 0) {
-            const placeholders = momentIds.map(() => '?').join(',');
-            db.prepare(`DELETE FROM moment_likes WHERE moment_id IN (${placeholders})`).run(...momentIds);
-            db.prepare(`DELETE FROM moment_comments WHERE moment_id IN (${placeholders})`).run(...momentIds);
-        }
-        // Delete likes/comments BY this char on others' moments
-        db.prepare('DELETE FROM moment_likes WHERE liker_id = ?').run(charId);
-        db.prepare('DELETE FROM moment_comments WHERE author_id = ?').run(charId);
     }
 
     function getFriends(charId) {
@@ -3252,15 +3005,6 @@ function getUserDb(userId) {
         db.prepare('DELETE FROM prompt_block_cache WHERE character_id = ?').run(id);
         db.prepare('DELETE FROM conversation_digest_cache WHERE character_id = ?').run(id);
         db.prepare('DELETE FROM group_conversation_digest_cache WHERE character_id = ?').run(id);
-        // clean up moment interactions authored by this character
-        const charMoments = db.prepare('SELECT id FROM moments WHERE character_id=?').all(id);
-        for (const m of charMoments) {
-            db.prepare('DELETE FROM moment_likes WHERE moment_id=?').run(m.id);
-            db.prepare('DELETE FROM moment_comments WHERE moment_id=?').run(m.id);
-        }
-        db.prepare('DELETE FROM moment_likes WHERE liker_id=?').run(id);
-        db.prepare('DELETE FROM moment_comments WHERE author_id=?').run(id);
-        db.prepare('DELETE FROM moments WHERE character_id = ?').run(id);
         db.prepare('DELETE FROM diaries WHERE character_id = ?').run(id);
         db.prepare('DELETE FROM character_friends WHERE char1_id = ? OR char2_id = ?').run(id, id);
         db.prepare('DELETE FROM char_relationships WHERE source_id = ? OR target_id = ?').run(id, id);
@@ -4284,6 +4028,7 @@ function getUserDb(userId) {
         getLatestUserMessage,
         getVisibleMessages,
         getVisibleMessagesSince,
+        getCharacterMessageStats,
         getRecentUserConversationIntel,
         getLastUserMessageTimestamp,
         getUnsummarizedMessages,
@@ -4305,7 +4050,6 @@ function getUserDb(userId) {
         clearMessages,
         clearCharacterMessageCaches,
         clearMemories,
-        clearMoments,
         clearDiaries,
         clearConversationDigest,
         clearGroupConversationDigest,
@@ -4319,16 +4063,6 @@ function getUserDb(userId) {
         markMemoriesRetrieved,
         updateMemory,
         deleteMemory,
-        getMoments,
-        getMomentsSince,
-        getCharacterMoments,
-        getMoment,
-        addMoment,
-        deleteMoment,
-        toggleLike,
-        getLikesForMoment,
-        addComment,
-        getComments,
         getDiaries,
         addDiary,
         deleteDiary,
@@ -4344,7 +4078,6 @@ function getUserDb(userId) {
         clearFriends,
         clearCharRelationships,
         clearTransfers,
-        clearMomentInteractions,
         getFriends,
         isFriend,
         createGroup,
@@ -4388,7 +4121,6 @@ function getUserDb(userId) {
         claimRedPacket,
         getUnclaimedRedPacketsForGroup,
         getWallet,
-        getMomentsContextForChar,
         incrementLlmCacheLookup,
         deleteLlmCache,
         upsertLlmCache,

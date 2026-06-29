@@ -1,6 +1,7 @@
 ﻿import React, { useMemo, useState, useEffect } from 'react';
 import { X, Trash2, Settings, RefreshCw, Download, Upload } from 'lucide-react';
-import AuthenticatedImage from './AuthenticatedImage';
+import AvatarWithFrame from './AvatarWithFrame';
+import Scheduler from './Scheduler';
 import { useLanguage } from '../LanguageContext';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 import { deriveEmotion, derivePhysicalState } from '../utils/emotion';
@@ -48,7 +49,7 @@ function formatLlmDebugPayload(payload) {
     }
 }
 
-function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGeneratingSchedule, messagesHideStateCount }) {
+function ChatSettingsDrawer({ contact, contacts = [], apiUrl, onClose, onClearHistory, isGeneratingSchedule, messagesHideStateCount }) {
     const { t, lang } = useLanguage();
     const [relationships, setRelationships] = useState([]);
     const [regenLoading, setRegenLoading] = useState(null);
@@ -413,8 +414,8 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
         event.target.value = '';
         if (!file) return;
         if (!window.confirm(lang === 'en'
-            ? `Import this archive into ${contact.name}?\n\nThis replaces this character's chat history, memories, moments, and diaries, then rebuilds the Qdrant memory index.`
-            : `确定把这个角色包导入到 ${contact.name} 吗？\n\n这会替换当前角色的聊天记录、记忆、朋友圈和日记，并重建 Qdrant 记忆索引。`)) return;
+            ? `Import this archive into ${contact.name}?\n\nThis replaces this character's chat history, memories, and diaries, then rebuilds the Qdrant memory index.`
+            : `确定把这个角色包导入到 ${contact.name} 吗？\n\n这会替换当前角色的聊天记录、记忆和日记，并重建 Qdrant 记忆索引。`)) return;
 
         setIsImportingArchive(true);
         try {
@@ -436,8 +437,8 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
                 ? ''
                 : (lang === 'en' ? '\nMemory index rebuild needs attention.' : '\n记忆索引重建需要检查。');
             alert(lang === 'en'
-                ? `Import complete. Messages: ${counts.messages || 0}, memories: ${counts.memories || 0}, moments: ${counts.moments || 0}, diaries: ${counts.diaries || 0}.${indexNote}`
-                : `导入完成。聊天 ${counts.messages || 0} 条，记忆 ${counts.memories || 0} 条，朋友圈 ${counts.moments || 0} 条，日记 ${counts.diaries || 0} 条。${indexNote}`);
+                ? `Import complete. Messages: ${counts.messages || 0}, memories: ${counts.memories || 0}, diaries: ${counts.diaries || 0}.${indexNote}`
+                : `导入完成。聊天 ${counts.messages || 0} 条，记忆 ${counts.memories || 0} 条，日记 ${counts.diaries || 0} 条。${indexNote}`);
             window.dispatchEvent(new Event('refresh_contacts'));
             window.location.reload();
         } catch (e) {
@@ -450,8 +451,8 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
 
     const handleClearHistory = async () => {
         if (!window.confirm(lang === 'en'
-            ? `Are you sure you want to completely wipe all history with ${contact.name}?\n\nThis deletes chats, memories, diaries, moments, vector indices, and resets affinity.\n\nThis cannot be undone.`
-            : `确定要完全重置与 ${contact.name} 的关系吗？\n\n这将清除：聊天记录、长期记忆、日记、朋友圈、向量索引，并重置好感度。\n\n此操作不可撤销。`)) return;
+            ? `Are you sure you want to completely wipe all history with ${contact.name}?\n\nThis deletes chats, memories, diaries, vector indices, and resets affinity.\n\nThis cannot be undone.`
+            : `确定要完全重置与 ${contact.name} 的关系吗？\n\n这将清除：聊天记录、长期记忆、日记、向量索引，并重置好感度。\n\n此操作不可撤销。`)) return;
         try {
             const res = await fetch(`${apiUrl}/data/${contact.id}`, {
                 method: 'DELETE',
@@ -544,7 +545,6 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
         ?? 0;
     const estimatedY = contextStats?.city_x_y ?? 0;
     const estimatedZ = contextStats?.z_memory ?? 0;
-    const estimatedMoments = contextStats?.moments ?? 0;
     const estimatedO = contextStats?.q_impression ?? 0;
     const estimatedRagInjectedTokens = contextStats?.estimated_rag_injected_tokens ?? 0;
     const estimatedOtherTokens = contextStats?.last_conversation_other_tokens ?? 0;
@@ -602,7 +602,7 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
         }));
 
     return (
-        <div className="memory-drawer" style={{ width: '320px', backgroundColor: '#f7f7f7' }}>
+        <div className="memory-drawer chat-settings-drawer">
             <div className="memory-header">
                 <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <Settings size={18} /> {t('Chat Settings')}
@@ -613,10 +613,12 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
             </div>
             <div className="memory-content" style={{ padding: '0' }}>
                 <div style={{ backgroundColor: '#fff', padding: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center', borderBottom: '1px solid #eee' }}>
-                    <AuthenticatedImage
+                    <AvatarWithFrame
+                        size={60}
+                        frame={contact.avatar_frame}
                         src={resolveAvatarUrl(contact.avatar, apiUrl, contact.name || contact.id || 'User')}
                         alt={contact.name}
-                        style={{ width: '60px', height: '60px', borderRadius: '50%', marginBottom: '10px', objectFit: 'cover' }}
+                        style={{ marginBottom: '10px' }}
                         fallbackSrc={defaultAvatarUrl(contact.name || contact.id || 'User')}
                     />
                     <div style={{ fontSize: '18px', fontWeight: '500' }}>{contact.name}</div>
@@ -624,6 +626,8 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
                         {contact.persona ? `${contact.persona.substring(0, 50)}...` : (lang === 'en' ? 'No persona set.' : '未设置 Persona。')}
                     </div>
                 </div>
+
+                <Scheduler apiUrl={apiUrl} contacts={contacts} contact={contact} variant="drawer" />
 
                 <div style={{ marginTop: '10px', backgroundColor: '#fff', padding: '15px', borderTop: '1px solid #eee', borderBottom: '1px solid #eee' }}>
                     <div style={{ fontSize: '12px', color: '#999', marginBottom: '15px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
@@ -783,7 +787,6 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Private Window (X)' : '私聊上下文窗口 (X参数)'}</span><span style={{ fontWeight: '500', color: '#27ae60' }}>{estimatedWithoutCacheX} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'City Context (Y)' : '商业街环境感知 (Y参数)'}</span><span style={{ fontWeight: '500', color: '#e67e22' }}>{estimatedY} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Deep Memory (Z)' : '深层记忆调用 (Z参数)'}</span><span style={{ fontWeight: '500', color: '#7f8c8d' }}>{estimatedZ} T</span></div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Moments Feed' : '朋友圈上下文'}</span><span style={{ fontWeight: '500', color: '#7f8c8d' }}>{estimatedMoments} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Impression History (Q)' : '往事印象注入 (Q参数)'}</span><span style={{ fontWeight: '500', color: '#c0392b' }}>{estimatedO} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Other Overhead' : '其他类 T'}</span><span style={{ fontWeight: '500', color: '#7c3aed' }}>{estimatedWithoutCacheOther} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed #eee', paddingTop: '8px', marginTop: '4px' }}><span style={{ color: '#666', fontWeight: '600' }}>{lang === 'en' ? 'With Cache Breakdown' : '有缓存后预估明细'}</span><span style={{ fontWeight: '700', color: '#2c3e50' }}>{estimatedWithCache} T</span></div>
@@ -792,7 +795,6 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Private Window (X)' : '私聊上下文窗口 (X参数)'}</span><span style={{ fontWeight: '500', color: '#27ae60' }}>{estimatedWithCacheX} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'City Context (Y)' : '商业街环境感知 (Y参数)'}</span><span style={{ fontWeight: '500', color: '#e67e22' }}>{estimatedY} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Deep Memory (Z)' : '深层记忆调用 (Z参数)'}</span><span style={{ fontWeight: '500', color: '#7f8c8d' }}>{estimatedZ} T</span></div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Moments Feed' : '朋友圈上下文'}</span><span style={{ fontWeight: '500', color: '#7f8c8d' }}>{estimatedMoments} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Impression History (Q)' : '往事印象注入 (Q参数)'}</span><span style={{ fontWeight: '500', color: '#c0392b' }}>{estimatedO} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Other Overhead' : '其他类 T'}</span><span style={{ fontWeight: '500', color: '#7c3aed' }}>{estimatedWithCacheOther} T</span></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#666' }}>{lang === 'en' ? 'Tail Tokens' : '尾巴 token'}</span><span style={{ fontWeight: '700', color: '#27ae60' }}>{estimatedTailTokens} T</span></div>
@@ -943,10 +945,18 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
                     {relationships.length === 0 ? (
                         <div style={{ fontSize: '13px', color: '#bbb', fontStyle: 'italic' }}>{lang === 'en' ? 'No relationships yet.' : '还没有角色关系。'}</div>
                     ) : (
-                        relationships.map(rel => (
+                        relationships.map(rel => {
+                            const targetContact = contacts.find(c => String(c.id) === String(rel.targetId));
+                            return (
                             <div key={rel.targetId} style={{ marginBottom: '12px', padding: '10px', background: '#f8f9fa', borderRadius: '8px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                                    <AuthenticatedImage src={resolveAvatarUrl(rel.targetAvatar, apiUrl, rel.targetName || rel.targetId || 'User')} fallbackSrc={defaultAvatarUrl(rel.targetName || rel.targetId || 'User')} alt="" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }} />
+                                    <AvatarWithFrame
+                                        size={28}
+                                        frame={targetContact?.avatar_frame}
+                                        src={resolveAvatarUrl(rel.targetAvatar, apiUrl, rel.targetName || rel.targetId || 'User')}
+                                        fallbackSrc={defaultAvatarUrl(rel.targetName || rel.targetId || 'User')}
+                                        alt=""
+                                    />
                                     <div style={{ flex: 1 }}>
                                         <span style={{ fontWeight: '500', fontSize: '13px' }}>{rel.targetName}</span>
                                         <span style={{ fontSize: '11px', color: '#999', marginLeft: '6px' }}>❤️ {rel.affinity ?? '?'}</span>
@@ -981,7 +991,8 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
                                     )}
                                 </div>
                             </div>
-                        ))
+                            );
+                        })
                     )}
                     {regenError && <div style={{ marginTop: '8px', padding: '6px 10px', background: '#fff1f1', border: '1px solid #ffc0c0', borderRadius: '6px', fontSize: '12px', color: '#c0392b' }}>⚠️ {regenError}</div>}
                 </div>
@@ -1135,8 +1146,8 @@ function ChatSettingsDrawer({ contact, apiUrl, onClose, onClearHistory, isGenera
                         </div>
                         <div style={{ fontSize: '12px', color: '#666', lineHeight: '1.5' }}>
                             {lang === 'en'
-                                ? 'Export or replace this character with chats, SQLite memories, moments, moment interactions, diaries, and a rebuilt Qdrant memory index.'
-                                : '导出或覆盖恢复当前角色的聊天、SQLite 记忆、朋友圈及互动、日记，并在导入后重建 Qdrant 记忆索引。'}
+                                ? 'Export or replace this character with chats, SQLite memories, diaries, and a rebuilt Qdrant memory index.'
+                                : '导出或覆盖恢复当前角色的聊天、SQLite 记忆、日记，并在导入后重建 Qdrant 记忆索引。'}
                         </div>
                         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                             <button
