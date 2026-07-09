@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BookOpen, X, Lock, KeyRound, Eye, Trash2 } from 'lucide-react';
+import { BookOpen, Lock, KeyRound, Eye, Trash2 } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 
 function DiaryTable({ contact, apiUrl, onClose }) {
@@ -95,10 +95,10 @@ function DiaryTable({ contact, apiUrl, onClose }) {
                 setIsUnlocked(true);
                 setDiaries(prev => prev.map(d => ({ ...d, is_unlocked: 1 })));
             } else {
-                setPwError(data.reason || data.error || (res.ok ? 'Wrong password.' : `HTTP ${res.status}`));
+                setPwError(data.reason || data.error || (res.ok ? (lang === 'en' ? 'Wrong password.' : '密码不正确。') : `HTTP ${res.status}`));
             }
         } catch {
-            setPwError('Network error. Try again.');
+            setPwError(lang === 'en' ? 'Network error. Try again.' : '网络错误，请重试。');
         }
         setPwLoading(false);
     };
@@ -125,9 +125,6 @@ function DiaryTable({ contact, apiUrl, onClose }) {
                     <BookOpen size={18} />
                     {contactName} {lang === 'en' ? "'s Diary" : "的日记"}
                 </h3>
-                <button className="icon-btn" onClick={onClose}>
-                    <X size={20} />
-                </button>
             </div>
 
             <div className="memory-list" style={{ padding: '20px' }}>

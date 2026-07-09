@@ -9,10 +9,12 @@ import {
     ChevronLeft,
     Volume2,
     Wallet,
+    CalendarDays,
     Heart,
     Activity,
     ShieldCheck,
     Cloud,
+    Image as ImageIcon,
     Plus,
     FileText,
     MessageSquare,
@@ -30,12 +32,12 @@ const getDefaultGuidelines = (lang) => {
 3. Keep responses relatively short, casual, and conversational.
 4. DO NOT act as an AI assistant. Never say "How can I help you?".
 5. You are initiating this specific message randomly based on the Current Time. Mention the time of day or what you might be doing.
-6. [MANDATORY KNOWLEDGE FOR BACKGROUND ACTIONS]: 
-   - If you want to wait a specific amount of time before your NEXT proactive message, output [TIMER:minutes]. 
+6. [MANDATORY KNOWLEDGE FOR BACKGROUND ACTIONS]:
+   - If you want to wait a specific amount of time before your NEXT proactive message, output [TIMER:minutes].
    - If you want to apologize or send a "Red Packet" to the user, output [TRANSFER:amount] (e.g. [TRANSFER:5.20]).
    - If you want to write a secret entry in your private diary (for your eyes only), output [DIARY:your secret thought]. Do this if you are feeling very emotional.
    - If your feelings toward the user change based on their message (e.g., they insulted you or flattered you), output [AFFINITY:+5] or [AFFINITY:-10].
-   - If your anxiety/pressure is relieved by their message, output [PRESSURE:0].
+   - If your current mood visibly changes, output one [EMOTION_STATE:value]. value must be one of: jealous, hurt, angry, lonely, happy, sad, cautious, guarded, shy, hopeful, playful, disappointed, relieved, affectionate, reassured, yearning, flustered, guilty, frustrated, wistful, proud, secure, tender, helpless, tense, calm.
    These tags will be processed hidden from the user.`;
     }
 
@@ -50,7 +52,7 @@ const getDefaultGuidelines = (lang) => {
    - 如果你想道歉或发红包，输出 [TRANSFER:金额]，例如 [TRANSFER:5.20]。
    - 如果你想写一段只有自己可见的私密日记，输出 [DIARY:你的秘密想法]。
    - 如果你对用户的好感发生变化，输出 [AFFINITY:+5] 或 [AFFINITY:-10]。
-   - 如果你的压力被缓解，输出 [PRESSURE:0]。
+   - 如果你当前心情明显变化，输出一个 [EMOTION_STATE:value]。value 只能从这些名字里选：jealous, hurt, angry, lonely, happy, sad, cautious, guarded, shy, hopeful, playful, disappointed, relieved, affectionate, reassured, yearning, flustered, guilty, frustrated, wistful, proud, secure, tender, helpless, tense, calm。
    以上方括号标签都会在处理时对用户隐藏，但效果会生效。`;
 };
 
@@ -169,6 +171,71 @@ function getTtsProviderConfig(providerId) {
     return TTS_PROVIDERS.find(item => item.id === providerId) || TTS_PROVIDERS[0];
 }
 
+function translateTtsProviderConfig(config, lang) {
+    if (lang !== 'en') return config;
+    const commonVoiceGender = (label) => String(label || '')
+        .replace('女声', 'female')
+        .replace('男声', 'male')
+        .replace('资讯', 'news ')
+        .replace('中文', 'Chinese ')
+        .replace('通用', 'general ')
+        .replace('新闻', 'news ')
+        .replace('女童声', 'child female voice');
+    const translated = { ...config };
+    if (config.id === 'tencent') {
+        translated.label = 'Tencent Cloud TTS';
+        translated.modelHint = 'Large-model voice / premium voice';
+        translated.voiceHint = 'e.g. 101001 / 101016, Tencent Cloud voice ID';
+        translated.keyHint = 'Paste the SecretId / SecretKey lines from Tencent Cloud';
+        translated.modelOptions = [
+            { value: 'large', label: 'Large-model voice' },
+            { value: 'premium', label: 'Premium voice' }
+        ];
+        translated.voiceOptions = (config.voiceOptions || []).map(option => ({
+            ...option,
+            label: commonVoiceGender(option.label)
+                .replace('智兰 -', 'Zhilan -')
+                .replace('智瑜 -', 'Zhiyu -')
+                .replace('智云 -', 'Zhiyun -')
+                .replace('智燕 -', 'Zhiyan -')
+                .replace('智辉 -', 'Zhihui -')
+                .replace('智甜 -', 'Zhitian -')
+                .replace('（大模型）', '(large model)')
+        }));
+    } else if (config.id === 'azure') {
+        translated.label = 'Azure Speech';
+        translated.voiceHint = 'e.g. zh-CN-XiaoxiaoNeural';
+        translated.keyHint = 'Speech key; Endpoint can be a region or full URL';
+        translated.voiceOptions = (config.voiceOptions || []).map(option => ({
+            ...option,
+            label: commonVoiceGender(option.label)
+        }));
+    } else if (config.id === 'google') {
+        translated.label = 'Google Cloud TTS';
+        translated.voiceHint = 'e.g. cmn-CN-Wavenet-A';
+        translated.keyHint = 'API key or service account credential ID';
+        translated.voiceOptions = (config.voiceOptions || []).map(option => ({
+            ...option,
+            label: commonVoiceGender(option.label)
+        }));
+    } else if (config.id === 'minimax') {
+        translated.label = 'MiniMax Speech';
+        translated.voiceHint = 'Enter voice_id';
+        translated.voiceOptions = (config.voiceOptions || []).map(option => ({
+            ...option,
+            label: commonVoiceGender(option.label)
+        }));
+    } else if (config.id === 'elevenlabs') {
+        translated.label = 'ElevenLabs';
+        translated.voiceHint = 'Enter voice_id';
+    } else if (config.id === 'custom') {
+        translated.label = 'Custom compatible API';
+        translated.modelHint = 'Defined by the API';
+        translated.voiceHint = 'Defined by the API';
+    }
+    return translated;
+}
+
 function getTtsSelectValue(value, options = []) {
     const raw = String(value || '').trim();
     if (!raw) return '';
@@ -204,11 +271,21 @@ function getLocalFallbackProfile() {
         bio: '',
         banner: '',
         wallet: 0,
+        created_at: Number(localUser?.created_at || 0),
     };
 }
 
 
-function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpdate, onProfileUpdate, onBack }) {
+function SettingsPanel({
+    apiUrl,
+    contacts: parentContacts = [],
+    desktopWallpaper = 'ocean-live2d',
+    wallpaperOptions = [],
+    onDesktopWallpaperChange,
+    onCharactersUpdate,
+    onProfileUpdate,
+    onBack
+}) {
     const { t, lang } = useLanguage();
     const { login, updateUser } = useAuth();
     const [profile, setProfile] = useState(() => getLocalFallbackProfile());
@@ -246,11 +323,25 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
 
     const getEditingTtsProviderConfig = useCallback((providerId) => {
         const config = getTtsProviderConfig(providerId);
-        if (config.id === 'tencent' && tencentVoiceOptions.length) {
-            return { ...config, voiceOptions: tencentVoiceOptions };
+        const mergedConfig = config.id === 'tencent' && tencentVoiceOptions.length
+            ? { ...config, voiceOptions: tencentVoiceOptions }
+            : config;
+        return translateTtsProviderConfig(mergedConfig, lang);
+    }, [tencentVoiceOptions, lang]);
+
+    const tencentVoiceSourceLabel = useCallback((source) => {
+        if (!source) return '';
+        if (source === 'tencent-docs') return lang === 'en' ? 'Tencent official docs' : '腾讯官方文档';
+        return source;
+    }, [lang]);
+
+    const ttsPreviewText = useCallback((name) => {
+        const displayName = name || (lang === 'en' ? 'this character' : '这个角色');
+        if (lang === 'en') {
+            return `Hi, I am ${displayName}. This is a voice preview.`;
         }
-        return config;
-    }, [tencentVoiceOptions]);
+        return `你好，我是${displayName}。这是一段语音试听。`;
+    }, [lang]);
 
     useEffect(() => {
         if (Array.isArray(parentContacts)) {
@@ -271,6 +362,7 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
     const normalizeCharacterMessageStats = useCallback((stats = {}) => ({
         first_message_at: Number(stats.first_message_at || 0),
         last_message_at: Number(stats.last_message_at || 0),
+        last_user_message_at: Number(stats.last_user_message_at || stats.last_user_msg_time || 0),
         private_message_count: Number(stats.private_message_count || 0),
         user_message_count: Number(stats.user_message_count || 0),
         character_message_count: Number(stats.character_message_count || 0)
@@ -382,8 +474,8 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
     const fetchModels = async (endpoint, key, setList, setFetching, setError, options = {}) => {
         const cleanEndpoint = String(endpoint || '').trim();
         const cleanKey = String(key || '').trim();
-        if (!cleanEndpoint) { setError('请先填写 Endpoint'); return; }
-        if (!cleanKey && !options.hasSavedKey) { setError('请先填写 Key，或使用已保存的 Key'); return; }
+        if (!cleanEndpoint) { setError(lang === 'en' ? 'Fill in the endpoint first.' : '请先填写 Endpoint'); return; }
+        if (!cleanKey && !options.hasSavedKey) { setError(lang === 'en' ? 'Fill in a key, or use the saved key.' : '请先填写 Key，或使用已保存的 Key'); return; }
         setFetching(true); setError(''); setList([]);
         try {
             const modelUrl = options.characterId
@@ -400,8 +492,8 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
             const data = await res.json();
             if (!res.ok) throw new Error(data.error);
             setList(data.models || []);
-            if (!(data.models || []).length) setError('未找到可用模型');
-        } catch (e) { setError('拉取失败: ' + e.message); }
+            if (!(data.models || []).length) setError(lang === 'en' ? 'No available models found.' : '未找到可用模型');
+        } catch (e) { setError((lang === 'en' ? 'Fetch failed: ' : '拉取失败: ') + e.message); }
         setFetching(false);
     };
 
@@ -414,7 +506,7 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
             const voices = Array.isArray(data.voices) ? data.voices : [];
-            if (!voices.length) throw new Error('没有拉到腾讯云音色列表');
+            if (!voices.length) throw new Error(lang === 'en' ? 'No Tencent Cloud voice list was returned.' : '没有拉到腾讯云音色列表');
             setTencentVoiceOptions(voices.map(voice => ({
                 value: String(voice.value || voice.id || '').trim(),
                 label: voice.label || `${voice.id || voice.value} ${voice.name || ''} - ${voice.scene || ''}`.trim(),
@@ -426,7 +518,7 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
         } catch (e) {
             setTencentVoiceError(e.message || String(e));
         }
-    }, [apiUrl]);
+    }, [apiUrl, lang]);
 
     useEffect(() => {
         // Fetch user profile
@@ -484,7 +576,7 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
             controller.abort();
             window.removeEventListener('refresh_contacts', fetchCharacters);
         };
-    }, [apiUrl]);
+    }, [apiUrl, lang]);
 
     useEffect(() => {
         loadTencentVoices(false);
@@ -571,7 +663,7 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
     };
 
     const handleDeleteContact = async (id) => {
-        if (!window.confirm("Are you sure you want to delete this contact and all their data?")) return;
+        if (!window.confirm(lang === 'en' ? 'Are you sure you want to delete this contact and all their data?' : '确定要删除这个联系人及其全部数据吗？')) return;
         try {
             const res = await fetch(`${apiUrl}/characters/${id}`, {
                 method: 'DELETE',
@@ -584,11 +676,11 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                 window.dispatchEvent(new CustomEvent('character_deleted', { detail: { characterId: id } }));
                 if (onCharactersUpdate) onCharactersUpdate({ type: 'deleted', id });
             } else {
-                alert((lang === 'en' ? 'Delete failed: ' : '删除失败：') + (data.error || res.statusText || 'Unknown error'));
+                alert((lang === 'en' ? 'Delete failed: ' : '删除失败：') + (data.error || res.statusText || (lang === 'en' ? 'Unknown error' : '未知错误')));
             }
         } catch (e) {
             console.error('Failed to delete character:', e);
-            alert((lang === 'en' ? 'Delete failed: ' : '删除失败：') + (e.message || 'Network error'));
+            alert((lang === 'en' ? 'Delete failed: ' : '删除失败：') + (e.message || (lang === 'en' ? 'Network error' : '网络错误')));
         }
     };
 
@@ -658,7 +750,7 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                     .then(d => setContacts(d))
                     .catch(console.error);
             } else {
-                alert("Failed to save: " + data.error);
+                alert((lang === 'en' ? 'Failed to save: ' : '保存失败：') + (data.error || (lang === 'en' ? 'Unknown error' : '未知错误')));
             }
         } catch (e) {
             console.error('Failed to update contact:', e);
@@ -687,13 +779,15 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
 
             if (data.success) {
                 setAvatarCallback(data.url);
-                alert(`上传成功 / Upload Success!\n\n文件路径：${data.url}\n\n请不要忘记点击下方的 Save / 保存 按钮使头像生效。\n(Please click Save below)`);
+                alert(lang === 'en'
+                    ? `Upload success!\n\nFile path: ${data.url}\n\nClick Save below to apply this avatar.`
+                    : `上传成功！\n\n文件路径：${data.url}\n\n请点击下方“保存”按钮使头像生效。`);
             } else {
                 alert(lang === 'en' ? 'Failed to save: ' + data.error : '保存失败: ' + data.error);
             }
         } catch (e) {
             console.error('Upload failed:', e);
-            alert('上传过程中发生错误 / Upload Exception: ' + e.message);
+            alert((lang === 'en' ? 'Upload failed: ' : '上传过程中发生错误：') + e.message);
         } finally {
             if (targetInput) targetInput.value = null;
         }
@@ -721,11 +815,11 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                 alert(lang === 'en' ? 'Backup restored and memory indexes rebuilt. The page will refresh in a few seconds.' : '存档恢复完成，记忆索引也已重建。页面将在几秒后自动刷新。');
                 setTimeout(() => window.location.reload(), 3000);
             } else {
-                alert("Failed to restore: " + data.error);
+                alert((lang === 'en' ? 'Failed to restore: ' : '恢复失败：') + (data.error || (lang === 'en' ? 'Unknown error' : '未知错误')));
             }
         } catch (e) {
             console.error('Import Error:', e);
-            alert('Upload failed.');
+            alert(lang === 'en' ? 'Upload failed.' : '上传失败。');
         } finally {
             event.target.value = null;
         }
@@ -776,11 +870,11 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                 if (onCharactersUpdate) onCharactersUpdate();
                 window.location.reload();
             } else {
-                alert("Wipe failed: " + data.error);
+                alert((lang === 'en' ? 'Wipe failed: ' : '清空失败：') + (data.error || (lang === 'en' ? 'Unknown error' : '未知错误')));
             }
         } catch (e) {
             console.error('Wipe Error:', e);
-            alert('Wipe failed.');
+            alert(lang === 'en' ? 'Wipe failed.' : '清空失败。');
         }
     };
 
@@ -788,13 +882,14 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
         <div className="avatar-frame-picker">
             {AVATAR_FRAME_OPTIONS.map(option => {
                 const selected = normalizeAvatarFrameId(value) === option.id;
+                const optionLabel = lang === 'en' ? (option.labelEn || option.label) : option.label;
                 return (
                     <button
                         key={option.id}
                         type="button"
                         className={`avatar-frame-choice ${selected ? 'is-selected' : ''}`}
                         onClick={() => onChange(option.id)}
-                        title={option.label}
+                        title={optionLabel}
                     >
                         <span className="avatar-frame-choice__preview">
                             <AvatarWithFrame
@@ -805,7 +900,7 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                                 alt=""
                             />
                         </span>
-                        <span className="avatar-frame-choice__label">{option.label}</span>
+                        <span className="avatar-frame-choice__label">{optionLabel}</span>
                     </button>
                 );
             })}
@@ -855,18 +950,48 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
         if (value === undefined || value === null || value === '') return fallback;
         return !(value === 0 || value === '0' || value === false);
     };
+    const formatApiSourceName = (endpoint) => {
+        const raw = String(endpoint || '').trim();
+        if (!raw) return '';
+        const parseTarget = /^[a-z][a-z\d+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
+        try {
+            const { hostname, port } = new URL(parseTarget);
+            const host = String(hostname || '').replace(/^api\./i, '').replace(/^www\./i, '');
+            if (!host) return raw.slice(0, 42);
+            const lower = host.toLowerCase();
+            if (lower.includes('openai')) return 'OpenAI';
+            if (lower.includes('anthropic') || lower.includes('claude')) return 'Anthropic';
+            if (lower.includes('deepseek')) return 'DeepSeek';
+            if (lower.includes('siliconflow')) return 'SiliconFlow';
+            if (lower.includes('google') || lower.includes('gemini')) return 'Gemini';
+            if (lower.includes('volcengine') || lower.includes('volces')) return 'Volcengine';
+            if (lower.includes('moonshot') || lower.includes('kimi')) return 'Moonshot';
+            if (lower.includes('localhost') || lower === '127.0.0.1') return port ? `Local:${port}` : 'Local';
+            return port ? `${host}:${port}` : host;
+        } catch {
+            return raw.replace(/^https?:\/\//i, '').split('/')[0].slice(0, 42);
+        }
+    };
+    const getCharacterApiBadge = (character, scope) => {
+        const isMemory = scope === 'memory';
+        const endpoint = isMemory ? character?.memory_api_endpoint : character?.api_endpoint;
+        const model = String((isMemory ? character?.memory_model_name : character?.model_name) || '').trim();
+        const endpointName = formatApiSourceName(endpoint);
+        const hasSavedKey = isMemory ? character?.memory_api_key_configured === true : character?.api_key_configured === true;
+        const isConfigured = Boolean(String(endpoint || '').trim() && model && hasSavedKey);
+        const emptyLabel = lang === 'en' ? 'Not configured' : '未配置';
+        const value = [model, endpointName].filter(Boolean).join(' · ') || emptyLabel;
+        const label = isMemory
+            ? (lang === 'en' ? 'Aux API' : '辅助 API')
+            : (lang === 'en' ? 'Main API' : '主 API');
+        const title = `${label}: ${value}${endpoint ? `\n${endpoint}` : ''}`;
+        return { label, value, title, isConfigured };
+    };
     const selectedTtsConfig = getTtsProviderConfig(selectedSettingsContact?.tts_provider);
     const selectedContactDetailRows = selectedSettingsContact ? [
         [
             lang === 'en' ? 'Created' : '加入时间',
             formatJoinTime(selectedSettingsContact)
-        ],
-        [
-            lang === 'en' ? 'Last Interaction' : '最后互动',
-            formatSettingsDate(
-                selectedSettingsContact.last_message_at || selectedSettingsContact.last_user_msg_time || selectedSettingsContact.updated_at,
-                lang === 'en' ? 'No private chat yet' : '还没有私聊互动'
-            )
         ],
         [
             lang === 'en' ? 'Conversations' : '对话次数',
@@ -902,7 +1027,6 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
             `${isSettingOn(selectedSettingsContact.sys_pressure, true) ? (lang === 'en' ? 'Pressure on' : '压力开') : (lang === 'en' ? 'Pressure off' : '压力关')} · ${isSettingOn(selectedSettingsContact.sys_jealousy, true) ? (lang === 'en' ? 'Jealousy on' : '嫉妒开') : (lang === 'en' ? 'Jealousy off' : '嫉妒关')}`
         ],
         [lang === 'en' ? 'City Activity' : '商业街活动', isSettingOn(selectedSettingsContact.sys_survival, true) ? (lang === 'en' ? 'Joined' : '参与') : (lang === 'en' ? 'Paused' : '不参与')],
-        [lang === 'en' ? 'Wallet' : '钱包余额', `¥${Number(selectedSettingsContact.wallet ?? 0).toFixed(2)}`],
         [
             lang === 'en' ? 'Status' : '角色状态',
             selectedSettingsContact.is_blocked
@@ -924,8 +1048,19 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
         return raw < 10000000000 ? raw * 1000 : raw;
     };
 
-    const formatCompactInteraction = (character, emptyLabel) => {
-        const timestamp = normalizeTimestampMs(character?.last_message_at || character?.last_user_msg_time || character?.updated_at);
+    const getProjectUsageDays = (value) => {
+        const startedAt = normalizeTimestampMs(value);
+        if (!startedAt) return 1;
+        const day = 24 * 60 * 60 * 1000;
+        return Math.max(1, Math.floor((Date.now() - startedAt) / day) + 1);
+    };
+
+    const getPlayerInteractionTimestamp = (character) => normalizeTimestampMs(
+        character?.last_user_message_at || character?.last_user_msg_time
+    );
+
+    const formatCompactInteractionTime = (value, emptyLabel) => {
+        const timestamp = normalizeTimestampMs(value);
         if (!timestamp) return emptyLabel || (lang === 'en' ? 'No chat yet' : '暂无互动');
         const diff = Math.max(0, Date.now() - timestamp);
         const minute = 60 * 1000;
@@ -941,15 +1076,23 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
         });
     };
 
-    const averageAffinity = contacts.length
-        ? Math.round(contacts.reduce((total, item) => total + Number(item.affinity || 0), 0) / contacts.length)
-        : 0;
+    const formatCompactInteraction = (character, emptyLabel) => formatCompactInteractionTime(
+        character?.last_message_at || character?.last_user_msg_time || character?.updated_at,
+        emptyLabel
+    );
 
-    const latestInteractionCharacter = contacts.reduce((latest, item) => {
-        const currentTime = normalizeTimestampMs(item.last_message_at || item.last_user_msg_time || item.updated_at);
-        const latestTime = normalizeTimestampMs(latest?.last_message_at || latest?.last_user_msg_time || latest?.updated_at);
+    const projectUsageDays = getProjectUsageDays(profile.created_at);
+
+    const latestPlayerInteractionCharacter = contacts.reduce((latest, item) => {
+        const currentTime = getPlayerInteractionTimestamp(item);
+        const latestTime = getPlayerInteractionTimestamp(latest);
         return currentTime > latestTime ? item : latest;
     }, null);
+    const latestPlayerInteractionAt = getPlayerInteractionTimestamp(latestPlayerInteractionCharacter);
+    const wallpaperOptionList = Array.isArray(wallpaperOptions) ? wallpaperOptions : [];
+    const selectedWallpaperOption = wallpaperOptionList.find(option => option.id === desktopWallpaper) || wallpaperOptionList[0] || null;
+    const getWallpaperOptionLabel = (option) => (lang === 'en' ? option?.labelEn : option?.labelZh) || option?.label || option?.id || '';
+    const getWallpaperOptionDescription = (option) => (lang === 'en' ? option?.descriptionEn : option?.descriptionZh) || option?.description || '';
 
     const openCharacterEditor = (character) => {
         if (!character) return;
@@ -976,7 +1119,7 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
 
                 <section id="settings-profile-section" className="settings-card settings-command-profile-card">
                     {onBack && (
-                        <button className="mobile-back-btn settings-command-back" onClick={onBack} title="Back">
+                        <button className="mobile-back-btn settings-command-back" onClick={onBack} title={lang === 'en' ? 'Back' : '返回'}>
                             <ChevronLeft size={22} />
                         </button>
                     )}
@@ -1003,14 +1146,14 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                             <strong>¥{Number(profile.wallet ?? 100).toFixed(2)}</strong>
                         </div>
                         <div className="settings-command-stat">
-                            <Heart size={27} />
-                            <span>{lang === 'en' ? 'Average Affinity' : '好感度平均'}</span>
-                            <strong>{averageAffinity || 0} / 100</strong>
+                            <CalendarDays size={27} />
+                            <span>{lang === 'en' ? 'Days Used' : '已使用'}</span>
+                            <strong>{projectUsageDays} {lang === 'en' ? (projectUsageDays === 1 ? 'day' : 'days') : '天'}</strong>
                         </div>
                         <div className="settings-command-stat">
                             <Activity size={27} />
                             <span>{lang === 'en' ? 'Last Interaction' : '最后互动'}</span>
-                            <strong>{formatCompactInteraction(latestInteractionCharacter, lang === 'en' ? 'No chat yet' : '暂无互动')}</strong>
+                            <strong>{formatCompactInteractionTime(latestPlayerInteractionAt, lang === 'en' ? 'No chat yet' : '暂无互动')}</strong>
                         </div>
                     </div>
                     <button className="settings-icon-text-button settings-command-edit-profile" onClick={() => setIsEditing(true)} title={lang === 'en' ? 'Edit your profile (name, avatar, bio)' : '编辑个人资料（名字、头像、签名）'}>
@@ -1020,15 +1163,15 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                     {isEditing && (
                         <div className="settings-profile-edit settings-command-profile-edit">
                             <label>
-                                <span>Name</span>
+                                <span>{lang === 'en' ? 'Name' : '名称'}</span>
                                 <input type="text" value={editName} onChange={e => setEditName(e.target.value)} />
                             </label>
                             <label>
-                                <span>Avatar URL or Upload</span>
+                                <span>{lang === 'en' ? 'Avatar URL or Upload' : '头像 URL 或上传'}</span>
                                 <div className="settings-upload-row">
                                     <input type="text" value={editAvatar} onChange={e => setEditAvatar(e.target.value)} placeholder="https://..." />
                                     <label className="settings-secondary-button">
-                                        Upload
+                                        {lang === 'en' ? 'Upload' : '上传'}
                                         <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleFileUpload(e, setEditAvatar)} />
                                     </label>
                                 </div>
@@ -1042,24 +1185,56 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                                 <div className="settings-upload-row">
                                     <input type="text" value={editBanner} onChange={e => setEditBanner(e.target.value)} placeholder="https://..." />
                                     <label className="settings-secondary-button">
-                                        Upload
+                                        {lang === 'en' ? 'Upload' : '上传'}
                                         <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleFileUpload(e, setEditBanner)} />
                                     </label>
                                 </div>
                             </label>
                             <label>
-                                <span>Bio</span>
-                                <textarea value={editBio} onChange={e => setEditBio(e.target.value)} placeholder="What's up?" />
+                                <span>{lang === 'en' ? 'Bio' : '个性签名'}</span>
+                                <textarea value={editBio} onChange={e => setEditBio(e.target.value)} placeholder={lang === 'en' ? "What's up?" : '今天想写点什么？'} />
                             </label>
                             <div className="settings-form-actions">
                                 <button className="settings-primary-button" onClick={handleSaveProfile} title={lang === 'en' ? 'Save profile changes' : '保存个人资料修改'}>
-                                    <Save size={16} /> Save
+                                    <Save size={16} /> {lang === 'en' ? 'Save' : '保存'}
                                 </button>
-                                <button className="settings-secondary-button" onClick={() => setIsEditing(false)} title={lang === 'en' ? 'Cancel editing' : '取消编辑'}>Cancel</button>
+                                <button className="settings-secondary-button" onClick={() => setIsEditing(false)} title={lang === 'en' ? 'Cancel editing' : '取消编辑'}>{lang === 'en' ? 'Cancel' : '取消'}</button>
                             </div>
                         </div>
                     )}
                 </section>
+
+                {wallpaperOptionList.length > 0 && (
+                    <section id="settings-wallpaper-section" className="settings-card settings-wallpaper-card">
+                        <div className="settings-card-title settings-card-title-row">
+                            <div>
+                                <h2><ImageIcon size={20} />{lang === 'en' ? 'Desktop Wallpaper' : '桌面壁纸'}</h2>
+                                <p>{lang === 'en' ? 'Choose the desktop background style.' : '选择桌面的背景样式。'}</p>
+                            </div>
+                            <span>{getWallpaperOptionLabel(selectedWallpaperOption)}</span>
+                        </div>
+                        <div className="settings-wallpaper-options">
+                            {wallpaperOptionList.map(option => {
+                                const selected = option.id === desktopWallpaper;
+                                return (
+                                    <button
+                                        key={option.id}
+                                        type="button"
+                                        className={`settings-wallpaper-option ${selected ? 'active' : ''}`}
+                                        onClick={() => onDesktopWallpaperChange?.(option.id)}
+                                        aria-pressed={selected}
+                                    >
+                                        <span className={`settings-wallpaper-preview settings-wallpaper-preview--${option.id}`} aria-hidden="true" />
+                                        <span className="settings-wallpaper-copy">
+                                            <strong>{getWallpaperOptionLabel(option)}</strong>
+                                            <small>{getWallpaperOptionDescription(option)}</small>
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </section>
+                )}
 
                 <div className="settings-command-workspace">
                     <main className="settings-command-main">
@@ -1079,6 +1254,10 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                                 <div className="settings-character-list">
                                     {contacts.map(c => {
                                         const modelOnline = getCharacterOnline(c);
+                                        const characterApiBadges = [
+                                            getCharacterApiBadge(c, 'main'),
+                                            getCharacterApiBadge(c, 'memory')
+                                        ];
                                         return (
                                             <div
                                                 key={c.id}
@@ -1106,6 +1285,18 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                                                         <span className={`settings-character-status ${modelOnline ? 'online' : 'offline'}`}>
                                                             <i />{modelOnline ? (lang === 'en' ? 'Online' : '在线') : (lang === 'en' ? 'Offline' : '离线')}
                                                         </span>
+                                                    </div>
+                                                    <div className="settings-character-api-badges" aria-label={lang === 'en' ? 'Character API configuration' : '角色 API 配置'}>
+                                                        {characterApiBadges.map(badge => (
+                                                            <span
+                                                                key={badge.label}
+                                                                className={`settings-character-api-badge ${badge.isConfigured ? 'is-configured' : 'is-empty'}`}
+                                                                title={badge.title}
+                                                            >
+                                                                <b>{badge.label}</b>
+                                                                <em>{badge.value}</em>
+                                                            </span>
+                                                        ))}
                                                     </div>
                                                 </div>
                                                 <div className="settings-character-meta">
@@ -1140,7 +1331,7 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                                                                 } catch (e) { console.error(e); }
                                                             }}
                                                             title={lang === 'en' ? 'Admin Unblock & Reset Affinity' : '管理员解除拉黑并重置好感度'}>
-                                                            解除
+                                                            {lang === 'en' ? 'Unblock' : '解除'}
                                                         </button>
                                                     )}
                                                     <button type="button" onClick={(event) => { event.stopPropagation(); handleWipeData(c.id); }} title={lang === 'en' ? 'Wipe all data (Memories, Messages, etc)' : '清空全部数据（记忆、消息等）'}>
@@ -1238,23 +1429,6 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                                         <span className={`settings-character-status ${selectedSettingsContactOnline ? 'online' : 'offline'}`}>
                                             <i />{selectedSettingsContactOnline ? (lang === 'en' ? 'Online' : '在线') : (lang === 'en' ? 'Offline' : '离线')}
                                         </span>
-                                    </div>
-                                </div>
-                                <div className="settings-detail-stats">
-                                    <div className="settings-detail-stat">
-                                        <Heart size={22} />
-                                        <span>{lang === 'en' ? 'Affinity' : '好感度'}</span>
-                                        <strong>{Number(selectedSettingsContact.affinity || 0)} / 100</strong>
-                                    </div>
-                                    <div className="settings-detail-stat settings-detail-stat--wallet">
-                                        <Wallet size={22} />
-                                        <span>{lang === 'en' ? 'Wallet' : '钱包余额'}</span>
-                                        <strong>¥{Number(selectedSettingsContact.wallet ?? 0).toFixed(2)}</strong>
-                                    </div>
-                                    <div className="settings-detail-stat settings-detail-stat--chat">
-                                        <MessageSquare size={22} />
-                                        <span>{lang === 'en' ? 'Last' : '最后互动'}</span>
-                                        <strong>{formatCompactInteraction(selectedSettingsContact)}</strong>
                                     </div>
                                 </div>
                                 <div className="settings-character-description">
@@ -1372,7 +1546,7 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                                 {mainModels.length > 0 && (
                                     <select defaultValue="" onChange={e => setEditingContact({ ...editingContact, model_name: e.target.value })}
                                         style={{ marginTop: '4px', padding: '6px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}>
-                                        <option value="" disabled>-- 选择模型 --</option>
+                                        <option value="" disabled>{lang === 'en' ? '-- Select model --' : '-- 选择模型 --'}</option>
                                         {mainModels.map(m => <option key={m} value={m}>{m}</option>)}
                                     </select>
                                 )}
@@ -1384,14 +1558,14 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                         </div>
                         <div style={{ display: 'flex', gap: '20px' }}>
                             <label style={{ flex: 1, display: 'flex', flexDirection: 'column', fontSize: '14px', color: '#666' }}>
-                                Min Interval (mins):
+                                {lang === 'en' ? 'Min Interval (mins)' : '最小间隔（分钟）'}:
                                 <div className="autopulse-interval-control" style={{ marginTop: '5px' }}>
                                     <input type="range" min="0.1" max="120" step="0.1" value={editingContact.interval_min || 0.1} onChange={(e) => setEditingContact({ ...editingContact, interval_min: parseFloat(e.target.value) })} style={{ width: '100%', backgroundSize: `${((editingContact.interval_min || 0.1) - 0.1) * 100 / (120 - 0.1)}% 100%` }} />
                                     <input type="number" step="0.1" value={editingContact.interval_min || 0} onChange={(e) => setEditingContact({ ...editingContact, interval_min: parseFloat(e.target.value) })} className="autopulse-number-input" />
                                 </div>
                             </label>
                             <label style={{ flex: 1, display: 'flex', flexDirection: 'column', fontSize: '14px', color: '#666' }}>
-                                Max Interval (mins):
+                                {lang === 'en' ? 'Max Interval (mins)' : '最大间隔（分钟）'}:
                                 <div className="autopulse-interval-control" style={{ marginTop: '5px' }}>
                                     <input type="range" min="0.1" max="120" step="0.1" value={editingContact.interval_max || 0.1} onChange={(e) => setEditingContact({ ...editingContact, interval_max: parseFloat(e.target.value) })} style={{ width: '100%', backgroundSize: `${((editingContact.interval_max || 0.1) - 0.1) * 100 / (120 - 0.1)}% 100%` }} />
                                     <input type="number" step="0.1" value={editingContact.interval_max || 0} onChange={(e) => setEditingContact({ ...editingContact, interval_max: parseFloat(e.target.value) })} className="autopulse-number-input" />
@@ -1427,7 +1601,7 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                         </div>
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px', padding: '10px', background: '#f5f7fa', borderRadius: '4px', border: '1px solid #e2e8f0' }}>
-                            <strong style={{ fontSize: '13px', color: '#4a5568' }}>Memory Extraction AI (Small Model)</strong>
+                            <strong style={{ fontSize: '13px', color: '#4a5568' }}>{lang === 'en' ? 'Memory Extraction AI (Small Model)' : '记忆提取 AI（小模型）'}</strong>
                             <label style={{ display: 'flex', flexDirection: 'column', fontSize: '14px', color: '#666' }}>
                                 {t('Memory API Endpoint')}:
                                 <input type="text" value={editingContact.memory_api_endpoint || ''} onChange={(e) => setEditingContact({ ...editingContact, memory_api_endpoint: e.target.value })} placeholder="e.g. https://api.openai.com/v1" style={{ padding: '8px', marginTop: '5px', border: '1px solid #ddd', borderRadius: '4px' }} />
@@ -1438,19 +1612,19 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                                 {renderSecretStatus('memory_api_key')}
                             </label>
                             <label style={{ display: 'flex', flexDirection: 'column', fontSize: '14px', color: '#666' }}>
-                                Memory Model Name:
+                                {lang === 'en' ? 'Memory Model Name' : '记忆模型名称'}:
                                 <div style={{ display: 'flex', gap: '5px', marginTop: '5px' }}>
                                     <input type="text" value={editingContact.memory_model_name || ''} onChange={(e) => setEditingContact({ ...editingContact, memory_model_name: e.target.value })} placeholder="e.g. gpt-4o-mini" style={{ flex: 1, padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                                     <button type="button" onClick={() => fetchModels(editingContact.memory_api_endpoint, editingContact.memory_api_key, setMemModels, setMemModelFetching, setMemModelError, { characterId: editingContact.id, scope: 'memory', hasSavedKey: editingContact.memory_api_key_configured && !editingContact.memory_api_key_clear })} disabled={memModelFetching}
                                         style={{ padding: '6px 10px', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                        <RefreshCw size={13} /> {memModelFetching ? '...' : '拉取'}
+                                        <RefreshCw size={13} /> {memModelFetching ? '...' : t('Fetch Models')}
                                     </button>
                                 </div>
                                 {memModelError && <span style={{ color: 'var(--danger)', fontSize: '12px' }}>{memModelError}</span>}
                                 {memModels.length > 0 && (
                                     <select defaultValue="" onChange={e => setEditingContact({ ...editingContact, memory_model_name: e.target.value })}
                                         style={{ marginTop: '4px', padding: '6px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}>
-                                        <option value="" disabled>-- 选择模型 --</option>
+                                        <option value="" disabled>{lang === 'en' ? '-- Select model --' : '-- 选择模型 --'}</option>
                                         {memModels.map(m => <option key={m} value={m}>{m}</option>)}
                                     </select>
                                 )}
@@ -1494,9 +1668,10 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                                     }}
                                     style={{ padding: '8px', marginTop: '5px', border: '1px solid #ddd', borderRadius: '4px' }}
                                 >
-                                    {TTS_PROVIDERS.map(provider => (
-                                        <option key={provider.id} value={provider.id}>{provider.label}</option>
-                                    ))}
+                                    {TTS_PROVIDERS.map(provider => {
+                                        const providerLabel = translateTtsProviderConfig(provider, lang).label;
+                                        return <option key={provider.id} value={provider.id}>{providerLabel}</option>;
+                                    })}
                                 </select>
                             </label>
 
@@ -1506,7 +1681,7 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                                     <textarea
                                         value={editingContact.tts_api_key || ''}
                                         onChange={(e) => updateEditingSecret('tts_api_key', e.target.value)}
-                                        placeholder={getSecretPlaceholder(editingContact, 'tts_api_key', 'SecretId 这里粘贴第一行\nSecretKey 这里粘贴第二行')}
+                                        placeholder={getSecretPlaceholder(editingContact, 'tts_api_key', lang === 'en' ? 'Paste SecretId on the first line\nPaste SecretKey on the second line' : 'SecretId 这里粘贴第一行\nSecretKey 这里粘贴第二行')}
                                         style={{ padding: '8px', marginTop: '5px', border: '1px solid #ddd', borderRadius: '4px', minHeight: '58px', resize: 'vertical', fontFamily: 'monospace', fontSize: '12px' }}
                                     />
                                 ) : (
@@ -1565,7 +1740,15 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                                             </div>
                                             {editingContact.tts_provider === 'tencent' && (
                                                 <div style={{ fontSize: '12px', color: tencentVoiceError ? '#b91c1c' : '#64748b', marginTop: '4px' }}>
-                                                    {tencentVoiceError ? `音色列表拉取失败，已使用内置列表：${tencentVoiceError}` : (tencentVoiceSource ? `音色列表：${tencentVoiceSource === 'tencent-docs' ? '腾讯官方文档' : tencentVoiceSource}` : '')}
+                                                    {tencentVoiceError
+                                                        ? (lang === 'en'
+                                                            ? `Voice list fetch failed; built-in list is being used: ${tencentVoiceError}`
+                                                            : `音色列表拉取失败，已使用内置列表：${tencentVoiceError}`)
+                                                        : (tencentVoiceSource
+                                                            ? (lang === 'en'
+                                                                ? `Voice list: ${tencentVoiceSourceLabel(tencentVoiceSource)}`
+                                                                : `音色列表：${tencentVoiceSourceLabel(tencentVoiceSource)}`)
+                                                            : '')}
                                                 </div>
                                             )}
                                             {(customTtsVoiceOpen || isCustomTtsValue(editingContact.tts_voice, getEditingTtsProviderConfig(editingContact.tts_provider).voiceOptions)) && (
@@ -1645,7 +1828,7 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                                                 'Content-Type': 'application/json'
                                             },
                                             body: JSON.stringify({
-                                                text: `你好，我是${editingContact.name || '这个角色'}。这是一段语音试听。`,
+                                                text: ttsPreviewText(editingContact.name),
                                                 config: {
                                                     tts_provider: editingContact.tts_provider || 'tencent',
                                                     tts_api_key: editingContact.tts_api_key || '',
@@ -1711,23 +1894,23 @@ function SettingsPanel({ apiUrl, contacts: parentContacts = [], onCharactersUpda
                         </div>
 
                         <label style={{ display: 'flex', flexDirection: 'column', fontSize: '14px', color: '#666', marginTop: '10px' }}>
-                            Persona (Prompt Info):
+                            {lang === 'en' ? 'Persona (Prompt Info)' : '角色设定（Prompt 信息）'}:
                             <textarea value={editingContact.persona || ''} onChange={(e) => setEditingContact({ ...editingContact, persona: e.target.value })} style={{ padding: '8px', marginTop: '5px', border: '1px solid #ddd', borderRadius: '4px', minHeight: '80px', resize: 'vertical' }} />
                         </label>
 
                         <label style={{ display: 'flex', flexDirection: 'column', fontSize: '14px', color: '#666', marginTop: '10px' }}>
-                            System Guidelines (Core Rules & Tags):
+                            {lang === 'en' ? 'System Guidelines (Core Rules & Tags)' : '系统准则（核心规则与标签）'}:
                             <textarea
                                 value={editingContact.system_prompt || ''}
                                 onChange={(e) => setEditingContact({ ...editingContact, system_prompt: e.target.value })}
-                                placeholder="Leave blank to use default system guidelines."
+                                placeholder={lang === 'en' ? 'Leave blank to use default system guidelines.' : '留空则使用默认系统准则。'}
                                 style={{ padding: '8px', marginTop: '5px', border: '1px solid #ddd', borderRadius: '4px', minHeight: '120px', resize: 'vertical', fontFamily: 'monospace', fontSize: '12px' }}
                             />
                         </label>
 
                         <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '10px' }}>
-                            <button onClick={() => setEditingContact(null)} style={{ padding: '8px 16px', background: '#f0f0f0', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Cancel</button>
-                            <button onClick={handleSaveContact} style={{ padding: '8px 16px', background: 'var(--accent-color)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Save Settings</button>
+                            <button onClick={() => setEditingContact(null)} style={{ padding: '8px 16px', background: '#f0f0f0', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>{lang === 'en' ? 'Cancel' : '取消'}</button>
+                            <button onClick={handleSaveContact} style={{ padding: '8px 16px', background: 'var(--accent-color)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>{lang === 'en' ? 'Save Settings' : '保存设置'}</button>
                         </div>
                     </div>
                 </div>

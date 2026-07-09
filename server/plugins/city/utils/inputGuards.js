@@ -27,6 +27,9 @@ const MAX_CITY_CONFIG_MULTIPLIER = 100;
 const MAX_CITY_LOG_QUERY_LIMIT = 10000;
 const MAX_CITY_ANNOUNCEMENT_QUERY_LIMIT = 200;
 
+const CITY_WEATHER_PRESETS = new Set(['sunny', 'cloudy', 'rainy', 'windy', 'foggy', 'stormy']);
+const CITY_WEATHER_INTENSITIES = new Set(['light', 'comfortable', 'heavy']);
+
 const BOOLEAN_CONFIG_KEYS = new Set([
     'dlc_enabled',
     'city_actions_paused',
@@ -56,6 +59,33 @@ const NUMBER_CONFIG_RANGES = {
 
 function hasProvidedValue(value) {
     return value !== undefined && value !== null && String(value).trim() !== '';
+}
+
+function normalizeCityWeatherPreset(value) {
+    if (!hasProvidedValue(value)) return '';
+    const raw = String(value || '').trim();
+    const text = raw.toLowerCase();
+    const compact = text.replace(/[\s_-]+/g, '');
+    if (CITY_WEATHER_PRESETS.has(compact)) return compact;
+    if (/雷暴|雷雨|闪电|暴风雨|storm|thunder|lightning/.test(text)) return 'stormy';
+    if (/晴|晴天|晴朗|艳阳|sunny|sun|clear/.test(text)) return 'sunny';
+    if (/多云|阴天|阴云|云|cloud|overcast/.test(text)) return 'cloudy';
+    if (/小雨|阵雨|中雨|大雨|暴雨|降雨|雨|rain|drizzle|shower/.test(text)) return 'rainy';
+    if (/微风|大风|强风|阵风|风|wind|breeze|gust/.test(text)) return 'windy';
+    if (/大雾|薄雾|雾|fog|mist|haze/.test(text)) return 'foggy';
+    return '';
+}
+
+function normalizeCityWeatherIntensity(value) {
+    if (!hasProvidedValue(value)) return '';
+    const raw = String(value || '').trim();
+    const text = raw.toLowerCase();
+    const compact = text.replace(/[\s_-]+/g, '');
+    if (CITY_WEATHER_INTENSITIES.has(compact)) return compact;
+    if (/暴|强|重|大|浓|厚|剧烈|heavy|strong|severe|dense|high/.test(text)) return 'heavy';
+    if (/轻|小|微|薄|淡|light|mild|soft|low/.test(text)) return 'light';
+    if (/舒适|适中|中等|普通|稳定|柔和|comfortable|moderate|normal|medium/.test(text)) return 'comfortable';
+    return '';
 }
 
 function normalizePositiveMoney(value, max = MAX_CITY_GOLD_GRANT) {
@@ -183,6 +213,12 @@ function normalizeCityEventEffect(value = {}) {
     const district = String(effect.district || '').trim();
     if (district) normalized.district = district;
 
+    const weatherPreset = normalizeCityWeatherPreset(effect.weather_preset ?? effect.weather ?? effect.preset);
+    if (weatherPreset) normalized.weather_preset = weatherPreset;
+
+    const weatherIntensity = normalizeCityWeatherIntensity(effect.weather_intensity ?? effect.intensity ?? effect.severity);
+    if (weatherIntensity) normalized.weather_intensity = weatherIntensity;
+
     if (hasProvidedValue(effect.cal_bonus)) {
         const calBonus = normalizeOptionalBoundedInteger(effect.cal_bonus, 0, -MAX_CITY_EVENT_CAL_BONUS, MAX_CITY_EVENT_CAL_BONUS);
         if (calBonus === null) return null;
@@ -210,10 +246,22 @@ function normalizeCityEventPayload(data = {}) {
     const durationHours = normalizeOptionalBoundedInteger(data.duration_hours, 24, 1, MAX_CITY_EVENT_DURATION_HOURS);
     const effect = normalizeCityEventEffect(data.effect ?? data.effect_json ?? {});
     if (durationHours === null || effect === null) return null;
+    const type = String(data.type || data.event_type || 'random').trim() || 'random';
+    const finalEffect = { ...effect };
+    if (type.toLowerCase() === 'weather') {
+        const weatherText = `${data.title || ''} ${data.description || ''} ${data.emoji || ''}`;
+        finalEffect.weather_preset = normalizeCityWeatherPreset(
+            finalEffect.weather_preset ?? data.weather_preset ?? data.weather ?? data.preset ?? weatherText
+        ) || 'cloudy';
+        finalEffect.weather_intensity = normalizeCityWeatherIntensity(
+            finalEffect.weather_intensity ?? data.weather_intensity ?? data.intensity ?? data.severity ?? weatherText
+        ) || 'comfortable';
+    }
     return {
         ...data,
-        effect,
-        target_district: String(data.target_district || effect.district || '').trim(),
+        type,
+        effect: finalEffect,
+        target_district: String(data.target_district || finalEffect.district || '').trim(),
         duration_hours: durationHours
     };
 }
@@ -344,6 +392,8 @@ module.exports = {
     normalizeCityQuestCaloriesReward,
     normalizeCityQuestCompletionTarget,
     normalizeCityQuestPayload,
+    normalizeCityWeatherPreset,
+    normalizeCityWeatherIntensity,
     normalizeCityEventEffect,
     normalizeCityEventPayload,
     normalizeCityCatalogItemPayload,

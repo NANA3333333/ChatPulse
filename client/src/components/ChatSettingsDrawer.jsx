@@ -1,5 +1,5 @@
 ﻿import React, { useMemo, useState, useEffect } from 'react';
-import { X, Trash2, Settings, RefreshCw, Download, Upload } from 'lucide-react';
+import { Trash2, Settings, RefreshCw, Download, Upload } from 'lucide-react';
 import AvatarWithFrame from './AvatarWithFrame';
 import Scheduler from './Scheduler';
 import { useLanguage } from '../LanguageContext';
@@ -363,11 +363,11 @@ function ChatSettingsDrawer({ contact, contacts = [], apiUrl, onClose, onClearHi
             if (data.success) {
                 setTodaySchedule(data.schedule || []);
             } else {
-                alert('生成失败: ' + (data.error || '未知错误'));
+                alert((lang === 'en' ? 'Generation failed: ' : '生成失败：') + (data.error || (lang === 'en' ? 'Unknown error' : '未知错误')));
             }
         } catch (err) {
             console.error('Failed to force generate schedule', err);
-            alert('网络请求失败');
+            alert(lang === 'en' ? 'Network request failed.' : '网络请求失败。');
         } finally {
             setIsRetryingSchedule(false);
         }
@@ -429,7 +429,7 @@ function ChatSettingsDrawer({ contact, contacts = [], apiUrl, onClose, onClearHi
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok || !data.success) {
-                alert((lang === 'en' ? 'Import failed: ' : '导入失败：') + (data.error || 'Unknown error'));
+                alert((lang === 'en' ? 'Import failed: ' : '导入失败：') + (data.error || (lang === 'en' ? 'Unknown error' : '未知错误')));
                 return;
             }
             const counts = data.imported || {};
@@ -484,7 +484,7 @@ function ChatSettingsDrawer({ contact, contacts = [], apiUrl, onClose, onClearHi
             const data = await res.json();
             await refreshStats();
             if (!res.ok || !data.success) {
-                alert((lang === 'en' ? 'Memory sweep failed: ' : '长时记忆整理失败：') + (data.error || 'Unknown error'));
+                alert((lang === 'en' ? 'Memory sweep failed: ' : '长时记忆整理失败：') + (data.error || (lang === 'en' ? 'Unknown error' : '未知错误')));
                 return;
             }
             alert(lang === 'en'
@@ -511,7 +511,7 @@ function ChatSettingsDrawer({ contact, contacts = [], apiUrl, onClose, onClearHi
             });
             const data = await res.json();
             if (!res.ok || !data.success) {
-                alert((lang === 'en' ? 'Reset failed: ' : '重置失败：') + (data.error || 'Unknown error'));
+                alert((lang === 'en' ? 'Reset failed: ' : '重置失败：') + (data.error || (lang === 'en' ? 'Unknown error' : '未知错误')));
                 return;
             }
             await refreshStats();
@@ -607,9 +607,6 @@ function ChatSettingsDrawer({ contact, contacts = [], apiUrl, onClose, onClearHi
                 <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <Settings size={18} /> {t('Chat Settings')}
                 </h3>
-                <button className="icon-btn" onClick={onClose}>
-                    <X size={20} />
-                </button>
             </div>
             <div className="memory-content" style={{ padding: '0' }}>
                 <div style={{ backgroundColor: '#fff', padding: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center', borderBottom: '1px solid #eee' }}>
@@ -626,8 +623,6 @@ function ChatSettingsDrawer({ contact, contacts = [], apiUrl, onClose, onClearHi
                         {contact.persona ? `${contact.persona.substring(0, 50)}...` : (lang === 'en' ? 'No persona set.' : '未设置 Persona。')}
                     </div>
                 </div>
-
-                <Scheduler apiUrl={apiUrl} contacts={contacts} contact={contact} variant="drawer" />
 
                 <div style={{ marginTop: '10px', backgroundColor: '#fff', padding: '15px', borderTop: '1px solid #eee', borderBottom: '1px solid #eee' }}>
                     <div style={{ fontSize: '12px', color: '#999', marginBottom: '15px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
@@ -648,7 +643,7 @@ function ChatSettingsDrawer({ contact, contacts = [], apiUrl, onClose, onClearHi
                         <span style={{ fontWeight: '500', color: contact.pressure_level > 2 ? 'var(--danger)' : '#333' }}>{contact.pressure_level}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px' }}>
-                        <span>Status</span>
+                        <span>{lang === 'en' ? 'Status' : '状态'}</span>
                         <span style={{ fontWeight: '500', color: contact.is_blocked ? 'var(--danger)' : 'var(--accent-color)' }}>
                             {contact.is_blocked ? (lang === 'en' ? 'Blocked You' : '已拉黑') : (lang === 'en' ? 'Active' : '正常')}
                         </span>
@@ -973,7 +968,7 @@ function ChatSettingsDrawer({ contact, contacts = [], apiUrl, onClose, onClearHi
                                     {expandedHistory[rel.targetId] && (
                                         <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                             {!impressionHistories[rel.targetId] ? (
-                                                <div style={{ fontSize: '11px', color: '#ccc' }}>Loading...</div>
+                                                <div style={{ fontSize: '11px', color: '#ccc' }}>{lang === 'en' ? 'Loading...' : '加载中...'}</div>
                                             ) : impressionHistories[rel.targetId].length === 0 ? (
                                                 <div style={{ fontSize: '11px', color: '#ccc' }}>{lang === 'en' ? 'No detailed history.' : '暂无详细历史。'}</div>
                                             ) : (
@@ -1207,6 +1202,10 @@ function ChatSettingsDrawer({ contact, contacts = [], apiUrl, onClose, onClearHi
                                 : (lang === 'en' ? 'Clear Negative Physical State' : '一键清空负面生理状态')}
                         </button>
                     </div>
+                </div>
+
+                <div className="chat-settings-scheduler-section">
+                    <Scheduler apiUrl={apiUrl} contacts={contacts} contact={contact} variant="drawer" />
                 </div>
 
                 <div style={{ marginTop: '10px', backgroundColor: '#fff', borderTop: '1px solid #eee', borderBottom: '1px solid #eee' }}>

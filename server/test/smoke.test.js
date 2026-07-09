@@ -57,6 +57,194 @@ test('settings backup download does not put auth tokens in URLs', () => {
     assert.match(settingsPanel, /Authorization['"]?\s*:\s*`Bearer \$\{localStorage\.getItem\('cp_token'\) \|\| ''\}`/, 'backup fetch must send the cp_token authorization header');
 });
 
+test('local startup treats enabled Qdrant as required', () => {
+    const devScript = readRepoFile('scripts', 'dev.js');
+    const stackScript = readRepoFile('scripts', 'start-stack.ps1');
+    const serverIndex = readRepoFile('server', 'index.js');
+    const desktopMain = readRepoFile('desktop', 'main.cjs');
+    const doctor = readRepoFile('scripts', 'doctor.js');
+
+    assert.match(devScript, /async function startQdrantIfNeeded\(\)[\s\S]*QDRANT_ENABLED=1 but Qdrant is not reachable[\s\S]*shutdown\(1\)/, 'npm run dev should abort when enabled Qdrant is unreachable');
+    assert.match(devScript, /const qdrantState = await startQdrantIfNeeded\(\)[\s\S]*const serverEnv = qdrantState\.env \|\| \{\}[\s\S]*startNodeProcess\('server'[\s\S]*serverEnv/, 'dev startup should check or launch Qdrant before starting the backend');
+    assert.match(stackScript, /\$qdrantDisabled = "\$env:QDRANT_ENABLED" -match[\s\S]*Qdrant startup failed; aborting stack startup[\s\S]*exit 1/, 'stack startup should fail when Qdrant is enabled but cannot start');
+    assert.doesNotMatch(stackScript, /local Qdrant failed after retry; backend will use vectra fallback/, 'stack startup must not silently convert Qdrant startup failure into fallback mode');
+    assert.match(serverIndex, /function isQdrantRequiredForStartup\(\)[\s\S]*QDRANT_REQUIRED[\s\S]*async function assertQdrantStartupReady\(\)/, 'backend should have a Qdrant startup preflight');
+    assert.match(serverIndex, /await assertQdrantStartupReady\(\)[\s\S]*server\.listen\(PORT/, 'backend should run the Qdrant preflight before listening');
+    assert.match(desktopMain, /const qdrantExplicitlyDisabled =[\s\S]*QDRANT_ENABLED[\s\S]*async function startQdrant\(\)/, 'desktop startup should only allow fallback when Qdrant is explicitly disabled');
+    assert.match(desktopMain, /QDRANT_ENABLED=1 but the Qdrant binary was not found[\s\S]*QDRANT_ENABLED=1 but Qdrant did not become reachable/, 'desktop startup should fail when enabled Qdrant cannot start');
+    assert.doesNotMatch(desktopMain, /return \{ enabled: false, url: '', reason: 'qdrant (binary not found|startup timed out)' \}/, 'desktop startup must not silently convert Qdrant startup failure into fallback mode');
+    assert.match(doctor, /Qdrant is required by default[\s\S]*QDRANT_ENABLED=0 only when local memory fallback is intentional/, 'doctor output should match the strict Qdrant startup policy');
+    assert.doesNotMatch(doctor, /Fresh clones can still run without Qdrant|vectra fallback will be used/, 'doctor should not describe enabled Qdrant failures as normal fallback startup');
+});
+
+test('settings profile last interaction uses the latest user-authored message', () => {
+    const settingsPanel = readRepoFile('client', 'src', 'components', 'SettingsPanel.jsx');
+    const app = readRepoFile('client', 'src', 'App.jsx');
+    const dbSource = readRepoFile('server', 'db.js');
+    const indexSource = readRepoFile('server', 'index.js');
+
+    assert.match(dbSource, /MAX\(CASE WHEN role = 'user' AND timestamp > 0 THEN timestamp END\) AS last_user_message_at/, 'message stats should expose the latest user message timestamp');
+    assert.match(indexSource, /last_user_message_at:\s*Number\(messageStats\.last_user_message_at \|\| c\.last_user_msg_time \|\| 0\)/, 'character API should return the user-authored interaction timestamp');
+    assert.match(settingsPanel, /const getPlayerInteractionTimestamp = \(character\) => normalizeTimestampMs\(\s*character\?\.last_user_message_at \|\| character\?\.last_user_msg_time\s*\)/, 'settings should compute the player interaction timestamp from user-authored messages only');
+    assert.match(settingsPanel, /const latestPlayerInteractionCharacter = contacts\.reduce\(\(latest, item\) => \{[\s\S]*getPlayerInteractionTimestamp\(item\)[\s\S]*getPlayerInteractionTimestamp\(latest\)/, 'settings profile card should rank contacts by player interaction time');
+    assert.match(settingsPanel, /formatCompactInteractionTime\(latestPlayerInteractionAt/, 'settings profile card should render the user-authored interaction time');
+    assert.doesNotMatch(settingsPanel, /const latestInteractionCharacter = contacts\.reduce\(\(latest, item\) => \{[\s\S]*item\.last_message_at \|\| item\.last_user_msg_time/, 'settings profile card must not rank player interaction by incoming character replies');
+    assert.match(app, /last_user_message_at:\s*messageTimestamp/, 'live user messages should refresh the local player interaction timestamp');
+    assert.match(indexSource, /if \(charObj\.is_blocked\) \{[\s\S]*db\.updateCharacter\(characterId, \{ last_user_msg_time: msgTs \}\)/, 'blocked user messages should still refresh last_user_msg_time');
+    assert.match(indexSource, /pressure_level:\s*0,\s*[\r\n\s]*last_user_msg_time:\s*msgTs/, 'transfer messages should refresh last_user_msg_time');
+});
+
+test('settings profile uses project usage days instead of relationship aggregates', () => {
+    const settingsPanel = readRepoFile('client', 'src', 'components', 'SettingsPanel.jsx');
+    const indexSource = readRepoFile('server', 'index.js');
+
+    assert.doesNotMatch(settingsPanel, /averageAffinity|Average Affinity|好感度平均|interactedCharacterCount|Interacted Characters|互动角色/, 'profile stats should not show relationship aggregate stats');
+    assert.match(settingsPanel, /function getLocalFallbackProfile\(\)[\s\S]*created_at: Number\(localUser\?\.created_at \|\| 0\)/, 'settings fallback profile should preserve local account creation time');
+    assert.match(settingsPanel, /const getProjectUsageDays = \(value\) => \{[\s\S]*Math\.floor\(\(Date\.now\(\) - startedAt\) \/ day\) \+ 1/, 'settings should compute inclusive days used from project start time');
+    assert.match(settingsPanel, /Days Used[\s\S]*已使用[\s\S]*projectUsageDays\} \{lang === 'en' \? \(projectUsageDays === 1 \? 'day' : 'days'\) : '天'\}/, 'profile stats should render project usage days');
+    assert.match(indexSource, /created_at:\s*Number\(req\.user\.created_at \|\| 0\)/, 'user profile API should return account creation time');
+});
+
+test('settings character rows label main and auxiliary API names', () => {
+    const settingsPanel = readRepoFile('client', 'src', 'components', 'SettingsPanel.jsx');
+    const appCss = readRepoFile('client', 'src', 'App.css');
+
+    assert.match(settingsPanel, /const formatApiSourceName = \(endpoint\) => \{[\s\S]*new URL\(parseTarget\)[\s\S]*if \(lower\.includes\('openai'\)\) return 'OpenAI'/, 'settings should derive readable API source names from endpoints');
+    assert.match(settingsPanel, /const getCharacterApiBadge = \(character, scope\) => \{[\s\S]*scope === 'memory'[\s\S]*character\?\.memory_model_name[\s\S]*character\?\.model_name/, 'settings should build badges for both main and auxiliary API models');
+    assert.match(settingsPanel, /const characterApiBadges = \[[\s\S]*getCharacterApiBadge\(c, 'main'\)[\s\S]*getCharacterApiBadge\(c, 'memory'\)/, 'each character row should build main and auxiliary API badges');
+    assert.match(settingsPanel, /lang === 'en' \? 'Aux API' : '辅助 API'[\s\S]*lang === 'en' \? 'Main API' : '主 API'/, 'character rows should label auxiliary and main APIs');
+    assert.match(settingsPanel, /settings-character-main[\s\S]*settings-character-api-badges[\s\S]*characterApiBadges\.map/, 'character rows should render API badges inside the row body');
+    assert.doesNotMatch(settingsPanel, /selectedCharacterApiBadges/, 'API badges should not be tied only to the selected detail panel');
+    assert.match(appCss, /settings-character-api-badge[\s\S]*text-overflow: ellipsis/, 'API badges should fit long API or model names');
+    assert.match(appCss, /settings-character-api-badge\.is-configured\s*\{[\s\S]*color:\s*var\(--cmd-blue\) !important/, 'configured API badges should use the settings blue color');
+    assert.match(appCss, /settings-command-workspace\s*\{[\s\S]*width:\s*100% !important[\s\S]*clamp\(560px,\s*31vw,\s*640px\)/, 'settings detail panel should be wider than the narrow original while preserving the original management/detail proportions');
+    assert.match(appCss, /settings-command-characters-card \.settings-character-row\s*\{[\s\S]*grid-template-columns:\s*74px minmax\(220px,\s*1fr\) minmax\(360px,\s*440px\) 112px !important/, 'character rows should keep the original single-line avatar, info, stats, and action layout');
+    assert.doesNotMatch(appCss, /settings-command-characters-card \.settings-character-row\s*\{[^}]*grid-template-rows:\s*auto auto/, 'character rows should not use the temporary two-line layout');
+    assert.match(appCss, /settings-character-api-badge\s*\{[\s\S]*grid-template-columns:\s*auto minmax\(0,\s*1fr\)/, 'API badges should keep the label visible and ellipsize the value tail');
+    assert.match(appCss, /settings-character-api-badges[\s\S]*flex-wrap:\s*nowrap !important/, 'character row API badges should stay inside one row');
+    assert.match(appCss, /settings-command-characters-card \.settings-character-row > \.avatar-frame[\s\S]*--avatar-size:\s*56px !important[\s\S]*transform:\s*translateX\(2px\)/, 'character management avatars should be larger and only slightly shifted right');
+    assert.match(appCss, /settings-command-detail-card \.settings-character-detail-head \.avatar-frame\.avatar-frame--has-asset[\s\S]*transform:\s*translateY\(-6px\)/, 'character detail avatar should sit slightly higher');
+    assert.match(appCss, /settings-character-pill\s*\{[\s\S]*flex-direction:\s*row !important/, 'character row stats should keep label and value on one line');
+    assert.match(appCss, /settings-character-pill strong\s*\{[\s\S]*overflow:\s*hidden[\s\S]*text-overflow:\s*ellipsis/, 'character row stat values should not overlap adjacent buttons');
+    assert.match(appCss, /settings-detail-stat\s*\{[\s\S]*display:\s*flex !important[\s\S]*flex-direction:\s*row !important/, 'detail stats should keep label and value on one line');
+    assert.match(appCss, /app-container\.tab-settings \.private-chat-floor-decor[\s\S]*display:\s*none !important/, 'settings should not be covered by chat foreground decorations');
+});
+
+test('memory library prompt preview stays compact', () => {
+    const memoryPanel = readRepoFile('client', 'src', 'components', 'MemoryLibraryPanel.jsx');
+    const appCss = readRepoFile('client', 'src', 'App.css');
+
+    assert.match(memoryPanel, /className="memory-lib-prompt-window compact"/, 'memory prompt preview should opt into compact sizing');
+    assert.match(appCss, /\.memory-lib-prompt-window textarea\s*\{[\s\S]*min-height:\s*340px/, 'full prompt textarea default remains available for non-compact windows');
+    assert.match(appCss, /\.memory-lib-prompt-window\.compact textarea\s*\{[\s\S]*height:\s*108px[\s\S]*min-height:\s*88px[\s\S]*max-height:\s*30vh/, 'compact prompt preview should not reserve a large empty area');
+    assert.match(appCss, /\.memory-lib-prompt-window\.compact textarea\s*\{[\s\S]*white-space:\s*pre-wrap/, 'compact prompt preview should wrap summary text instead of forcing horizontal space');
+});
+
+test('memory library does not render a large hero card header', () => {
+    const memoryPanel = readRepoFile('client', 'src', 'components', 'MemoryLibraryPanel.jsx');
+
+    assert.doesNotMatch(memoryPanel, /memory-library-header command-page-hero memory-command-hero/, 'memory library should start with the content area instead of a large hero card');
+    assert.doesNotMatch(memoryPanel, /Classified Memories & Forgetting Curve|分类记忆与遗忘曲线/, 'memory library should not render the retired large title copy');
+    assert.match(memoryPanel, /memory-lib-section-title[\s\S]*Memory Engine Status[\s\S]*memory-lib-button compact ghost[\s\S]*refreshAll/, 'refresh should remain available inside the content controls');
+});
+
+test('admin dashboard side rail bottom aligns with the main column', () => {
+    const adminClient = readRepoFile('client', 'src', 'components', 'AdminDashboard.jsx');
+    const appCss = readRepoFile('client', 'src', 'App.css');
+
+    assert.match(adminClient, /admin-command-workspace[\s\S]*admin-command-rail[\s\S]*admin-command-main/, 'admin dashboard should keep the rail and main column in the same grid workspace');
+    assert.match(appCss, /\.admin-command-workspace\s*\{[\s\S]*align-items:\s*stretch/, 'admin workspace should stretch grid items so both columns share a bottom edge');
+    assert.match(appCss, /\.admin-command-rail,\s*[\r\n]+\.admin-command-main\s*\{[\s\S]*height:\s*100%/, 'admin rail and main column should fill the stretched grid row');
+    assert.match(appCss, /\.admin-command-announcement-card\s*\{[\s\S]*flex:\s*1 1 auto/, 'announcement card should fill the remaining rail height');
+    assert.match(appCss, /@media \(max-width:\s*1180px\)[\s\S]*\.admin-command-announcement-card\s*\{[\s\S]*flex:\s*0 0 auto/, 'single-column admin layout should return announcement card to natural height');
+});
+
+test('commercial street editor keeps low-frequency controls behind advanced tools', () => {
+    const panel = readRepoFile('client', 'src', 'plugins', 'pixelWorld', 'CommercialStreetPanel.jsx');
+    const editor = readRepoFile('client', 'src', 'plugins', 'pixelWorld', 'CommercialStreetEditor.jsx');
+    const css = readRepoFile('client', 'src', 'plugins', 'pixelWorld', 'PixelWorldPanel.css');
+    const toolbarStart = editor.indexOf('<div className="pixel-world-editor-toolbar">');
+    const toolbarEnd = editor.indexOf('<div className={`pixel-world-editor-body', toolbarStart);
+    assert.notEqual(toolbarStart, -1, 'commercial editor toolbar should exist');
+    assert.notEqual(toolbarEnd, -1, 'commercial editor toolbar should end before the editor body');
+    assert.doesNotMatch(panel, /pixel-world-header|Pixel Street|像素街区|Street scene \/ buildings \/ character movement|街景 \/ 建筑 \/ 小人行走/, 'commercial street editor should not render the large page header above the toolbar');
+
+    const toolbarBlock = editor.slice(toolbarStart, toolbarEnd);
+    const bodyStart = toolbarEnd;
+    const bodyEnd = editor.indexOf('{renderBehaviorTreePanel()}', bodyStart);
+    assert.notEqual(bodyEnd, -1, 'commercial editor body should render the behavior tree panel');
+    const bodyBlock = editor.slice(bodyStart, bodyEnd);
+    const primaryStart = toolbarBlock.indexOf('pixel-world-toolbar-section--primary');
+    const primaryEnd = toolbarBlock.indexOf('</div>', primaryStart);
+    assert.notEqual(primaryStart, -1, 'toolbar should have a primary section');
+    assert.notEqual(primaryEnd, -1, 'primary section should close before the advanced controls');
+    const primaryBlock = toolbarBlock.slice(primaryStart, primaryEnd);
+
+    assert.match(primaryBlock, /Control Character[\s\S]*Bind Character[\s\S]*Generate Behavior Tree/, 'primary toolbar should keep only the commercial-street role controls and behavior-tree generation');
+    assert.doesNotMatch(primaryBlock, /Save Layout|View Mode|Auto Travel|Actual Character|Add Character|Spawn Character Sprite|Save Current as Default|Copy JSON|Add Left|Shrink Asset|Delete|Restore Default/, 'deprecated, low-frequency, and edit-only actions should not sit in the primary toolbar');
+    assert.match(editor, /pixel-world-behavior-binding-grid[\s\S]*pixel-world-behavior-legacy-action[\s\S]*addRoleCharacter[\s\S]*Spawn Character Sprite/, 'deprecated character spawning should be folded into the behavior-tree binding area');
+    assert.doesNotMatch(bodyBlock, /pixel-world-inspector/, 'commercial editor body should not keep the selection inspector as a standalone right column');
+    assert.match(bodyBlock, /renderAssetPanel\(\)/, 'commercial editor body should render the asset editor as an on-canvas module');
+    assert.match(editor, /if \(!assetPanelOpen\) return null/, 'asset editing should render nothing by default');
+    assert.match(editor, /if \(behaviorPanelCollapsed\) return null/, 'behavior-tree details should render nothing by default');
+    assert.doesNotMatch(editor, /pixel-world-asset-panel collapsed|pixel-world-behavior-panel collapsed|Open asset editing panel|Expand behavior-tree panel/, 'commercial editor should not show collapsed side-rail buttons by default');
+    assert.equal((editor.match(/setBehaviorPanelCollapsed\(false\)/g) || []).length, 1, 'behavior-tree details should only open from the advanced settings button');
+    assert.match(editor, /renderBehaviorFold\(\s*'selection'[\s\S]*getSelectionFoldSummary\(\)[\s\S]*renderSelectionInspectorContent\(\)/, 'selection and layout JSON should be folded into the behavior tree');
+    assert.match(toolbarBlock, /setAssetPanelOpen\(true\)[\s\S]*setBehaviorPanelCollapsed\(true\)[\s\S]*setBehaviorPanelCollapsed\(false\)[\s\S]*setAssetPanelOpen\(false\)/, 'asset editor and behavior details should open as mutually exclusive modules');
+    assert.match(toolbarBlock, /showAdvancedToolbar[\s\S]*Advanced Settings[\s\S]*pixel-world-toolbar-advanced/, 'toolbar should reveal secondary controls through an advanced settings section');
+    assert.match(toolbarBlock, /pixel-world-toolbar-advanced pixel-world-toolbar-advanced--commercial/, 'commercial advanced settings should use the dedicated flat toolbar layout');
+    assert.match(toolbarBlock, /pixel-world-toolbar-advanced[\s\S]*Save Layout[\s\S]*View Mode[\s\S]*Save Current as Default[\s\S]*Copy JSON[\s\S]*Asset Editor[\s\S]*Behavior Details[\s\S]*Zoom Out[\s\S]*Show Collision[\s\S]*Show Anchors[\s\S]*Show Layers[\s\S]*Auto Travel/, 'advanced settings should hold maintenance, panel, travel, and visibility tools');
+    assert.match(toolbarBlock, /pixel-world-toolbar-section--metrics[\s\S]*WASD controls the current character[\s\S]*pixel-world-toolbar-section--canvas-tools[\s\S]*Zoom Out/, 'commercial status chips should be separated from canvas action buttons');
+    assert.match(toolbarBlock, /canEditLayout \? \([\s\S]*Add Left[\s\S]*Remove Segment[\s\S]*Group Edit[\s\S]*Restore Default/, 'layout editing controls should only render in edit mode');
+    assert.match(toolbarBlock, /canEditLayout && \(groupEditMode \|\| selectedItem\) && \([\s\S]*Shrink Asset[\s\S]*Layer Up[\s\S]*Delete/, 'selected-asset controls should only render after editing is available and a target exists');
+    assert.match(css, /pixel-world-toolbar-section--primary[\s\S]*flex:\s*1 1 auto/, 'primary toolbar should take available space before wrapping');
+    assert.match(css, /pixel-world-toolbar-advanced[\s\S]*flex:\s*1 0 100%/, 'advanced toolbar should occupy its own row when expanded');
+    assert.match(css, /pixel-world-toolbar-advanced--commercial\s*\{[\s\S]*grid-template-columns:\s*repeat\(12,\s*minmax\(0,\s*1fr\)\)/, 'commercial advanced toolbar should use a stable grouped grid');
+    assert.match(css, /pixel-world-toolbar-advanced--commercial \.pixel-world-toolbar-section\s*\{[\s\S]*padding:\s*0[\s\S]*border:\s*0[\s\S]*background:\s*transparent/, 'commercial advanced toolbar should align controls without visual section cards');
+    assert.match(css, /pixel-world-toolbar-advanced--commercial \.pixel-world-toolbar-section--maintenance\s*\{[\s\S]*grid-column:\s*1 \/ span 6[\s\S]*pixel-world-toolbar-advanced--commercial \.pixel-world-toolbar-section--canvas-tools\s*\{[\s\S]*grid-column:\s*7 \/ -1/, 'commercial maintenance and canvas controls should share the first row evenly');
+    assert.match(css, /pixel-world-toolbar-advanced--commercial \.pixel-world-toolbar-section--metrics\s*\{[\s\S]*grid-column:\s*1 \/ span 4[\s\S]*pixel-world-toolbar-advanced--commercial \.pixel-world-toolbar-section--travel\s*\{[\s\S]*grid-column:\s*5 \/ span 4[\s\S]*pixel-world-toolbar-advanced--commercial \.pixel-world-toolbar-section--scale\s*\{[\s\S]*grid-column:\s*9 \/ -1/, 'commercial status, travel, and scale controls should use an even second row');
+    assert.match(css, /pixel-world-toolbar-advanced--commercial \.pixel-world-auto-walk-control\s*\{[\s\S]*display:\s*grid[\s\S]*grid-template-columns:\s*auto minmax\(160px,\s*1fr\) auto auto/, 'auto travel controls should align in a single structured row');
+    assert.match(css, /pixel-world-toolbar-advanced--commercial \.pixel-world-player-scale-control\s*\{[\s\S]*display:\s*grid[\s\S]*grid-template-columns:\s*auto minmax\(72px,\s*1fr\) 58px auto/, 'character size controls should keep label, slider, input, and percent aligned');
+    assert.match(css, /\.pixel-world-editor:not\(\.room-editor\) \.pixel-world-editor-body\.asset-collapsed\.behavior-collapsed\s*\{[\s\S]*grid-template-columns:\s*minmax\(920px,\s*1fr\)/, 'commercial editor should default to only the canvas column');
+    assert.match(css, /\.pixel-world-editor:not\(\.room-editor\) \.pixel-world-editor-body\.asset-open\.behavior-collapsed\s*\{[\s\S]*grid-template-columns:\s*minmax\(920px,\s*1fr\)/, 'asset editor should overlay the canvas instead of adding a column');
+    assert.match(css, /\.pixel-world-editor:not\(\.room-editor\) \.pixel-world-editor-body\.asset-collapsed\.behavior-open\s*\{[\s\S]*grid-template-columns:\s*minmax\(920px,\s*1fr\)/, 'behavior details should overlay the canvas instead of adding a column');
+    assert.match(css, /\.pixel-world-editor:not\(\.room-editor\) \.pixel-world-editor-body > \.pixel-world-asset-panel,[\s\S]*\.pixel-world-editor:not\(\.room-editor\) \.pixel-world-editor-body > \.pixel-world-behavior-panel\s*\{[\s\S]*position:\s*absolute[\s\S]*top:\s*0[\s\S]*bottom:\s*0[\s\S]*z-index:\s*30/, 'commercial asset and behavior modules should overlay the street canvas without resizing it');
+    assert.match(css, /\.pixel-world-editor:not\(\.room-editor\) \.pixel-world-editor-body > \.pixel-world-asset-panel\s*\{[\s\S]*left:\s*0[\s\S]*width:\s*360px/, 'commercial asset editor should cover from the original left-side position with the behavior panel width');
+    assert.match(css, /\.pixel-world-editor:not\(\.room-editor\) \.pixel-world-editor-body > \.pixel-world-behavior-panel\s*\{[\s\S]*right:\s*0[\s\S]*width:\s*360px/, 'commercial behavior details should cover from the original right-side position');
+    assert.match(css, /pixel-world-editor-canvas-wrap\s*\{[\s\S]*position:\s*relative[\s\S]*z-index:\s*0/, 'canvas should form a lower stacking context so overlay modules cover high-z-index street items');
+    assert.match(css, /\.pixel-world-editor\.room-editor \.pixel-world-editor-body\s*\{[\s\S]*grid-template-columns:\s*220px minmax\(560px,\s*1fr\) 260px 360px/, 'room editor should keep its separate inspector column');
+    assert.match(css, /\.pixel-world-editor\.room-editor \.pixel-world-behavior-panel\s*\{[\s\S]*grid-column:\s*1 \/ -1/, 'only the room editor should move its behavior panel below at narrow widths');
+    assert.match(css, /pixel-world-behavior-selection-inspector[\s\S]*background:\s*transparent[\s\S]*overflow:\s*visible/, 'folded selection content should not render as a standalone panel');
+    assert.match(css, /pixel-world-player-switch-control,[\s\S]*pixel-world-player-scale-control \{[\s\S]*min-width:\s*0/, 'toolbar controls should be shrink-safe to avoid overlap');
+    assert.match(css, /pixel-world-behavior-binding-grid button\.pixel-world-behavior-legacy-action[\s\S]*grid-column:\s*1 \/ -1/, 'deprecated behavior-tree action should sit as a secondary full-width control');
+});
+
+test('pixel cottage editor keeps low-frequency controls behind advanced tools', () => {
+    const editor = readRepoFile('client', 'src', 'plugins', 'pixelWorld', 'RoomAssetEditor.jsx');
+    const css = readRepoFile('client', 'src', 'plugins', 'pixelWorld', 'PixelWorldPanel.css');
+    const toolbarStart = editor.indexOf('<div className="pixel-world-editor-toolbar">');
+    const toolbarEnd = editor.indexOf('<div className={`pixel-world-editor-body room-editor-body', toolbarStart);
+    assert.notEqual(toolbarStart, -1, 'room editor toolbar should exist');
+    assert.notEqual(toolbarEnd, -1, 'room editor toolbar should end before the editor body');
+
+    const toolbarBlock = editor.slice(toolbarStart, toolbarEnd);
+    const primaryStart = toolbarBlock.indexOf('pixel-world-toolbar-section--primary');
+    const primaryEnd = toolbarBlock.indexOf('pixel-world-toolbar-section--status', primaryStart);
+    assert.notEqual(primaryStart, -1, 'room toolbar should have a primary section');
+    assert.notEqual(primaryEnd, -1, 'room primary section should end before the status section');
+    const primaryBlock = toolbarBlock.slice(primaryStart, primaryEnd);
+
+    assert.match(primaryBlock, /Save Layout[\s\S]*View Mode[\s\S]*Control/, 'pixel cottage primary toolbar should keep only the daily room-editing actions');
+    assert.doesNotMatch(primaryBlock, /Save Current as Default|Copy JSON|Copy AI Layout Context|Sprite Size|Shrink Asset|Delete|Restore Default/, 'low-frequency room actions should not sit in the primary toolbar');
+    assert.match(toolbarBlock, /showAdvancedToolbar[\s\S]*Advanced Tools[\s\S]*pixel-world-toolbar-advanced/, 'room toolbar should reveal secondary controls through an advanced section');
+    assert.match(toolbarBlock, /pixel-world-toolbar-advanced[\s\S]*Save Current as Default[\s\S]*Copy JSON[\s\S]*Copy AI Layout Context[\s\S]*Zoom Out[\s\S]*Show Collision[\s\S]*Show Anchors[\s\S]*Show Layers/, 'room advanced toolbar should hold maintenance and visibility tools');
+    assert.match(toolbarBlock, /pixel-world-player-scale-control[\s\S]*Sprite Size/, 'sprite sizing should live in the advanced toolbar');
+    assert.match(toolbarBlock, /canEditLayout \? \([\s\S]*Group Edit[\s\S]*Restore Previous[\s\S]*Restore Default/, 'room layout maintenance controls should only render when editing is available');
+    assert.match(toolbarBlock, /canEditLayout && \(groupEditMode \|\| selectedItem\) && \([\s\S]*Shrink Asset[\s\S]*Rotate[\s\S]*Layer Up[\s\S]*Delete/, 'room selected-asset controls should only render after editing is available and a target exists');
+    assert.match(css, /pixel-world-toolbar-section--primary[\s\S]*flex:\s*1 1 auto/, 'shared toolbar primary section should take available space before wrapping');
+    assert.match(css, /pixel-world-toolbar-advanced[\s\S]*flex:\s*1 0 100%/, 'shared advanced toolbar should occupy its own row when expanded');
+});
+
 test('retired theme editor surfaces are not exposed', () => {
     const settingsPanel = readRepoFile('client', 'src', 'components', 'SettingsPanel.jsx');
     const app = readRepoFile('client', 'src', 'App.jsx');
@@ -140,7 +328,7 @@ test('system wipe clears user-scoped residual files and live DB handles', () => 
     assert.match(wipeRoute, /oldEngine[\s\S]*stopAllTimers\(\)/, 'system wipe should stop engine timers before deleting the user DB');
     assert.match(wipeRoute, /removeFileIfExists\(dbPath\)[\s\S]*removeFileIfExists\(`\$\{dbPath\}-wal`\)[\s\S]*removeFileIfExists\(`\$\{dbPath\}-shm`\)/, 'system wipe should remove SQLite sidecar files');
     assert.match(wipeRoute, /removeDirectoryIfExists\(path\.join\(uploadsDir, 'users', String\(userId\)\)\)/, 'system wipe should remove scoped uploaded media');
-    assert.match(wipeRoute, /removeDirectoryIfExists\(path\.join\(__dirname, '\.\.', '\.\.', 'data', 'tts', String\(userId\)\)\)/, 'system wipe should remove scoped TTS audio');
+    assert.match(wipeRoute, /removeDirectoryIfExists\(path\.join\(getTtsDir\(\), String\(userId\)\)\)/, 'system wipe should remove scoped TTS audio');
     assert.match(backupPlugin, /function cleanupTemp\(filePath, dirPath\)[\s\S]*removeFileIfExists\(filePath\)[\s\S]*removeDirectoryIfExists\(dirPath\)/, 'backup temp cleanup should use the shared safe file helpers');
 });
 
@@ -159,7 +347,7 @@ test('general upload endpoint only stores verified image files', () => {
 test('tts audio downloads are constrained to the current user audio directory', () => {
     const serverIndex = readRepoFile('server', 'index.js');
 
-    assert.match(serverIndex, /const ttsAudioRoot = path\.resolve\(__dirname, '\.\.', 'data', 'tts'\)/, 'TTS audio root should be explicit');
+    assert.match(serverIndex, /const ttsAudioRoot = path\.resolve\(getTtsDir\(\)\)/, 'TTS audio root should be explicit and configurable');
     assert.match(serverIndex, /function resolveTtsAudioPath\(userId, audioPath\)/, 'TTS audio route should resolve stored paths through a boundary helper');
     assert.match(serverIndex, /path\.resolve\(ttsAudioRoot, String\(userId \|\| 'default'\)\)/, 'TTS audio route should scope files to the current user');
     assert.match(serverIndex, /resolvedPath\.startsWith\(userAudioRoot \+ path\.sep\)/, 'TTS audio route should reject paths outside the user audio directory');
@@ -304,8 +492,8 @@ test('admin user mutations report missing targets instead of fake success', () =
     assert.match(adminDashboard, /const updated = authDb\.setUserRole\(targetId, nextRole\)[\s\S]*const tokenUpdated = updated \? authDb\.bumpTokenVersion\(targetId\) : 0[\s\S]*if \(!updated \|\| !tokenUpdated\) return sendAdminUserMutationNotFound\(res\)/, 'admin role route should not fake success if role or token update fails');
     assert.match(adminDashboard, /const updated = authDb\.resetPassword\(targetId, newPassword\)[\s\S]*if \(!updated\) return sendAdminUserMutationNotFound\(res\)/, 'admin password reset should not fake success if the DB row was not changed');
     assert.match(adminDashboard, /const updated = authDb\.bumpTokenVersion\(targetId\)[\s\S]*if \(!updated\) return sendAdminUserMutationNotFound\(res\)/, 'admin force logout should not fake success if the token version was not changed');
-    assert.match(adminDashboard, /path\.join\(__dirname, '\.\.', '\.\.', 'public', 'uploads', 'users', String\(userId\)\)[\s\S]*removeDirectoryIfExists\(userUploadDir\)/, 'admin user delete should remove scoped uploaded media for the deleted account');
-    assert.match(adminDashboard, /path\.join\(__dirname, '\.\.', '\.\.', 'data', 'tts', String\(userId\)\)[\s\S]*removeDirectoryIfExists\(userTtsDir\)/, 'admin user delete should remove scoped TTS audio for the deleted account');
+    assert.match(adminDashboard, /path\.join\(getUploadsDir\(\), 'users', String\(userId\)\)[\s\S]*removeDirectoryIfExists\(userUploadDir\)/, 'admin user delete should remove scoped uploaded media for the deleted account');
+    assert.match(adminDashboard, /path\.join\(getTtsDir\(\), String\(userId\)\)[\s\S]*removeDirectoryIfExists\(userTtsDir\)/, 'admin user delete should remove scoped TTS audio for the deleted account');
 
     assert.doesNotMatch(adminDashboard, /authDb\.deleteUser\(targetId\);\s*try \{[\s\S]*cleanupUserStorage\(targetId\)/, 'admin user delete must not ignore the DB delete result before cleaning storage');
     assert.doesNotMatch(adminDashboard, /authDb\.setUserStatus\(targetId, banned \? 'banned' : 'active'\);\s*authDb\.bumpTokenVersion\(targetId\)/, 'admin ban route must not ignore DB write results');
@@ -428,7 +616,7 @@ test('public mode CORS, rate limits, uploads, and queue stats are scoped for hos
     assert.match(serverIndex, /if \(TRUST_PROXY\) \{\s*app\.set\('trust proxy', 1\);/, 'trust proxy should be enabled by env');
     assert.match(serverIndex, /app\.use\(cors\(\{[\s\S]*ALLOWED_ORIGINS\.includes\(origin\)/, 'CORS should use an allowlist in public mode');
     assert.match(serverIndex, /function isLocalRequest\(req\) \{\s*if \(PUBLIC_MODE\) return false;/, 'public mode should disable local rate-limit bypass');
-    assert.match(serverIndex, /path\.join\(__dirname, 'public\/uploads\/users', String\(req\.user\?\.id \|\| 'default'\)\)/, 'new uploads should be written under the user upload scope');
+    assert.match(serverIndex, /getUserUploadDir\(req\.user\?\.id \|\| 'default'\)/, 'new uploads should be written under the user upload scope');
     assert.match(serverIndex, /function resolveUserUploadPath\(userId, filename\)/, 'authenticated media reads should resolve through a user boundary helper');
     assert.match(serverIndex, /app\.get\('\/api\/media\/uploads\/:filename', authMiddleware/, 'authenticated media read route should exist');
     assert.match(serverIndex, /app\.use\('\/uploads'[\s\S]*req\.path === '\/users' \|\| req\.path\.startsWith\('\/users\/'\)/, 'scoped user uploads should not remain publicly exposed by the static route');
@@ -858,7 +1046,6 @@ test('manual memory inputs reject invalid ids and maintenance settings', () => {
     assert.match(memoryGuardsSource, /function normalizeMemoryMaintenanceAutoRunControls\(input = \{\}, defaults = \{\}\)/, 'memory maintenance auto-run controls should be centralized');
     assert.match(memoryGuardsSource, /function normalizeMemoryMaintenanceLibraryOptions\(query = \{\}\)/, 'memory library query validation should be centralized');
     assert.match(memoryGuardsSource, /MEMORY_MAINTENANCE_MAX_BATCHES_MAX = 10000/, 'memory maintenance auto-runs should have an explicit batch cap');
-    assert.match(memoryGuardsSource, /MEMORY_LIBRARY_TIMELINE_LIMIT_MAX = 3000/, 'memory library timeline limits should have an explicit cap');
     assert.match(memoryGuardsSource, /batch_size[\s\S]*MEMORY_MAINTENANCE_BATCH_MIN[\s\S]*MEMORY_MAINTENANCE_BATCH_MAX/, 'memory maintenance batch size should be range checked');
     assert.match(memoryGuardsSource, /max_output_tokens[\s\S]*MEMORY_MAINTENANCE_TOKENS_MIN[\s\S]*MEMORY_MAINTENANCE_TOKENS_MAX/, 'memory maintenance token budget should be range checked');
 
@@ -936,11 +1123,6 @@ test('manual memory inputs reject invalid ids and maintenance settings', () => {
         () => guards.normalizeMemoryMaintenanceLibraryOptions({ limit_per_group: '1abc' }),
         /limit_per_group must be an integer/,
         'memory library group limits should reject loose numeric input'
-    );
-    assert.throws(
-        () => guards.normalizeMemoryMaintenanceLibraryOptions({ timeline_limit: Infinity }),
-        /timeline_limit must be an integer/,
-        'memory library timeline limits should reject non-finite values'
     );
     assert.equal(
         guards.normalizeMemoryMaintenanceLibraryOptions({ character_id: ' c1 ', limit_per_group: '12' }).limit_per_group,
@@ -1057,11 +1239,7 @@ test('memory maintenance library stats can run from the service module', () => {
         `).run(now - 2 * 24 * 60 * 60 * 1000, now - 24 * 60 * 60 * 1000);
 
         const overview = getMemoryMaintenanceOverview(db);
-        const library = getMemoryMaintenanceLibrary(db, {
-            source: 'new',
-            timeline_filter: 'all',
-            timeline_all: '1'
-        });
+        const library = getMemoryMaintenanceLibrary(db, { source: 'new' });
         const expiredRows = getExpiredForgettingMemoryRows(db, { now, limit: 10 });
 
         assert.equal(overview.totals.legacy_total, 1);
@@ -1069,7 +1247,7 @@ test('memory maintenance library stats can run from the service module', () => {
         assert.equal(overview.totals.formal_total, 1);
         assert.equal(library.new_library.total, 1);
         assert.equal(library.new_library.source_total, 1);
-        assert.equal(library.timeline.count, 1);
+        assert.equal(library.timeline, undefined);
         assert.equal(expiredRows.length, 1);
         assert.equal(expiredRows[0].id, 1);
     } finally {
@@ -3150,13 +3328,16 @@ test('social housing rental chain is wired from storage through prompts and UI c
     assert.match(socialHousingIndex, /app\.post\('\/api\/social-housing\/characters\/:id\/recommend-home'[\s\S]*rentalChainService\.recommendHomeToCharacter[\s\S]*runFullChain: req\.body\?\.run_full_chain !== false/, 'recommend-home route should enter the full rental chain by default');
     assert.match(socialHousingIndex, /app\.post\('\/api\/social-housing\/characters\/:id\/assign-home'[\s\S]*rentalChainService\.assignHomeToCharacter/, 'assign-home route should support direct user-granted housing');
     assert.match(socialHousingIndex, /app\.post\('\/api\/social-housing\/characters\/:id\/recommend-home'[\s\S]*can_retry: e\.canRetry !== false[\s\S]*rental_chains/, 'rental chain failures should report retryability and current chain state');
-    assert.match(socialHousingIndex, /function buildFridayAgencyRentLog[\s\S]*周五中介收费日/, 'weekly rent collection should create a special Friday agency city activity');
-    assert.match(socialHousingIndex, /function buildFridayRentPrivateMessage[\s\S]*今天周五，中介来收[\s\S]*他们把我赶出来了/, 'weekly rent collection should create a private chat message and mention eviction on failed payment');
-    assert.match(socialHousingIndex, /source: 'social_housing_friday_rent_collection'[\s\S]*evicted: !!extra\.evicted[\s\S]*db\.addMessage\(character\.id, 'character'[\s\S]*engine\?\.broadcastNewMessage/, 'weekly rent collection should write and broadcast a character private message');
-    assert.match(socialHousingIndex, /weeklyAgencyCollection \? 'AGENCY_RENT_COLLECTION' : 'RENT'[\s\S]*weeklyAgencyCollection \? 'AGENCY_RENT_EVICTION' : 'RENT_OVERDUE'/, 'weekly rent collection should use special city action types');
-    assert.match(socialHousingIndex, /if \(weeklyAgencyCollection\) \{[\s\S]*socialHousingDb\.saveBinding\(character\.id, \{[\s\S]*housing_id: ''[\s\S]*housing_status: 'homeless'[\s\S]*note: `周五中介收费失败：/, 'failed Friday collection should clear the housing binding and make the character homeless');
+    assert.match(socialHousingIndex, /async function generateRentCityLog[\s\S]*await callLLM\(\{[\s\S]*responseFormat: \{ type: 'json_object' \}[\s\S]*requireRentTextField\(parsed, 'city_log'/, 'rent collection city activity should be generated by the character model as strict JSON');
+    assert.match(socialHousingIndex, /event_time: getRentEventTimeFacts\(now\)[\s\S]*当前实际日期为 \$\{facts\.event_time\.date\} \$\{facts\.event_time\.weekday\}/, 'rent collection prompts should include the exact date and weekday as factual boundaries');
+    assert.match(socialHousingIndex, /findRentWeekdayMentions\(content\)[\s\S]*收租商业街描述的星期和事实不一致/, 'rent city activity should reject weekday drift instead of persisting wrong facts');
+    assert.match(socialHousingIndex, /async function triggerRentPrivateReply[\s\S]*await engine\.triggerImmediateUserReply\(character\.id, wsClients, \{[\s\S]*propagateError: true[\s\S]*skipTopicSwitchGate: true[\s\S]*triggerSource: source/, 'rent collection should trigger a RAG private reply instead of writing a canned character message');
+    assert.doesNotMatch(socialHousingIndex, /function buildRentLog|function buildFridayAgencyRentLog|function buildFridayRentPrivateMessage/, 'rent collection should not keep template or fallback text builders');
+    assert.doesNotMatch(socialHousingIndex, /db\.addMessage\(character\.id, 'character'[\s\S]*social_housing_friday_rent_collection/, 'rent collection should not directly insert a template character private message');
+    assert.match(socialHousingIndex, /weeklyAgencyCollection \? 'AGENCY_RENT_COLLECTION' : 'RENT'[\s\S]*weeklyAgencyCollection \? 'AGENCY_RENT_EVICTION' : 'RENT_EVICTION'/, 'weekly rent collection should use special city action types and manual eviction should be explicit');
+    assert.match(socialHousingIndex, /const paid = Number\(character\.wallet \|\| 0\) >= amount[\s\S]*if \(paid\)[\s\S]*socialHousingDb\.saveBinding\(character\.id, \{[\s\S]*housing_id: ''[\s\S]*housing_status: 'homeless'[\s\S]*note: `收租失败：/, 'failed rent collection should clear the housing binding and make the character homeless');
     assert.match(socialHousingIndex, /source: 'weekly_friday_agency'[\s\S]*notifyPrivate: true[\s\S]*userId: options\.userId/, 'automatic rent settlement should run through the Friday agency collection path');
-    assert.match(socialHousingIndex, /settleDueRentsForDb\(db, \{ userId: user\.id \}\)/, 'automatic rent settlement should pass the current user id for private-chat broadcasts');
+    assert.match(socialHousingIndex, /await settleDueRentsForDb\(db, \{ userId: user\.id \}\)/, 'automatic rent settlement should pass the current user id for private-chat broadcasts');
 
     assert.match(rentalChainService, /function parseJsonObject[\s\S]*JSON\.parse\(raw\)[\s\S]*不是合法 JSON/, 'chain LLM calls should fail fast on malformed JSON');
     assert.match(rentalChainService, /const VIEWING_MORE_INFO_TAG = 'MORE_INFO'/, 'viewing should use a structured character-controlled continuation tag');
@@ -3229,8 +3410,7 @@ test('social housing money and rent fields reject invalid values before persiste
     assert.match(socialHousingIndex, /const amount = Number\(binding\.rent_weekly \|\| home\.weekly_rent \|\| 0\)[\s\S]*!Number\.isFinite\(amount\) \|\| amount <= 0/, 'rent settlement should reject non-finite or non-positive legacy rent amounts before wallet writes');
     assert.match(socialHousingIndex, /app\.post\('\/api\/social-housing\/characters\/:id\/pay-rent'[\s\S]*const character = req\.db\.getCharacter\(req\.params\.id\)[\s\S]*return res\.status\(404\)\.json\(\{ success: false, error: '角色不存在' \}\)[\s\S]*settleCharacterRent\(req\.db, character\.id/, 'manual rent settlement should reject missing characters with 404 before service work');
     assert.match(socialHousingIndex, /city_update', action: 'rent-settled', character_id: character\.id/, 'manual rent settlement broadcasts should use the normalized character id');
-    assert.match(socialHousingIndex, /pressure_level: clampNumber\(Number\(character\.pressure_level \|\| 0\) \+ 1, 0, 4\)/, 'rent-overdue pressure patches should stay within the project-wide 0..4 pressure range');
-    assert.doesNotMatch(socialHousingIndex, /pressure_level: clampNumber\(Number\(character\.pressure_level \|\| 0\) \+ 1, 0, 5\)/, 'social housing must not use the old 0..5 pressure range');
+    assert.doesNotMatch(socialHousingIndex, /db\.updateCharacter\(character\.id, \{[\s\S]*(stress|mood|pressure_level)/, 'rent settlement should not pre-set character mood, stress, or pressure');
     assert.match(socialHousingIndex, /isSocialHousingValidationError\(error\) \? 400 : 500/, 'invalid social housing input should return 400 rather than a server error');
 
     assert.match(socialHousingDbSource, /const normalized = normalizeSocialClassPayload\(payload\)/, 'class DB writes should keep a defensive validation layer');

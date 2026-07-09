@@ -1,6 +1,8 @@
 const {
     normalizeCityEventPayload,
-    normalizeCityQuestPayload
+    normalizeCityQuestPayload,
+    normalizeCityWeatherIntensity,
+    normalizeCityWeatherPreset
 } = require('../utils/inputGuards');
 
 function createMayorService(deps = {}) {
@@ -305,13 +307,30 @@ function createMayorService(deps = {}) {
         if (Array.isArray(decision.events)) {
             for (const ev of decision.events) {
                 if (ev.title) {
+                    const rawEffect = ev.effect && typeof ev.effect === 'object' && !Array.isArray(ev.effect)
+                        ? ev.effect
+                        : {};
+                    const eventType = String(ev.type || 'random').trim() || 'random';
+                    const eventEffect = {
+                        ...rawEffect,
+                        district: rawEffect.district || ev.target_district || ''
+                    };
+                    if (eventType.toLowerCase() === 'weather') {
+                        const weatherText = `${ev.title || ''} ${ev.description || ''} ${ev.emoji || ''}`;
+                        eventEffect.weather_preset = normalizeCityWeatherPreset(
+                            rawEffect.weather_preset ?? ev.weather_preset ?? ev.weather ?? ev.preset ?? weatherText
+                        ) || 'cloudy';
+                        eventEffect.weather_intensity = normalizeCityWeatherIntensity(
+                            rawEffect.weather_intensity ?? ev.weather_intensity ?? ev.intensity ?? ev.severity ?? weatherText
+                        ) || 'comfortable';
+                    }
                     const eventPayload = normalizeCityEventPayload({
-                        type: ev.type || 'random',
+                        type: eventType,
                         title: ev.title,
                         emoji: ev.emoji || '📙',
                         description: ev.description || '',
-                        effect: ev.effect || {},
-                        target_district: ev.effect?.district || '',
+                        effect: eventEffect,
+                        target_district: eventEffect.district || '',
                         duration_hours: ev.duration_hours || 12
                     });
                     if (!eventPayload) throw new Error('市长事件数值无效');

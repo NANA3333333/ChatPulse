@@ -8,7 +8,6 @@ const MEMORY_MAINTENANCE_MAX_BATCHES_MAX = 10000;
 const MEMORY_MAINTENANCE_REROLLS_MAX = 10;
 const MEMORY_LIBRARY_LIMIT_PER_GROUP_MAX = 120;
 const MEMORY_LIBRARY_FORGETTING_LIMIT_MAX = 160;
-const MEMORY_LIBRARY_TIMELINE_LIMIT_MAX = 3000;
 
 class MemoryInputValidationError extends Error {
     constructor(message) {
@@ -165,9 +164,7 @@ function normalizeMemoryMaintenanceLibraryOptions(query = {}) {
         character_id: String(query.character_id || '').trim(),
         all: query.all,
         source: query.source || 'new',
-        temporal_filter: query.temporal_filter,
-        timeline_filter: query.timeline_filter || 'strong_time_bound',
-        timeline_all: query.timeline_all
+        temporal_filter: query.temporal_filter
     };
     const limitPerGroup = normalizeOptionalBoundedInteger(
         query.limit_per_group,
@@ -181,15 +178,8 @@ function normalizeMemoryMaintenanceLibraryOptions(query = {}) {
         1,
         MEMORY_LIBRARY_FORGETTING_LIMIT_MAX
     );
-    const timelineLimit = normalizeOptionalBoundedInteger(
-        query.timeline_limit,
-        'timeline_limit',
-        1,
-        MEMORY_LIBRARY_TIMELINE_LIMIT_MAX
-    );
     if (limitPerGroup !== undefined) options.limit_per_group = limitPerGroup;
     if (forgettingLimit !== undefined) options.forgetting_limit = forgettingLimit;
-    if (timelineLimit !== undefined) options.timeline_limit = timelineLimit;
     return options;
 }
 
@@ -208,7 +198,6 @@ module.exports = {
     MEMORY_MAINTENANCE_TOKENS_MAX,
     MEMORY_LIBRARY_FORGETTING_LIMIT_MAX,
     MEMORY_LIBRARY_LIMIT_PER_GROUP_MAX,
-    MEMORY_LIBRARY_TIMELINE_LIMIT_MAX,
     MemoryInputValidationError,
     isMemoryInputValidationError,
     normalizeMemoryId,

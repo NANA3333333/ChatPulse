@@ -1056,9 +1056,8 @@ function initGroupChatPlugin(app, context) {
                                     }
                                 }
 
-                                // Trigger memory extraction in background (tagged with groupId for cleanup)
-                                memory.extractMemoryFromContext(char, [...history, { role: 'character', content: cleanReply, timestamp: replyMsg.timestamp, id: replyId }], groupId)
-                                    .catch(err => console.error('[GroupChat] Memory extraction err for ' + char.name + ':', err.message));
+                                // Long-term memory extraction is handled by overflow sweep/manual extraction.
+                                // Do not run the small memory model after every group reply.
                                 if (typeof memory.updateGroupConversationDigest === 'function') {
                                     memory.updateGroupConversationDigest(char, groupId, { tailWindow: groupMsgLimit })
                                         .catch(err => console.error('[GroupChat] Group digest update err for ' + char.name + ':', err.message));

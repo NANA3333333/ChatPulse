@@ -3,10 +3,21 @@ import {
   commercialV2DefaultZoom,
   commercialV2RoleActorId,
   commercialV2UserActorId,
+  commercialV2PlayerFrameOrder,
   commercialV2PlayerCharacters,
-  createCommercialV2PlayerState
+  commercialV2DefaultControlledPlayerId,
+  commercialV2PlayerCharacterById,
+  createCommercialV2PlayerState,
+  clampBox,
+  normalizeCommercialV2PlaceAnchor,
+  normalizeCommercialV2Collision,
+  getCommercialV2EffectiveCollision
 } from './commercialStreetCore';
-import { createCommercialV2BehaviorTreeState } from './behaviorTreeCore';
+import {
+  commercialV2BehaviorInteractionDistance,
+  commercialV2BehaviorMovementActions,
+  createCommercialV2BehaviorTreeState
+} from './behaviorTreeCore';
 
 const roomStyleMeta = {
   empty: {
@@ -18,6 +29,7 @@ const roomStyleMeta = {
 const roomEditorStorageKey = 'pixelWorld.room.layout';
 const roomEditorCanvasStorageKey = 'pixelWorld.room.canvas';
 const roomEditorSizeProfileStorageKey = 'pixelWorld.room.sizeProfile';
+const roomEditorAssemblyStorageKey = 'pixelWorld.room.assemblyExperiment';
 const roomEditorResetBackupStorageKey = 'pixelWorld.room.resetBackup';
 const roomEditorDefaultSnapshotStorageKey = 'pixelWorld.room.defaultSnapshot';
 const roomEditorPlayerStorageKey = 'pixelWorld.room.players';
@@ -28,7 +40,7 @@ const roomEditorMaxSavedItems = 150;
 const roomEditorStageSize = { width: 1254, height: 1254 };
 const roomEditorAiGridSize = { cols: 16, rows: 16 };
 const roomEditorBackgroundColor = '#fbf0f7';
-const roomEditorDefaultZoom = 0.62;
+const roomEditorDefaultZoom = 0.52;
 const roomEditorLegacyDefaultPlayerScales = [1.75, commercialV2DefaultPlayerScale];
 const roomEditorDefaultPlayerScale = Number((commercialV2DefaultPlayerScale * commercialV2DefaultZoom / roomEditorDefaultZoom).toFixed(2));
 const roomEditorMinPlayerScale = 1;
@@ -52,6 +64,13 @@ const roomEditorBehaviorSafePoints = [
 ];
 const roomEditorBackdrop = '/assets/pixel-world/generated-rooms/backgrounds/empty-square-room-v1.png';
 const roomEditorAssetVersion = 'room-style-furniture-fresh-macaron-directions-v80-remove-legacy-chairs-20260614';
+const roomEditorDefaultSceneAssetIds = new Set([
+  'room_front_bed_mint_garden_v1',
+  'room_front_mint_bookshelf_v1',
+  'room_decor_mint_rug_v1',
+  'room_decor_mint_wall_art_v1',
+  'room_decor_mint_table_lamp_v1'
+]);
 const roomEditorRealWorldScaleByKind = {
   bed: 0.78,
   nightstand: 0.52,
@@ -65,9 +84,16 @@ const roomEditorRealWorldScaleByKind = {
   wallArt: 0.66
 };
 const roomEditorCalibratedSizeProfile = {
-  desk: { w: 430, h: 337, sourceAssetId: 'room_front_mint_desk_v1' },
+  bed: { w: 268, h: 289, sourceAssetId: 'room_front_bed_mint_garden_v1' },
+  nightstand: { w: 96, h: 114, sourceAssetId: 'room_front_ocean_nightstand_v1' },
+  wardrobe: { w: 193, h: 271, sourceAssetId: 'room_front_ocean_wardrobe_v1' },
+  vanity: { w: 213, h: 265, sourceAssetId: 'room_front_ocean_vanity_v1' },
+  desk: { w: 430, h: 337, sourceAssetId: 'room_front_peach_desk_v1' },
   bookshelf: { w: 291, h: 444, sourceAssetId: 'room_front_mint_bookshelf_v1' },
-  sofa: { w: 526, h: 362, sourceAssetId: 'room_front_mint_sofa_v1' }
+  sofa: { w: 526, h: 362, sourceAssetId: 'room_front_mint_sofa_v1' },
+  rug: { w: 310, h: 187, sourceAssetId: 'room_decor_mint_rug_v1' },
+  floorLamp: { w: 145, h: 258, sourceAssetId: 'room_decor_mint_table_lamp_v1' },
+  wallArt: { w: 257, h: 155, sourceAssetId: 'room_decor_mint_wall_art_v1' }
 };
 const roomEditorDirectionOrder = ['front', 'back', 'left', 'right'];
 const roomEditorDirectionLabels = {
@@ -88,18 +114,13 @@ const roomEditorAiDirectionalGroupIds = new Set([
   'bed_pastel_candy',
   'bed_mint_garden',
   'bed_peach_lemon',
-  'scandinavian_nightstand',
   'ocean_nightstand',
   'cloud_nightstand',
   'candy_nightstand',
-  'mint_nightstand',
-  'peach_nightstand',
   'scandinavian_wardrobe',
   'ocean_wardrobe',
   'cloud_wardrobe',
   'candy_wardrobe',
-  'mint_wardrobe',
-  'peach_wardrobe',
   'scandinavian_desk',
   'scandinavian_bookshelf',
   'scandinavian_sofa',
@@ -108,7 +129,6 @@ const roomEditorAiDirectionalGroupIds = new Set([
   'peach_sofa',
   'ocean_vanity',
   'ocean_desk',
-  'ocean_bookshelf',
   'ocean_sofa',
   'cloud_vanity',
   'cloud_desk',
@@ -118,11 +138,8 @@ const roomEditorAiDirectionalGroupIds = new Set([
   'candy_desk',
   'candy_bookshelf',
   'candy_sofa',
-  'mint_vanity',
-  'mint_desk',
   'mint_bookshelf',
-  'mint_sofa',
-  'peach_vanity'
+  'mint_sofa'
 ]);
 function getRoomEditorDirectionalMeta(id) {
   const value = String(id || '');
@@ -200,7 +217,6 @@ const roomEditorAssetRows = [
   ['room_front_bed_pastel_candy_v1', '糖果粉彩床', '大型家具', 'furniture-front/front-bed-pastel-candy-v1.png', { x: 84, y: 754, w: 333, h: 370 }],
   ['room_front_bed_mint_garden_v1', '薄荷花园床', '大型家具', 'furniture-front/front-bed-mint-garden-v1.png', { x: 82, y: 754, w: 343, h: 370 }],
   ['room_front_bed_peach_lemon_v1', '蜜桃柠檬床', '大型家具', 'furniture-front/front-bed-peach-lemon-v1.png', { x: 82, y: 754, w: 343, h: 370 }],
-  ['room_front_scandinavian_nightstand_v1', '北欧床头柜', '北欧蓝白套装', 'furniture-front/front-scandinavian-nightstand-v1.png', { x: 414, y: 887, w: 185, h: 220 }],
   ['room_front_scandinavian_wardrobe_v1', '北欧衣柜', '北欧蓝白套装', 'furniture-front/front-scandinavian-wardrobe-v1.png', { x: 88, y: 412, w: 235, h: 330 }],
   ['room_front_scandinavian_desk_v1', '北欧书桌', '北欧蓝白套装', 'furniture-front/front-scandinavian-desk-v1.png', { x: 438, y: 630, w: 350, h: 275 }],
   ['room_front_scandinavian_bookshelf_v1', '北欧书柜', '北欧蓝白套装', 'furniture-front/front-scandinavian-bookshelf-v1.png', { x: 840, y: 352, w: 300, h: 390 }],
@@ -212,7 +228,6 @@ const roomEditorAssetRows = [
   ['room_front_ocean_wardrobe_v1', '贝壳衣柜', '海洋贝壳套装', 'furniture-front/front-ocean-wardrobe-v1.png', { x: 88, y: 412, w: 235, h: 330 }],
   ['room_front_ocean_vanity_v1', '贝壳梳妆台', '海洋贝壳套装', 'furniture-front/front-ocean-vanity-v1.png', { x: 476, y: 506, w: 271, h: 340 }],
   ['room_front_ocean_desk_v1', '贝壳书桌', '海洋贝壳套装', 'furniture-front/front-ocean-desk-v1.png', { x: 438, y: 630, w: 350, h: 275 }],
-  ['room_front_ocean_bookshelf_v1', '贝壳书架', '海洋贝壳套装', 'furniture-front/front-ocean-bookshelf-v1.png', { x: 860, y: 383, w: 235, h: 360 }],
   ['room_front_ocean_sofa_v1', '贝壳沙发', '海洋贝壳套装', 'furniture-front/front-ocean-sofa-v1.png', { x: 660, y: 750, w: 420, h: 290 }],
   ['room_decor_ocean_rug_v1', '贝壳华毯', '装饰', 'decor/decor-ocean-rug-v1.png', { x: 420, y: 882, w: 430, h: 260 }, false, { enabled: false, x: 0, y: 0, w: 1, h: 1 }],
   ['room_decor_ocean_floor_lamp_v1', '贝壳落地灯', '装饰', 'decor/decor-ocean-floor-lamp-v1.png', { x: 906, y: 526, w: 230, h: 410 }, false, { enabled: true, x: 0.34, y: 0.78, w: 0.32, h: 0.18 }],
@@ -235,18 +250,11 @@ const roomEditorAssetRows = [
   ['room_decor_candy_rug_v1', '糖心华毯', '装饰', 'decor/decor-candy-rug-v1.png', { x: 408, y: 872, w: 450, h: 270 }, false, { enabled: false, x: 0, y: 0, w: 1, h: 1 }],
   ['room_decor_candy_floor_lamp_v1', '糖果落地灯', '装饰', 'decor/decor-candy-floor-lamp-v1.png', { x: 888, y: 494, w: 270, h: 450 }, false, { enabled: true, x: 0.35, y: 0.82, w: 0.3, h: 0.14 }],
   ['room_decor_candy_wall_art_v1', '糖果甜景画', '装饰', 'decor/decor-candy-wall-art-v1.png', { x: 492, y: 300, w: 420, h: 245 }, false, { enabled: false, x: 0, y: 0, w: 1, h: 1 }],
-  ['room_front_mint_nightstand_v1', '薄荷床头柜', '薄荷花园套装', 'furniture-front/front-mint-nightstand-v1.png', { x: 414, y: 887, w: 185, h: 220 }],
-  ['room_front_mint_wardrobe_v1', '薄荷衣柜', '薄荷花园套装', 'furniture-front/front-mint-wardrobe-v1.png', { x: 88, y: 412, w: 235, h: 330 }],
-  ['room_front_mint_vanity_v1', '薄荷梳妆台', '薄荷花园套装', 'furniture-front/front-mint-vanity-v1.png', { x: 476, y: 506, w: 273, h: 340 }],
-  ['room_front_mint_desk_v1', '薄荷书桌', '薄荷花园套装', 'furniture-front/front-mint-desk-v1.png', { x: 438, y: 630, w: 350, h: 275 }],
   ['room_front_mint_bookshelf_v1', '薄荷书架', '薄荷花园套装', 'furniture-front/front-mint-bookshelf-v1.png', { x: 840, y: 352, w: 300, h: 390 }],
   ['room_front_mint_sofa_v1', '薄荷沙发', '薄荷花园套装', 'furniture-front/front-mint-sofa-v1.png', { x: 660, y: 750, w: 420, h: 290 }],
   ['room_decor_mint_rug_v1', '薄荷绗缝地毯', '装饰', 'decor/decor-mint-rug-v1.png', { x: 420, y: 882, w: 430, h: 260 }, false, { enabled: false, x: 0, y: 0, w: 1, h: 1 }],
   ['room_decor_mint_wall_art_v1', '薄荷花园挂画', '装饰', 'decor/decor-mint-wall-art-v1.png', { x: 500, y: 302, w: 390, h: 235 }, false, { enabled: false, x: 0, y: 0, w: 1, h: 1 }],
   ['room_decor_mint_table_lamp_v1', '薄荷花园灯', '装饰', 'decor/decor-mint-table-lamp-v1.png', { x: 900, y: 526, w: 230, h: 410 }, false, { enabled: true, x: 0.34, y: 0.78, w: 0.32, h: 0.18 }],
-  ['room_front_peach_nightstand_v1', '蜜桃床头柜', '蜜桃柠檬套装', 'furniture-front/front-peach-nightstand-v1.png', { x: 414, y: 887, w: 185, h: 220 }],
-  ['room_front_peach_wardrobe_v1', '蜜桃衣柜', '蜜桃柠檬套装', 'furniture-front/front-peach-wardrobe-v1.png', { x: 88, y: 412, w: 235, h: 330 }],
-  ['room_front_peach_vanity_v1', '蜜桃梳妆台', '蜜桃柠檬套装', 'furniture-front/front-peach-vanity-v1.png', { x: 476, y: 506, w: 273, h: 340 }],
   ['room_front_peach_desk_v1', '蜜桃书桌', '蜜桃柠檬套装', 'furniture-front/front-peach-desk-v1.png', { x: 438, y: 630, w: 350, h: 275 }],
   ['room_front_peach_bookshelf_v1', '蜜桃书柜', '蜜桃柠檬套装', 'furniture-front/front-peach-bookshelf-v1.png', { x: 840, y: 352, w: 300, h: 390 }],
   ['room_front_peach_sofa_v1', '蜜桃沙发', '蜜桃柠檬套装', 'furniture-front/front-peach-sofa-v1.png', { x: 660, y: 750, w: 420, h: 290 }],
@@ -256,7 +264,6 @@ const roomEditorAssetRows = [
 ];
 const roomEditorFurniturePriceByAssetId = {
   room_front_bed_scandinavian_blue_v1: 115,
-  room_front_scandinavian_nightstand_v1: 34,
   room_front_scandinavian_wardrobe_v1: 85,
   room_front_scandinavian_desk_v1: 80,
   room_front_scandinavian_bookshelf_v1: 75,
@@ -266,9 +273,6 @@ const roomEditorFurniturePriceByAssetId = {
   room_decor_scandinavian_wall_art_v1: 30,
 
   room_front_bed_peach_lemon_v1: 70,
-  room_front_peach_nightstand_v1: 22,
-  room_front_peach_wardrobe_v1: 55,
-  room_front_peach_vanity_v1: 45,
   room_front_peach_desk_v1: 50,
   room_front_peach_bookshelf_v1: 45,
   room_front_peach_sofa_v1: 65,
@@ -277,10 +281,6 @@ const roomEditorFurniturePriceByAssetId = {
   room_decor_peach_wall_art_v1: 18,
 
   room_front_bed_mint_garden_v1: 95,
-  room_front_mint_nightstand_v1: 30,
-  room_front_mint_wardrobe_v1: 75,
-  room_front_mint_vanity_v1: 65,
-  room_front_mint_desk_v1: 75,
   room_front_mint_bookshelf_v1: 65,
   room_front_mint_sofa_v1: 95,
   room_decor_mint_rug_v1: 32,
@@ -292,7 +292,6 @@ const roomEditorFurniturePriceByAssetId = {
   room_front_ocean_wardrobe_v1: 100,
   room_front_ocean_vanity_v1: 95,
   room_front_ocean_desk_v1: 100,
-  room_front_ocean_bookshelf_v1: 90,
   room_front_ocean_sofa_v1: 130,
   room_decor_ocean_rug_v1: 45,
   room_decor_ocean_floor_lamp_v1: 45,
@@ -348,7 +347,7 @@ function canBuildRoomEditorAiDirections(id, path) {
     && !String(path || '').includes('preview')
   );
 }
-function getRoomEditorAiSideScale(box = {}) {
+function getRoomEditorAiSideScale() {
   return 1;
 }
 const roomEditorAiDirectionalSideBoxWidths = {
@@ -358,14 +357,10 @@ const roomEditorAiDirectionalSideBoxWidths = {
   bed_pastel_candy: 606,
   bed_peach_lemon: 606,
   bed_scandinavian_blue: 606,
-  scandinavian_nightstand: 145,
   ocean_nightstand: 145,
   cloud_nightstand: 145,
   candy_nightstand: 145,
-  mint_nightstand: 145,
-  peach_nightstand: 145,
   ocean_desk: 230,
-  ocean_bookshelf: 145,
   ocean_sofa: 285,
   cloud_desk: 230,
   cloud_bookshelf: 165,
@@ -373,7 +368,6 @@ const roomEditorAiDirectionalSideBoxWidths = {
   candy_desk: 230,
   candy_bookshelf: 165,
   candy_sofa: 285,
-  mint_desk: 230,
   mint_bookshelf: 165,
   mint_sofa: 285,
   scandinavian_desk: 230,
@@ -385,19 +379,13 @@ const roomEditorAiDirectionalSideBoxWidths = {
   scandinavian_wardrobe: 235,
   ocean_wardrobe: 235,
   cloud_wardrobe: 235,
-  candy_wardrobe: 235,
-  mint_wardrobe: 235,
-  peach_wardrobe: 235
+  candy_wardrobe: 235
 };
 const roomEditorAiDirectionalSideBoxHeights = {
-  scandinavian_nightstand: 220,
   ocean_nightstand: 220,
   cloud_nightstand: 220,
   candy_nightstand: 220,
-  mint_nightstand: 220,
-  peach_nightstand: 220,
   ocean_desk: 275,
-  ocean_bookshelf: 360,
   ocean_sofa: 290,
   cloud_desk: 275,
   cloud_bookshelf: 390,
@@ -405,7 +393,6 @@ const roomEditorAiDirectionalSideBoxHeights = {
   candy_desk: 275,
   candy_bookshelf: 390,
   candy_sofa: 290,
-  mint_desk: 275,
   mint_bookshelf: 390,
   mint_sofa: 290,
   scandinavian_desk: 275,
@@ -417,9 +404,7 @@ const roomEditorAiDirectionalSideBoxHeights = {
   scandinavian_wardrobe: 330,
   ocean_wardrobe: 330,
   cloud_wardrobe: 330,
-  candy_wardrobe: 330,
-  mint_wardrobe: 330,
-  peach_wardrobe: 330
+  candy_wardrobe: 330
 };
 function getRoomEditorDirectionalBox(box = {}, direction = 'front', groupId = '', realWorldScale = 1, sourceLegacyBox = null, options = {}) {
   const isSideDirection = direction === 'left' || direction === 'right';
@@ -478,7 +463,7 @@ function makeRoomEditorAsset(
     legacyBox,
     realWorldKind,
     realWorldScale,
-    defaultInScene,
+    defaultInScene: Boolean(defaultInScene || roomEditorDefaultSceneAssetIds.has(id)),
     groundLayer: realWorldKind === 'rug' || realWorldKind === 'wallArt',
     ...(directional ? {
       directional,
@@ -855,7 +840,7 @@ const roomScenes = {
 
 function getRoomEditorDefaultState() {
   const savedDefault = readStoredRoomEditorDefaultSnapshot();
-  if (savedDefault) return savedDefault;
+  if (savedDefault?.items?.length) return savedDefault;
   const items = getBuiltInDefaultRoomEditorItems();
   return {
     selectedId: items[0]?.id || '',
@@ -874,6 +859,49 @@ function getBuiltInDefaultRoomEditorItems() {
       placeAnchor: normalizeCommercialV2PlaceAnchor(asset.placeAnchor) || undefined,
       groundLayer: asset.groundLayer === true ? true : undefined
     }, roomEditorStageSize));
+}
+
+function isBuiltInDefaultRoomEditorLayoutState(layout) {
+  const items = Array.isArray(layout?.items) ? layout.items : [];
+  const defaultItems = getBuiltInDefaultRoomEditorItems();
+  if (!items.length || items.length !== defaultItems.length) return false;
+  const defaultAssetIds = new Set(defaultItems.map((item) => item.assetId));
+  return items.every((item) => (
+    defaultAssetIds.has(item?.assetId)
+    && (String(item?.id || '') === `${item.assetId}-default` || String(item?.id || '').endsWith('-default'))
+  ));
+}
+
+function getRoomEditorLayoutSavedAt(parsed) {
+  const value = Number(parsed?.savedAt || 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function readStoredRoomEditorCanvasSnapshot() {
+  try {
+    const raw = localStorage.getItem(roomEditorCanvasStorageKey);
+    if (!raw || raw.length > roomEditorMaxStorageBytes) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function shouldUseRoomEditorAssemblyLayout(normalizedLayout, parsedLayout, assemblyState) {
+  if (!assemblyState?.items?.length) return false;
+  if (!normalizedLayout?.items?.length) return true;
+  if (isBuiltInDefaultRoomEditorLayoutState(normalizedLayout)) return true;
+
+  const assemblySavedAt = getRoomEditorLayoutSavedAt(assemblyState);
+  if (!assemblySavedAt) return false;
+
+  const layoutSavedAt = getRoomEditorLayoutSavedAt(parsedLayout);
+  if (layoutSavedAt) return assemblySavedAt > layoutSavedAt;
+
+  const canvasSnapshot = readStoredRoomEditorCanvasSnapshot();
+  const canvasAssemblySavedAt = getRoomEditorLayoutSavedAt(canvasSnapshot?.assembledBy);
+  return canvasAssemblySavedAt >= assemblySavedAt;
 }
 
 function normalizeRoomEditorItemAspect(box, asset) {
@@ -945,6 +973,22 @@ function resizeRoomEditorItemByKindSize(item, size, kind) {
   };
 }
 
+function normalizeRoomEditorSizeProfile(value = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.entries(value).reduce((profile, [kind, size]) => {
+    const safeKind = String(kind || '').trim();
+    const w = Math.round(Number(size?.w || 0));
+    const h = Math.round(Number(size?.h || 0));
+    if (!safeKind || w < 8 || h < 8) return profile;
+    profile[safeKind] = {
+      w,
+      h,
+      sourceAssetId: String(size?.sourceAssetId || '')
+    };
+    return profile;
+  }, {});
+}
+
 function buildRoomEditorSizeProfile(items = [], assetMap = new Map()) {
   return (Array.isArray(items) ? items : []).reduce((profile, item) => {
     const asset = assetMap.get(item?.assetId);
@@ -961,7 +1005,7 @@ function buildRoomEditorSizeProfile(items = [], assetMap = new Map()) {
       };
     }
     return profile;
-  }, { ...roomEditorCalibratedSizeProfile });
+  }, {});
 }
 
 function readStoredRoomEditorSizeProfile() {
@@ -969,18 +1013,7 @@ function readStoredRoomEditorSizeProfile() {
     const raw = localStorage.getItem(roomEditorSizeProfileStorageKey);
     if (!raw || raw.length > roomEditorMaxStorageBytes) return {};
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    return Object.entries(parsed).reduce((profile, [kind, size]) => {
-      const w = Math.round(Number(size?.w || 0));
-      const h = Math.round(Number(size?.h || 0));
-      if (!kind || w < 8 || h < 8) return profile;
-      profile[kind] = {
-        w,
-        h,
-        sourceAssetId: String(size?.sourceAssetId || '')
-      };
-      return profile;
-    }, {});
+    return normalizeRoomEditorSizeProfile(parsed);
   } catch {
     return {};
   }
@@ -997,8 +1030,11 @@ function writeStoredRoomEditorSizeProfile(items = [], assetMap = new Map()) {
 }
 
 function applyRoomEditorSizeProfileToItems(items = [], assetMap = new Map(), explicitProfile = null) {
-  const baseProfile = explicitProfile || buildRoomEditorSizeProfile(items, assetMap);
-  const derivedProfile = { ...baseProfile, ...roomEditorCalibratedSizeProfile };
+  const normalizedExplicitProfile = normalizeRoomEditorSizeProfile(explicitProfile);
+  const baseProfile = Object.keys(normalizedExplicitProfile).length
+    ? normalizedExplicitProfile
+    : buildRoomEditorSizeProfile(items, assetMap);
+  const derivedProfile = { ...roomEditorCalibratedSizeProfile, ...baseProfile };
   if (!derivedProfile || !Object.keys(derivedProfile).length) return items;
   return items.map((item) => {
     const asset = assetMap.get(item?.assetId);
@@ -1089,9 +1125,10 @@ function getRoomEditorPlayerDepthTie(players = {}, targetPlayer = null) {
   return Math.max(0, sortedPlayers.findIndex((item) => item.id === targetId));
 }
 
-function normalizeRoomEditorLayoutState(rawItems) {
+function normalizeRoomEditorLayoutState(rawItems, explicitSizeProfile = null) {
   if (!Array.isArray(rawItems)) return null;
   const assetMap = new Map(roomEditorAssetCatalog.map((asset) => [asset.id, asset]));
+  const normalizedExplicitProfile = normalizeRoomEditorSizeProfile(explicitSizeProfile);
   const cleaned = rawItems
     .slice(0, roomEditorMaxSavedItems)
     .filter((item) => item && assetMap.has(item.assetId))
@@ -1112,7 +1149,9 @@ function normalizeRoomEditorLayoutState(rawItems) {
       }, asset);
       return clampBox(migrateRoomEditorItemToCurrentAssetBox(normalized, asset, item), roomEditorStageSize);
     });
-  const storedSizeProfile = readStoredRoomEditorSizeProfile();
+  const storedSizeProfile = Object.keys(normalizedExplicitProfile).length
+    ? normalizedExplicitProfile
+    : readStoredRoomEditorSizeProfile();
   const normalizedItems = applyRoomEditorSizeProfileToItems(
     cleaned,
     assetMap,
@@ -1127,20 +1166,61 @@ function normalizeRoomEditorLayoutState(rawItems) {
 
 function readStoredRoomEditorLayout() {
   const defaultState = getRoomEditorDefaultState();
+  const fallbackState = () => readStoredRoomEditorAssemblySnapshot() || defaultState;
   try {
     const raw = localStorage.getItem(roomEditorStorageKey);
-    if (!raw) return defaultState;
+    if (!raw) return fallbackState();
     if (raw.length > roomEditorMaxStorageBytes) {
       localStorage.removeItem(roomEditorStorageKey);
-      return defaultState;
+      return fallbackState();
     }
     const parsed = JSON.parse(raw);
     const rawItems = Array.isArray(parsed) ? parsed : parsed?.items;
-    const normalized = normalizeRoomEditorLayoutState(rawItems);
-    return normalized || defaultState;
+    const parsedSizeProfile = normalizeRoomEditorSizeProfile(parsed?.sizeProfile);
+    const normalized = normalizeRoomEditorLayoutState(
+      rawItems,
+      Object.keys(parsedSizeProfile).length ? parsedSizeProfile : null
+    );
+    if (normalized && normalized.items.length === 0) return fallbackState();
+    const assemblyState = readStoredRoomEditorAssemblySnapshot();
+    if (shouldUseRoomEditorAssemblyLayout(normalized, parsed, assemblyState)) return assemblyState;
+    return normalized || fallbackState();
   } catch {
     localStorage.removeItem(roomEditorStorageKey);
-    return defaultState;
+    return fallbackState();
+  }
+}
+
+function readStoredRoomEditorAssemblySnapshot() {
+  try {
+    const raw = localStorage.getItem(roomEditorAssemblyStorageKey);
+    if (!raw) return null;
+    if (raw.length > roomEditorMaxStorageBytes) {
+      localStorage.removeItem(roomEditorAssemblyStorageKey);
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    const rawItems = Array.isArray(parsed) ? parsed : parsed?.items;
+    const snapshotSizeProfile = normalizeRoomEditorSizeProfile(parsed?.sizeProfile);
+    const normalized = normalizeRoomEditorLayoutState(
+      rawItems,
+      Object.keys(snapshotSizeProfile).length ? snapshotSizeProfile : null
+    );
+    if (!normalized || normalized.items.length === 0) return null;
+    return {
+      ...normalized,
+      selectedId: String(parsed?.selectedId || normalized.items[0]?.id || ''),
+      home: parsed?.home || null,
+      palette: String(parsed?.palette || ''),
+      budget: Number(parsed?.budget || 0),
+      spent: Number(parsed?.spent || 0),
+      purchases: Array.isArray(parsed?.purchases) ? parsed.purchases : [],
+      sizeProfile: Object.keys(snapshotSizeProfile).length ? snapshotSizeProfile : null,
+      savedAt: getRoomEditorLayoutSavedAt(parsed)
+    };
+  } catch {
+    localStorage.removeItem(roomEditorAssemblyStorageKey);
+    return null;
   }
 }
 
@@ -1154,7 +1234,7 @@ function readStoredRoomEditorResetBackup() {
     }
     const parsed = JSON.parse(raw);
     const normalized = normalizeRoomEditorLayoutState(parsed?.items);
-    if (!normalized) return null;
+    if (!normalized || normalized.items.length === 0) return null;
     return {
       ...normalized,
       selectedId: String(parsed?.selectedId || normalized.items[0]?.id || ''),
@@ -1177,7 +1257,7 @@ function readStoredRoomEditorDefaultSnapshot() {
     }
     const parsed = JSON.parse(raw);
     const normalized = normalizeRoomEditorLayoutState(parsed?.items);
-    if (!normalized) return null;
+    if (!normalized || normalized.items.length === 0) return null;
     return {
       ...normalized,
       selectedId: String(parsed?.selectedId || normalized.items[0]?.id || ''),
@@ -1405,6 +1485,7 @@ export {
   roomEditorStorageKey,
   roomEditorCanvasStorageKey,
   roomEditorSizeProfileStorageKey,
+  roomEditorAssemblyStorageKey,
   roomEditorResetBackupStorageKey,
   roomEditorDefaultSnapshotStorageKey,
   roomEditorPlayerStorageKey,
@@ -1483,6 +1564,8 @@ export {
   roomScenes,
   getRoomEditorDefaultState,
   getBuiltInDefaultRoomEditorItems,
+  isBuiltInDefaultRoomEditorLayoutState,
+  shouldUseRoomEditorAssemblyLayout,
   normalizeRoomEditorItemAspect,
   migrateRoomEditorItemToCurrentAssetBox,
   getRoomEditorItemSizeKind,
@@ -1502,6 +1585,7 @@ export {
   getRoomEditorPlayerDepthTie,
   normalizeRoomEditorLayoutState,
   readStoredRoomEditorLayout,
+  readStoredRoomEditorAssemblySnapshot,
   readStoredRoomEditorResetBackup,
   readStoredRoomEditorDefaultSnapshot,
   clampRoomEditorPlayer,

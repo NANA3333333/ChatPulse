@@ -1,19 +1,13 @@
-import React, { useMemo, useState } from 'react';
-import { commercialV2BehaviorConfigStorageKey } from './behaviorTreeCore';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useLanguage } from '../../LanguageContext';
 import './PixelWorldPanel.css';
 import CommercialStreetEditor from './CommercialStreetEditor';
 import RoomAssetEditor from './RoomAssetEditor';
 import {
-  commercialV2StorageKey,
-  commercialV2CanvasStorageKey,
-  commercialV2ResetBackupStorageKey,
-  commercialV2DefaultSnapshotStorageKey
-} from './commercialStreetCore';
-import {
   roomScenes,
-  roomStyleMeta,
-  roomEditorPlayerStorageKey
+  roomStyleMeta
 } from './roomEditorCore';
+import PixelWorldErrorBoundary, { pixelWorldCacheKeys } from './PixelWorldErrorBoundary';
 
 const assetBase = '/assets/pixel-world/kenney-rpg-urban';
 const generatedBase = '/assets/pixel-world/generated-commercial';
@@ -28,7 +22,9 @@ const resolveImage = (id) => {
 const scenes = {
   street: {
     title: '繁华商业街',
+    titleEn: 'Busy Commercial Street',
     subtitle: '商业街 / 中介所 / 餐厅 / 便利店',
+    subtitleEn: 'Commercial street / agency / restaurant / convenience store',
     source: 'AI 生成拆解素材 / 本地透明 PNG / 64x64 地面 tile',
     assetNote: '商业街概念图拆解后的本地素材：建筑、街道道具、地面 tile 与围栏。人物素材先暂时舍弃。',
     size: { cols: 26, rows: 17 },
@@ -224,28 +220,35 @@ function Scene({ scene }) {
   );
 }
 
-function PixelWorldPanelContent({ apiUrl = '/api', userProfile = null }) {
-  const [activeScene, setActiveScene] = useState('street');
+function PixelWorldPanelContent({ apiUrl = '/api', userProfile = null, initialScene = 'street' }) {
+  const { lang } = useLanguage();
+  const isEn = lang === 'en';
+  const normalizedInitialScene = initialScene === 'room' ? 'room' : 'street';
+  const [activeScene, setActiveScene] = useState(normalizedInitialScene);
   const [activeRoomStyle, setActiveRoomStyle] = useState('empty');
   const scene = activeScene === 'room' ? roomScenes[activeRoomStyle] : scenes.street;
   const roomStyleEntries = Object.entries(roomStyleMeta);
+
+  useEffect(() => {
+    setActiveScene(normalizedInitialScene);
+  }, [normalizedInitialScene]);
 
   return (
     <div className="pixel-world-page">
       <div className="pixel-world-header">
         <div>
-          <div className="pixel-world-kicker">Pixel Implementation</div>
-          <h2>像素实装模块</h2>
-          <p>{scene.subtitle}</p>
+          <div className="pixel-world-kicker">{isEn ? 'Pixel Implementation' : '像素实装'}</div>
+          <h2>{isEn ? 'Pixel World' : '像素实装模块'}</h2>
+          <p>{isEn ? (scene.subtitleEn || scene.subtitle) : scene.subtitle}</p>
         </div>
-        <div className="pixel-world-tabs" role="tablist" aria-label="像素场景">
-          <button className={activeScene === 'street' ? 'active' : ''} onClick={() => setActiveScene('street')}>商业街</button>
-          <button className={activeScene === 'room' ? 'active' : ''} onClick={() => setActiveScene('room')}>居住房间</button>
+        <div className="pixel-world-tabs" role="tablist" aria-label={isEn ? 'Pixel scenes' : '像素场景'}>
+          <button className={activeScene === 'street' ? 'active' : ''} onClick={() => setActiveScene('street')}>{isEn ? 'Commercial Street' : '商业街'}</button>
+          <button className={activeScene === 'room' ? 'active' : ''} onClick={() => setActiveScene('room')}>{isEn ? 'Living Room' : '居住房间'}</button>
         </div>
       </div>
 
       {activeScene === 'room' && roomStyleEntries.length > 1 && (
-        <div className="pixel-world-style-tabs" role="tablist" aria-label="房间风格">
+        <div className="pixel-world-style-tabs" role="tablist" aria-label={isEn ? 'Room style' : '房间风格'}>
           {roomStyleEntries.map(([key, meta]) => (
             <button
               key={key}
@@ -267,60 +270,16 @@ function PixelWorldPanelContent({ apiUrl = '/api', userProfile = null }) {
   );
 }
 
-class PixelWorldErrorBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { error: null };
-  }
-
-  static getDerivedStateFromError(error) {
-    return { error };
-  }
-
-  componentDidCatch(error, info) {
-    console.error('[PixelWorld] module crashed', error, info);
-  }
-
-  retry = () => {
-    this.setState({ error: null });
-  };
-
-  clearPixelWorldCache = () => {
-    [
-      commercialV2StorageKey,
-      commercialV2CanvasStorageKey,
-      commercialV2ResetBackupStorageKey,
-      commercialV2DefaultSnapshotStorageKey,
-      commercialV2BehaviorConfigStorageKey,
-      roomEditorPlayerStorageKey
-    ].forEach((key) => localStorage.removeItem(key));
-    window.location.reload();
-  };
-
-  render() {
-    if (!this.state.error) return this.props.children;
-    return (
-      <div className="pixel-world-page">
-        <div className="pixel-world-crash-card">
-          <div className="pixel-world-kicker">Pixel Implementation</div>
-          <h2>像素实装模块没有正常打开</h2>
-          <p>模块入口已经拦截住这次崩溃了。可以先重试；如果还是打不开，清理商业街本地布局缓存后会恢复默认布局。</p>
-          <div className="pixel-world-crash-actions">
-            <button onClick={this.retry}>重试打开</button>
-            <button onClick={this.clearPixelWorldCache}>清理布局缓存</button>
-          </div>
-          <pre>{String(this.state.error?.message || this.state.error || 'Unknown error')}</pre>
-        </div>
-      </div>
-    );
-  }
-}
-
 export default function PixelWorldPanel(props) {
+  const { lang } = useLanguage();
   return (
-    <PixelWorldErrorBoundary>
+    <PixelWorldErrorBoundary
+      lang={lang}
+      cacheKeys={pixelWorldCacheKeys}
+      titleEn="Pixel World did not open correctly"
+      titleZh="像素实装模块没有正常打开"
+    >
       <PixelWorldPanelContent {...props} />
     </PixelWorldErrorBoundary>
   );
 }
-

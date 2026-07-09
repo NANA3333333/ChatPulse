@@ -93,7 +93,7 @@ function AddCharacterModal({ isOpen, onClose, onAdd, apiUrl }) {
 
     const handleFetchModels = async () => {
         if (!formData.api_endpoint || !formData.api_key) {
-            setModelFetchError('请先填写 API Endpoint 和 API Key');
+            setModelFetchError(lang === 'en' ? 'Fill in the API Endpoint and API Key first.' : '请先填写 API Endpoint 和 API Key');
             return;
         }
         setFetchingModels(true);
@@ -108,9 +108,9 @@ function AddCharacterModal({ isOpen, onClose, onAdd, apiUrl }) {
             const data = await res.json();
             if (!res.ok) throw new Error(data.error);
             setModelList(data.models || []);
-            if ((data.models || []).length === 0) setModelFetchError('未找到可用模型');
+            if ((data.models || []).length === 0) setModelFetchError(lang === 'en' ? 'No available models found.' : '未找到可用模型');
         } catch (e) {
-            setModelFetchError('拉取失败: ' + e.message);
+            setModelFetchError((lang === 'en' ? 'Fetch failed: ' : '拉取失败: ') + e.message);
         }
         setFetchingModels(false);
     };
@@ -126,19 +126,19 @@ function AddCharacterModal({ isOpen, onClose, onAdd, apiUrl }) {
                 width: '500px', maxWidth: '90%', maxHeight: '90vh', overflowY: 'auto'
             }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '15px' }}>
-                    <h3 style={{ margin: 0, fontSize: '18px' }}>Add New Contact</h3>
-                    <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={20} /></button>
+                    <h3 style={{ margin: 0, fontSize: '18px' }}>{lang === 'en' ? 'Add New Contact' : '添加新联系人'}</h3>
+                    <button onClick={onClose} title={lang === 'en' ? 'Close' : '关闭'} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={20} /></button>
                 </div>
 
                 {/* AI Generator Box */}
                 <div style={{ padding: '15px', backgroundColor: '#f9f9f9', border: '1px solid #ddd', borderRadius: '6px', marginBottom: '20px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '10px', color: '#333', fontWeight: 'bold' }}>
-                        <Wand2 size={16} color="var(--accent-color)" /> Auto-Generate Character
+                        <Wand2 size={16} color="var(--accent-color)" /> {lang === 'en' ? 'Auto-Generate Character' : '自动生成角色'}
                     </div>
                     <textarea
                         value={genQuery}
                         onChange={(e) => setGenQuery(e.target.value)}
-                        placeholder="Describe the persona... (Make sure to fill out API keys below first)"
+                        placeholder={lang === 'en' ? 'Describe the persona... (fill in the API settings below first)' : '描述角色设定...（请先填写下方 API 配置）'}
                         style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px', boxSizing: 'border-box', minHeight: '60px', resize: 'vertical' }}
                     />
                     <button
@@ -147,13 +147,13 @@ function AddCharacterModal({ isOpen, onClose, onAdd, apiUrl }) {
                         disabled={isGenerating}
                         style={{ marginTop: '10px', width: '100%', padding: '8px', backgroundColor: isGenerating ? '#ccc' : 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: '4px', cursor: isGenerating ? 'not-allowed' : 'pointer' }}
                     >
-                        {isGenerating ? '✨ Generating...' : 'Auto-Fill Form'}
+                        {isGenerating ? (lang === 'en' ? '✨ Generating...' : '✨ 生成中...') : (lang === 'en' ? 'Auto-Fill Form' : '自动填充表单')}
                     </button>
                 </div>
 
                 <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                     <div>
-                        <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 'bold' }}>{t('Name')} (Required)</label>
+                        <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 'bold' }}>{t('Name')} ({lang === 'en' ? 'Required' : '必填'})</label>
                         <input type="text" required value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })}
                             style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px', boxSizing: 'border-box' }} />
                     </div>
@@ -170,7 +170,7 @@ function AddCharacterModal({ isOpen, onClose, onAdd, apiUrl }) {
                             style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px', boxSizing: 'border-box', fontFamily: 'inherit' }} />
                     </div>
                     <div>
-                        <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 'bold' }}>Initial Affinity (0-100)</label>
+                        <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px', fontWeight: 'bold' }}>{lang === 'en' ? 'Initial Affinity (0-100)' : '初始好感度 (0-100)'}</label>
                         <input type="number" min="0" max="100" value={formData.affinity} onChange={e => setFormData({ ...formData, affinity: parseInt(e.target.value) || 0 })}
                             style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px', boxSizing: 'border-box' }} />
                     </div>
@@ -212,7 +212,7 @@ function AddCharacterModal({ isOpen, onClose, onAdd, apiUrl }) {
                                 defaultValue=""
                                 style={{ marginTop: '6px', width: '100%', padding: '7px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
                             >
-                                <option value="" disabled>── 选择模型 ──</option>
+                                <option value="" disabled>{lang === 'en' ? '── Select model ──' : '── 选择模型 ──'}</option>
                                 {modelList.map(m => <option key={m} value={m}>{m}</option>)}
                             </select>
                         )}

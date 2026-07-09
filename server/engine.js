@@ -3,6 +3,7 @@ const { callLLM } = require('./llm');
 const { buildUniversalContext, formatTypedAntiRepeatBlock } = require('./contextBuilder');
 const { applyEmotionEvent, buildEmotionLogEntry, getExplicitEmotionStatePatch } = require('./emotion');
 const { getTokenCount } = require('./utils/tokenizer');
+const { getLocalDateTimeFacts } = require('./utils/timeFacts');
 const { enqueueBackgroundTask } = require('./backgroundQueue');
 const { parseTtsIntentTag, stripTtsIntentTags, shouldSynthesizePrivateTts, synthesizeAndStoreMessage } = require('./tts');
 const crypto = require('crypto');
@@ -130,10 +131,10 @@ function getDefaultGuidelines(userName = '用户') {
    - transfer: [TRANSFER:amount|note] amount <= wallet
    - diary: [DIARY:text] only for a meaningful new thought; [DIARY_PASSWORD:value] only if you willingly reveal it; if user sincerely asks to read it, output [UNLOCK_DIARY]
    - relationship: [AFFINITY:+1] or [AFFINITY:-1] (integer -100..100); [CHAR_AFFINITY:characterId:+1] or [CHAR_AFFINITY:characterId:-1] (integer -100..100)
-   - state: [PRESSURE:0] (integer 0..4), [MOOD_DELTA:+2] or [MOOD_DELTA:-2] (integer -12..12), [PRESSURE_DELTA:+1] or [PRESSURE_DELTA:-1] (integer -2..2). Use concrete digits only; never output N placeholders.
-   - emotion: optional [EMOTION_REASON:short text]; if the reply itself clearly sounds jealous|hurt|angry|lonely|happy|sad|cautious|guarded|shy|hopeful|playful|disappointed|relieved|affectionate|reassured|yearning|flustered|guilty|frustrated|wistful|proud|secure|tender|helpless|tense|calm, output exactly one [EMOTION_STATE:value] in the same reply
-   - emotion whitelist: when you output [EMOTION_STATE:value], value MUST be chosen from exactly this library and nothing else: jealous, hurt, angry, lonely, happy, sad, cautious, guarded, shy, hopeful, playful, disappointed, relieved, affectionate, reassured, yearning, flustered, guilty, frustrated, wistful, proud, secure, tender, helpless, tense, calm
+   - emotion: if your current mood clearly changes in this reply, output exactly one [EMOTION_STATE:value] in the same reply
+   - emotion whitelist: when you output [EMOTION_STATE:value], value MUST be chosen from exactly this name-only library and nothing else: jealous, hurt, angry, lonely, happy, sad, cautious, guarded, shy, hopeful, playful, disappointed, relieved, affectionate, reassured, yearning, flustered, guilty, frustrated, wistful, proud, secure, tender, helpless, tense, calm
    - never invent a new emotion word, synonym, translation variant, or nuanced label outside the library. If none fits well enough, omit [EMOTION_STATE] instead of improvising
+   - do not output [MOOD_DELTA], [PRESSURE_DELTA], [PRESSURE], or [EMOTION_REASON] to change mood. Mood can only change through [EMOTION_STATE:value]
    - web: optional realism protocol. If, as the character, you feel this specific reply would be more natural, vivid, or higher-quality after checking something online, first say a brief in-character line and append [WEB_SEARCH_INTENT:{"reason":"","query_hint":""}]. The system will search and let you continue with the results. Omit this tag whenever you can reply naturally without extra online context.
    - web: query_hint should be a concise real search phrase. Use this for believable phone/web-check behavior, not for every factual question. Never mention backend/API/key/tooling.
    - tts: optional private-chat speech request. Use [TTS_INTENT:{"style":"soft|playful|comforting|serious","reason":"short reason","priority":1}] only when hearing this exact reply in your voice would materially improve the emotional effect. Use it rarely. Do not use it for routine acknowledgements, factual answers, web-search drafts, system/event replies, or every affectionate line.
@@ -3309,7 +3310,7 @@ ${dynamicPromptBase}`;
         });
         if (dynamicMemories && dynamicMemories.length > 0) {
             const querySummary = Array.isArray(retrievalRequest.queries) ? retrievalRequest.queries.join(' | ') : retrievalLabel;
-            const currentAbsoluteTime = new Date().toLocaleString();
+            const currentAbsoluteTime = getLocalDateTimeFacts(new Date()).label;
             const formattedMemories = dynamicMemories.map((m, index) => {
                 const summary = String(m.summary || m.event || '').trim();
                 const content = String(m.content || '').trim();
@@ -3730,6 +3731,7 @@ ${dynamicPromptBase}`;
                 cacheTtlMs: 24 * 60 * 60 * 1000,
                 cacheScope: `character:${character.id}`,
                 cacheCharacterId: character.id,
+                cacheKeyExtra: 'weekday-timefacts-v1',
                 cacheKeyMode: 'private_prefix',
                 enablePromptCacheHints: !!isUserReply,
                 promptCacheHintMode: 'stable_system_only',
@@ -3813,6 +3815,7 @@ ${dynamicPromptBase}`;
                             cacheTtlMs: 24 * 60 * 60 * 1000,
                             cacheScope: `character:${character.id}`,
                             cacheCharacterId: character.id,
+                            cacheKeyExtra: 'weekday-timefacts-v1',
                             cacheKeyMode: 'private_prefix',
                             enablePromptCacheHints: !!isUserReply,
                             promptCacheHintMode: 'stable_system_only',
@@ -3894,17 +3897,8 @@ ${dynamicPromptBase}`;
             if (generatedTransferMatch && !generatedTransferIntent.amount) {
                 throw new Error('AI returned invalid transfer amount. Please retry.');
             }
-            const generatedPressureMatch = charCheck.sys_pressure !== 0
-                ? String(generatedText || '').match(/\[PRESSURE:\s*([^\]\s]+)\s*\]/i)
-                : null;
-            const generatedPressureLevel = generatedPressureMatch
-                ? normalizeGeneratedPressureLevel(generatedPressureMatch[1])
-                : null;
-            if (generatedPressureMatch && generatedPressureLevel == null) {
-                throw new Error('AI returned invalid pressure level. Please retry.');
-            }
-            const generatedMoodDelta = parseTaggedDelta(generatedText, 'MOOD_DELTA', -12, 12);
-            const generatedPressureDelta = parseTaggedDelta(generatedText, 'PRESSURE_DELTA', -2, 2);
+            // Mood changes are constrained to EMOTION_STATE only.
+            // Legacy mood/pressure tags are still stripped later, but no longer mutate mood.
             const generatedJealousyLevel = charCheck.sys_jealousy !== 0
                 ? parseGeneratedBoundedTag(generatedText, 'JEALOUSY', 0, 100, 'AI returned invalid jealousy level. Please retry.')
                 : null;
@@ -3996,27 +3990,9 @@ ${dynamicPromptBase}`;
                     broadcastEvent(wsClients, { type: 'refresh_contacts' });
                 }
 
-                const emotionReasonRegex = /\[EMOTION_REASON:\s*([\s\S]*?)\s*\]/i;
-                const emotionReasonMatch = generatedText.match(emotionReasonRegex);
-                const aiEmotionReason = emotionReasonMatch?.[1]?.trim() || '';
-
                 const combinedEmotionPatch = {};
                 let combinedEmotionSource = '';
                 const combinedEmotionReasons = [];
-
-                const moodDelta = generatedMoodDelta;
-                const pressureDelta = generatedPressureDelta;
-                if (moodDelta !== null) {
-                    combinedEmotionPatch.mood = clamp((charCheck.mood ?? 50) + moodDelta, 0, 100);
-                    combinedEmotionSource = combinedEmotionSource || 'ai_combined_emotion_update';
-                }
-                if (pressureDelta !== null) {
-                    combinedEmotionPatch.pressure_level = clamp((charCheck.pressure_level ?? 0) + pressureDelta, 0, 4);
-                    combinedEmotionSource = combinedEmotionSource || 'ai_combined_emotion_update';
-                }
-                if (moodDelta !== null || pressureDelta !== null) {
-                    combinedEmotionReasons.push('角色在回复中主动给出了自己的心情/焦虑变化值。');
-                }
 
                 const emotionStateRegex = /\[EMOTION_STATE:\s*([a-zA-Z_\u4e00-\u9fa5]+)\s*\]/i;
                 const emotionStateMatch = generatedText.match(emotionStateRegex);
@@ -4025,16 +4001,8 @@ ${dynamicPromptBase}`;
                     if (statePatch && Object.keys(statePatch).length > 0) {
                         Object.assign(combinedEmotionPatch, statePatch);
                         combinedEmotionSource = combinedEmotionSource || 'ai_combined_emotion_update';
-                        combinedEmotionReasons.push('角色在回复中主动声明了当前主情绪。');
+                        combinedEmotionReasons.push('角色在回复中从允许的心情名称中选择了当前主情绪。');
                     }
-                }
-
-                // Check for Pressure changes (AI-evaluated resets)
-                if (generatedPressureLevel !== null) {
-                    console.log(`[Engine] ${charCheck.name} evaluation: Pressure set to ${generatedPressureLevel}`);
-                    combinedEmotionPatch.pressure_level = generatedPressureLevel;
-                    combinedEmotionSource = combinedEmotionSource || 'ai_combined_emotion_update';
-                    combinedEmotionReasons.push('角色在回复中主动调整了自己的焦虑值。');
                 }
 
                 // Parse [JEALOUSY:N] tag; AI self-regulates jealousy cooldown.
@@ -4053,7 +4021,7 @@ ${dynamicPromptBase}`;
                         charCheck,
                         combinedEmotionPatch,
                         combinedEmotionSource || 'ai_combined_emotion_update',
-                        aiEmotionReason || combinedEmotionReasons.join(' ')
+                        combinedEmotionReasons.join(' ')
                     );
                     Object.assign(charCheck, combinedEmotionPatch);
                     broadcastEvent(wsClients, { type: 'refresh_contacts' });
@@ -4233,9 +4201,9 @@ ${dynamicPromptBase}`;
                         setRagFailureState(character.id, null);
                     }
 
-                    // Trigger memory extraction in background based on recent context + new full message
-                    memory.extractMemoryFromContext(character, [...liveHistory, { role: 'character', content: generatedText, timestamp: Date.now() }])
-                        .catch(err => console.error('[Engine] Memory extraction err:', err.message));
+                    // Long-term memory extraction is handled by the overflow sweep/manual extraction paths.
+                    // Avoid running the small memory model after every reply; overlapping chat windows
+                    // create duplicate memory cards and unnecessary token usage.
                 }
             }
 

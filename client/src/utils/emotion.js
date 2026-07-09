@@ -1,3 +1,48 @@
+const EMOTION_LABEL_EN = {
+    jealous: 'Jealous',
+    hurt: 'Hurt',
+    angry: 'Angry',
+    lonely: 'Lonely',
+    happy: 'Happy',
+    sad: 'Sad',
+    cautious: 'Cautious',
+    guarded: 'Guarded',
+    shy: 'Shy',
+    hopeful: 'Hopeful',
+    playful: 'Playful',
+    disappointed: 'Disappointed',
+    relieved: 'Relieved',
+    affectionate: 'Attached',
+    reassured: 'Reassured',
+    yearning: 'Missing You',
+    flustered: 'Flustered',
+    guilty: 'Guilty',
+    frustrated: 'Frustrated',
+    wistful: 'Wistful',
+    proud: 'Proud',
+    secure: 'Certain',
+    tender: 'Tender',
+    helpless: 'Helpless',
+    tense: 'Irritated',
+    calm: 'Calm'
+};
+
+const PHYSICAL_LABEL_EN = {
+    severe_unwell: 'Very Unwell',
+    unwell: 'Unwell',
+    sleepy: 'Sleepy',
+    hungry: 'Hungry',
+    overfull: 'Heavy Stomach',
+    fatigued: 'Tired',
+    stable: 'Stable'
+};
+
+export function getStateDisplayLabel(state, lang = 'zh') {
+    if (!state) return '';
+    if (lang !== 'en') return state.label || '';
+    return state.labelEn || EMOTION_LABEL_EN[state.key] || PHYSICAL_LABEL_EN[state.key] || state.label || '';
+}
+
 function getEmotionByState(state = '') {
     switch (String(state || '').trim().toLowerCase()) {
         case 'jealous':

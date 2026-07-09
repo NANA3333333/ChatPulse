@@ -1,0 +1,27 @@
+{
+  "id": "droplet-halo-mage-v1",
+  "displayName": "Droplet Halo Mage",
+  "source": "source/front-idle-approved-source.png",
+  "frameSize": {
+    "width": 256,
+    "height": 320
+  },
+  "anchor": {
+    "x": 128,
+    "y": 288
+  },
+  "directions": [
+    "front",
+    "back",
+    "left",
+    "right"
+  ],
+  "frames": [
+    "idle",
+    "step_a",
+    "passing",
+    "step_b"
+  ],
+  "recommendedFps": 8,
+  "notes": "Active runtime frames are 256x320 HiDPI sprites, and this character uses visualScale 1.25 in the pixel-world renderer so the detailed cloak motifs and water droplets are not squeezed too small. Front idle was manually recut from the full reference sheet with extra cloak padding; only the connected paper-background gap between the boots and the source guide line were removed, preserving the white inner robe shape. Front step A is an approved source; front step B is a horizontal mirror of front step A, and front passing uses front idle. Side idle and passing use the approved left-facing standing side image, mirrored for right-facing; side step A and step B keep the approved walking side pose. Back idle is AI-generated from the approved design; back step A uses the approved back-walk-away frame with the cloak covering the white inner robe, and back step B is mirrored from step A. Back passing uses idle. The older 64x80 and 128x160 sets are retained only as fallbacks."
+}

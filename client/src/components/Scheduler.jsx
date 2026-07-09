@@ -197,7 +197,7 @@ function Scheduler({ apiUrl, contacts = [], contact = null, variant = 'card' }) 
     };
 
     return (
-        <div style={isDrawerVariant ? { ...cardStyle, marginTop: '10px', borderRadius: 0, borderLeft: 0, borderRight: 0, padding: '15px' } : cardStyle}>
+        <div className={`scheduler-panel scheduler-panel--${isDrawerVariant ? 'drawer' : 'card'}`} style={isDrawerVariant ? { ...cardStyle, marginTop: '10px', borderRadius: 0, borderLeft: 0, borderRight: 0, padding: '15px' } : cardStyle}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isDrawerVariant ? 'flex-start' : 'center', gap: '12px', marginBottom: '16px', flexWrap: isDrawerVariant ? 'wrap' : 'nowrap' }}>
                 <div>
                     <h2 style={{ margin: 0, fontSize: isDrawerVariant ? '15px' : '18px' }}>
@@ -219,7 +219,7 @@ function Scheduler({ apiUrl, contacts = [], contact = null, variant = 'card' }) 
                 </button>
             </div>
 
-            <div style={{ ...cardStyle, marginTop: 0, padding: isDrawerVariant ? '14px' : cardStyle.padding, background: '#fafcff', borderColor: '#dbe7ff' }}>
+            <div className="scheduler-memory-card" style={{ ...cardStyle, marginTop: 0, padding: isDrawerVariant ? '14px' : cardStyle.padding, background: '#fafcff', borderColor: '#dbe7ff' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
                     <Brain size={16} color="#4f7cff" />
                     <strong>{lang === 'en' ? 'Daily Memory Aggregation' : '每日记忆汇总'}</strong>

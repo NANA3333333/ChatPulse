@@ -337,7 +337,7 @@ function RedPacketCard({ packetId, apiUrl, groupId, resolveSender, claimEvent })
 }
 
 /* ─── Right-side Group Management Drawer ─── */
-function GroupManageDrawer({ group, apiUrl, resolveSender, onClose, lang, allContacts, onAddMember, onRename, onGroupUpdated }) {
+export function GroupManageDrawer({ group, apiUrl, resolveSender, onClose, lang, allContacts, onAddMember, onRename, onGroupUpdated }) {
     const [noChain, setNoChain] = useState(false);
     const [injectLimit, setInjectLimit] = useState(group?.inject_limit ?? 5);
     const [contextLimit, setContextLimit] = useState(group?.context_msg_limit ?? 60);
@@ -424,7 +424,7 @@ function GroupManageDrawer({ group, apiUrl, resolveSender, onClose, lang, allCon
                 <h3 style={{ margin: 0, fontSize: '15px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <Settings size={16} /> {lang === 'en' ? 'Group Management' : '群管理'}
                 </h3>
-                <button className="group-manage-drawer__close" onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}><X size={18} /></button>
+                <button className="group-manage-drawer__close" onClick={onClose} title={lang === 'en' ? 'Close' : '关闭'} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}><X size={18} /></button>
             </div>
 
             {/* Group Name (editable) */}
@@ -596,13 +596,42 @@ function GroupManageDrawer({ group, apiUrl, resolveSender, onClose, lang, allCon
 }
 
 /* ─── Main GroupChatWindow ─── */
-function GroupChatWindow({ group, apiUrl, allContacts, userProfile, incomingGroupMessageQueue, typingIndicators, redpacketClaimEvent, onBack, onGroupUpdated }) {
+function GroupChatWindow({
+    group,
+    apiUrl,
+    allContacts,
+    userProfile,
+    incomingGroupMessageQueue,
+    typingIndicators,
+    redpacketClaimEvent,
+    onBack,
+    onGroupUpdated,
+    isManageOpen,
+    onToggleManage,
+    onCloseManage
+}) {
     const { lang } = useLanguage();
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState('');
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const [showRedPacketModal, setShowRedPacketModal] = useState(false);
     const [showManageDrawer, setShowManageDrawer] = useState(false);
+    const isManageControlled = typeof isManageOpen === 'boolean';
+    const manageDrawerOpen = isManageControlled ? isManageOpen : showManageDrawer;
+    const toggleManageDrawer = () => {
+        if (onToggleManage) {
+            onToggleManage();
+            return;
+        }
+        setShowManageDrawer(current => !current);
+    };
+    const closeManageDrawer = () => {
+        if (onCloseManage) {
+            onCloseManage();
+            return;
+        }
+        setShowManageDrawer(false);
+    };
     const messagesEndRef = useRef(null);
     const fileInputRef = useRef(null);
     const textareaRef = useRef(null);
@@ -792,7 +821,7 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, incomingGrou
                 {/* Header */}
                 <div className="chat-header">
                     <div className="chat-header-title group-chat-header-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <button className="mobile-back-btn" onClick={onBack} title="Back">
+                        <button className="mobile-back-btn" onClick={onBack} title={lang === 'en' ? 'Back' : '返回'}>
                             <ChevronLeft size={24} />
                         </button>
                         <Users size={20} />
@@ -805,8 +834,8 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, incomingGrou
                             <Trash size={20} />
                             <span>{lang === 'en' ? 'Select' : '选择消息'}</span>
                         </button>
-                        <button onClick={() => setShowManageDrawer(!showManageDrawer)}
-                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: showManageDrawer ? 'var(--danger)' : 'var(--accent-color)' }}
+                        <button onClick={toggleManageDrawer}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: manageDrawerOpen ? 'var(--danger)' : 'var(--accent-color)' }}
                             title={lang === 'en' ? 'Group management — members, AI controls, danger zone' : '群管理 — 成员、AI 控制、危险操作'}>
                             <Settings size={20} />
                             <span>{lang === 'en' ? 'Manage' : '群管理'}</span>
@@ -1148,9 +1177,9 @@ function GroupChatWindow({ group, apiUrl, allContacts, userProfile, incomingGrou
                 )}
             </div>
 
-            {showManageDrawer && (
+            {!isManageControlled && manageDrawerOpen && (
                 <GroupManageDrawer group={group} apiUrl={apiUrl} resolveSender={resolveSender}
-                    onClose={() => setShowManageDrawer(false)} lang={lang}
+                    onClose={closeManageDrawer} lang={lang}
                     messages={messages} allContacts={allContacts}
                     onAddMember={handleAddMember} onRename={handleRename} onGroupUpdated={onGroupUpdated} />
             )}

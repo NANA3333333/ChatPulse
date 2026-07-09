@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLanguage } from '../../LanguageContext';
+import { pixelTx, translatePixelAction, translatePixelText } from './pixelWorldI18n';
 import {
   commercialV2BehaviorConfigStorageKey,
   commercialV2BehaviorTreeStorageKey,
@@ -342,6 +344,9 @@ import {
 } from './roomEditorCore';
 
 function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
+  const { lang } = useLanguage();
+  const tx = useCallback((en, zh) => pixelTx(en, zh, lang), [lang]);
+  const ptxt = useCallback((value) => translatePixelText(value, lang), [lang]);
   const stageRef = useRef(null);
   const canvasWrapRef = useRef(null);
   const dragRef = useRef(null);
@@ -380,6 +385,7 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
   const [showCollisionLines, setShowCollisionLines] = useState(false);
   const [showPlaceAnchors, setShowPlaceAnchors] = useState(false);
   const [showLayerPanel, setShowLayerPanel] = useState(false);
+  const [showAdvancedToolbar, setShowAdvancedToolbar] = useState(false);
   const [activeAssetType, setActiveAssetType] = useState('家具');
   const [playerActionBubble, setPlayerActionBubble] = useState('');
   const [activeBehaviorDialog, setActiveBehaviorDialog] = useState(null);
@@ -405,12 +411,18 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
   const [behaviorModelsLoading, setBehaviorModelsLoading] = useState(false);
   const [behaviorShowKey, setBehaviorShowKey] = useState(false);
   const [behaviorPanelCollapsed, setBehaviorPanelCollapsed] = useState(false);
+  const [roomBehaviorPanelCollapsed, setRoomBehaviorPanelCollapsed] = useState(false);
   const [behaviorFoldOpen, setBehaviorFoldOpen] = useState({
     model: false,
     context: false,
     constraints: true,
     branchMap: false,
     interaction: true,
+    runtime: true,
+    debug: false
+  });
+  const [roomBehaviorFoldOpen, setRoomBehaviorFoldOpen] = useState({
+    constraints: true,
     runtime: true,
     debug: false
   });
@@ -433,6 +445,15 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
     height: commercialV2PlayerSize.height * playerScale,
     footOffset: commercialV2PlayerSize.footOffset * playerScale
   }), [playerScale]);
+  const getPlayerVisualDimensions = useCallback((targetPlayer) => {
+    const character = getCommercialV2PlayerCharacter(targetPlayer);
+    const visualScale = Math.max(0.25, Number(character?.visualScale) || 1);
+    return {
+      width: playerDimensions.width * visualScale,
+      height: playerDimensions.height * visualScale,
+      footOffset: playerDimensions.footOffset * visualScale
+    };
+  }, [playerDimensions]);
   const roomCollisionRects = useMemo(() => items
     .map((item) => {
       const asset = assetById.get(item.assetId);
@@ -627,10 +648,12 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
   const behaviorCharacter = behaviorCharacters.find((item) => item.id === behaviorCharacterId) || behaviorCharacters[0] || null;
   const behaviorPrimaryActions = commercialV2BehaviorPrimaryActionIds
     .map((id) => commercialV2BehaviorActions.find((item) => item.id === id))
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((action) => translatePixelAction(action, lang));
   const behaviorContextActions = commercialV2BehaviorContextActionIds
     .map((id) => commercialV2BehaviorActions.find((item) => item.id === id))
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((action) => translatePixelAction(action, lang));
   const canEditLayout = !viewMode;
   const canRotateSelected = Boolean(canEditLayout && !groupEditMode && selectedItem && selectedAsset && selectedDirectionGroup);
   const normalizeRoomEditorLiveItem = useCallback((item) => {
@@ -2120,7 +2143,7 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
     const kind = getRoomEditorItemSizeKind(next, asset);
     const liveProfile = buildRoomEditorSizeProfile(items, assetById);
     const storedProfile = readStoredRoomEditorSizeProfile();
-    const size = roomEditorCalibratedSizeProfile[kind] || liveProfile[kind] || storedProfile[kind];
+    const size = liveProfile[kind] || storedProfile[kind] || roomEditorCalibratedSizeProfile[kind];
     if (size) next = resizeRoomEditorItemByKindSize(next, size, kind);
     commitItems((prev) => [...prev, clampBox(normalizeRoomEditorItemAspect(next, asset), stageSize)]);
     setSelectedId(next.id);
@@ -2169,20 +2192,22 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
 
   function buildLayoutSnapshot() {
     const { latestItems, latestPlayers, latestControlledPlayerId, latestPlayerScale } = getLatestLayoutParts();
+    const serializedItems = latestItems
+      .slice(0, roomEditorMaxSavedItems)
+      .map((item) => serializeRoomEditorItem(item, assetById.get(item.assetId)));
     return {
       selectedId,
       savedAt: Date.now(),
       players: serializeRoomEditorPlayers(latestPlayers, latestControlledPlayerId, latestPlayerScale),
-      items: latestItems
-        .slice(0, roomEditorMaxSavedItems)
-        .map((item) => serializeRoomEditorItem(item, assetById.get(item.assetId)))
+      sizeProfile: buildRoomEditorSizeProfile(serializedItems, assetById),
+      items: serializedItems
     };
   }
 
   function saveLayout() {
     try {
       const snapshot = buildLayoutSnapshot();
-      localStorage.setItem(roomEditorStorageKey, JSON.stringify(snapshot.items));
+      localStorage.setItem(roomEditorStorageKey, JSON.stringify(snapshot));
       localStorage.setItem(roomEditorSizeProfileStorageKey, JSON.stringify(buildRoomEditorSizeProfile(snapshot.items, assetById)));
       localStorage.setItem(roomEditorPlayerStorageKey, JSON.stringify(snapshot.players));
       localStorage.setItem(roomEditorCanvasStorageKey, JSON.stringify(buildCanvasSnapshot()));
@@ -2209,7 +2234,7 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
     try {
       const snapshot = buildLayoutSnapshot();
       localStorage.setItem(roomEditorDefaultSnapshotStorageKey, JSON.stringify(snapshot));
-      localStorage.setItem(roomEditorStorageKey, JSON.stringify(snapshot.items));
+      localStorage.setItem(roomEditorStorageKey, JSON.stringify(snapshot));
       localStorage.setItem(roomEditorSizeProfileStorageKey, JSON.stringify(buildRoomEditorSizeProfile(snapshot.items, assetById)));
       localStorage.setItem(roomEditorPlayerStorageKey, JSON.stringify(snapshot.players));
       localStorage.setItem(roomEditorCanvasStorageKey, JSON.stringify(buildCanvasSnapshot()));
@@ -2228,7 +2253,12 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
     }
     try {
       const itemsToSave = normalized.items.map((item) => serializeRoomEditorItem(item, assetById.get(item.assetId)));
-      localStorage.setItem(roomEditorStorageKey, JSON.stringify(itemsToSave));
+      localStorage.setItem(roomEditorStorageKey, JSON.stringify({
+        selectedId: String(snapshot?.selectedId || normalized.items[0]?.id || ''),
+        savedAt: Date.now(),
+        sizeProfile: buildRoomEditorSizeProfile(itemsToSave, assetById),
+        items: itemsToSave
+      }));
       localStorage.setItem(roomEditorSizeProfileStorageKey, JSON.stringify(buildRoomEditorSizeProfile(itemsToSave, assetById)));
       if (snapshot?.players) {
         const nextPlayers = normalizeRoomEditorPlayersSnapshot(snapshot.players);
@@ -2828,7 +2858,7 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
           top: `${(place.anchor.y / stageSize.height) * 100}%`,
           zIndex: roomEditorOverlayZIndex + layerIndex
         }}
-        title={`${place.name} 锚点`}
+        title={tx(`${ptxt(place.name)} anchor`, `${place.name} 锚点`)}
       >
         <span>{place.name}</span>
       </span>
@@ -2852,8 +2882,8 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
           onClick={() => setInteractionMenuOpen(true)}
           disabled={behaviorLoading || !behaviorCharacterId}
         >
-          <strong>{behaviorLoading ? '生成中' : '互动'}</strong>
-          <span>{behaviorCharacter?.name || '角色'}</span>
+          <strong>{behaviorLoading ? tx('Generating', '生成中') : tx('Interact', '互动')}</strong>
+          <span>{behaviorCharacter?.name || tx('Character', '角色')}</span>
         </button>
       );
     }
@@ -2864,13 +2894,13 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
         onPointerDown={(event) => event.stopPropagation()}
       >
         <div className="pixel-world-interaction-menu-head">
-          <strong>{behaviorCharacter?.name || '角色'}</strong>
+          <strong>{behaviorCharacter?.name || tx('Character', '角色')}</strong>
           <button
             type="button"
             className="pixel-world-interaction-close"
             onClick={() => setInteractionMenuOpen(false)}
           >
-            收起
+            {tx('Collapse', '收起')}
           </button>
         </div>
         <div className="pixel-world-interaction-menu-primary">
@@ -2888,19 +2918,19 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
           ))}
         </div>
         <div className="pixel-world-interaction-menu-target">
-          <span>目的地</span>
+          <span>{tx('Destination', '目的地')}</span>
           <select
             value={behaviorPlaceId}
             onChange={(event) => setBehaviorPlaceId(event.target.value)}
             disabled={behaviorLoading || !behaviorPlaceOptions.length}
-            aria-label="互动目的地"
+            aria-label={tx('Interaction destination', '互动目的地')}
           >
             {behaviorPlaceOptions.length ? behaviorPlaceOptions.map((option) => (
               <option key={option.id} value={option.id}>
                 {option.order ? `${option.order}. ` : ''}{option.label}
               </option>
             )) : (
-              <option value="">暂无地点</option>
+              <option value="">{tx('No places', '暂无地点')}</option>
             )}
           </select>
         </div>
@@ -2929,9 +2959,9 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
       <div className={`pixel-world-behavior-actor ${actorId === commercialV2RoleActorId ? 'role' : 'user'}`}>
         <img src={commercialV2PlayerFrame(actor, `${actor.direction || 'front'}_walk_idle.png`)} alt="" draggable={false} />
         <div>
-          <strong>{title}</strong>
-          <span>{character.label} · 房间语义移动</span>
-          <small>{note}</small>
+          <strong>{ptxt(title)}</strong>
+          <span>{ptxt(character.label)} · {tx('Room semantic movement', '房间语义移动')}</span>
+          <small>{ptxt(note)}</small>
         </div>
       </div>
     );
@@ -2954,9 +2984,9 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
           onClick={() => toggleBehaviorFold(key)}
           aria-expanded={open}
         >
-          <span>{title}</span>
-          {summary && <small>{summary}</small>}
-          <strong>{open ? '收起' : '展开'}</strong>
+          <span>{ptxt(title)}</span>
+          {summary && <small>{ptxt(summary)}</small>}
+          <strong>{open ? tx('Collapse', '收起') : tx('Expand', '展开')}</strong>
         </button>
         {open && (
           <div className="pixel-world-behavior-fold-body">
@@ -2978,12 +3008,12 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
             type="button"
             className="pixel-world-behavior-panel-expand"
             onClick={() => setBehaviorPanelCollapsed(false)}
-            title="展开行为树面板"
-            aria-label="展开行为树面板"
+            title={tx('Expand behavior-tree panel', '展开行为树面板')}
+            aria-label={tx('Expand behavior-tree panel', '展开行为树面板')}
           >
-            <span>行为树</span>
+            <span>{tx('Behavior Tree', '行为树')}</span>
             <strong>{behaviorPanelStateLabel}</strong>
-            <small>展开</small>
+            <small>{tx('Expand', '展开')}</small>
           </button>
         </aside>
       );
@@ -2993,17 +3023,17 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
       <aside className="pixel-world-behavior-panel room-behavior-panel">
         <div className="pixel-world-behavior-head">
           <div>
-            <h3>房间行为树 V1</h3>
-            <span>通用完整行为树 / 房间锚点运行时</span>
+            <h3>{tx('Room Behavior Tree V1', '房间行为树 V1')}</h3>
+            <span>{tx('Shared full behavior tree / room-anchor runtime', '通用完整行为树 / 房间锚点运行时')}</span>
           </div>
           <div className="pixel-world-behavior-head-actions">
             <strong>{behaviorPanelStateLabel}</strong>
             <button
               type="button"
               onClick={() => setBehaviorPanelCollapsed(true)}
-              title="收起整个行为树面板"
+              title={tx('Collapse the full behavior-tree panel', '收起整个行为树面板')}
             >
-              收起
+              {tx('Collapse', '收起')}
             </button>
           </div>
         </div>
@@ -3014,7 +3044,7 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
         </div>
 
         <label className="pixel-world-behavior-field">
-          <span>绑定角色</span>
+          <span>{tx('Bound Character', '绑定角色')}</span>
           <select
             value={behaviorCharacterId}
             onChange={(event) => setBehaviorCharacterId(event.target.value)}
@@ -3023,15 +3053,15 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
             {behaviorCharacters.length ? behaviorCharacters.map((item) => (
               <option key={item.id} value={item.id}>{item.name || item.id}</option>
             )) : (
-              <option value="">暂无角色</option>
+              <option value="">{tx('No characters', '暂无角色')}</option>
             )}
           </select>
         </label>
 
         {renderBehaviorFold(
           'model',
-          '模型配置',
-          behaviorConfig.model_name || behaviorCharacter?.model_name || '使用绑定角色',
+          tx('Model Config', '模型配置'),
+          behaviorConfig.model_name || behaviorCharacter?.model_name || tx('Use Bound Character', '使用绑定角色'),
           (
             <div className="pixel-world-behavior-model-grid">
               <label className="pixel-world-behavior-field">
@@ -3039,25 +3069,25 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                 <input
                   value={behaviorConfig.api_endpoint}
                   onChange={(event) => updateBehaviorConfig({ api_endpoint: event.target.value })}
-                  placeholder={behaviorCharacter?.api_endpoint ? '留空使用绑定角色 URL' : 'https://api.example.com/v1'}
+                  placeholder={behaviorCharacter?.api_endpoint ? tx('Leave empty to use bound character URL', '留空使用绑定角色 URL') : 'https://api.example.com/v1'}
                 />
               </label>
               <label className="pixel-world-behavior-field">
-                <span>Key</span>
+                <span>{tx('Key', '密钥')}</span>
                 <input
                   type={behaviorShowKey ? 'text' : 'password'}
                   value={behaviorConfig.api_key}
                   onChange={(event) => updateBehaviorConfig({ api_key: event.target.value })}
-                  placeholder="留空使用绑定角色 Key"
+                  placeholder={tx('Leave empty to use bound character Key', '留空使用绑定角色 Key')}
                 />
               </label>
               <label className="pixel-world-behavior-field">
-                <span>模型</span>
+                <span>{tx('Model', '模型')}</span>
                 <input
                   list="pixel-world-room-behavior-models"
                   value={behaviorConfig.model_name}
                   onChange={(event) => updateBehaviorConfig({ model_name: event.target.value })}
-                  placeholder={behaviorCharacter?.model_name || '模型名'}
+                  placeholder={behaviorCharacter?.model_name || tx('Model Name', '模型名')}
                 />
                 <datalist id="pixel-world-room-behavior-models">
                   {behaviorModelOptions.map((model) => <option key={model} value={model} />)}
@@ -3065,20 +3095,20 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
               </label>
               <div className="pixel-world-behavior-model-actions">
                 <button type="button" onClick={pullBehaviorModels} disabled={behaviorModelsLoading}>
-                  {behaviorModelsLoading ? '拉取中' : '拉取模型'}
+                  {behaviorModelsLoading ? tx('Loading', '拉取中') : tx('Fetch Models', '拉取模型')}
                 </button>
                 <button type="button" onClick={() => setBehaviorShowKey((value) => !value)}>
-                  {behaviorShowKey ? '隐藏 Key' : '显示 Key'}
+                  {behaviorShowKey ? tx('Hide Key', '隐藏 Key') : tx('Show Key', '显示 Key')}
                 </button>
               </div>
               <div className={`pixel-world-behavior-model-status ${behaviorModelStatus.includes('失败') ? 'error' : ''}`}>
-                {behaviorModelStatus}
+                {ptxt(behaviorModelStatus)}
               </div>
               {behaviorModelOptions.length > 0 && (
                 <div className="pixel-world-behavior-model-list">
                   <div className="pixel-world-behavior-model-list-head">
-                    <strong>模型列表</strong>
-                    <span>{behaviorModelOptions.length} 个</span>
+                    <strong>{tx('Model List', '模型列表')}</strong>
+                    <span>{tx(`${behaviorModelOptions.length} models`, `${behaviorModelOptions.length} 个`)}</span>
                   </div>
                   <div className="pixel-world-behavior-model-options">
                     {behaviorModelOptions.map((model) => (
@@ -3101,12 +3131,12 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
 
         {renderBehaviorFold(
           'context',
-          '枝丫上下文',
+          tx('Branch Context', '枝丫上下文'),
           `q ${behaviorConfig.context_q_limit} / p ${behaviorConfig.context_summary_threshold}`,
           (
             <div className="pixel-world-behavior-context-grid">
               <label className="pixel-world-behavior-field">
-                <span>q 原文窗口</span>
+                <span>q {tx('Raw Window', '原文窗口')}</span>
                 <div className="pixel-world-behavior-slider-row">
                   <input
                     type="range"
@@ -3118,10 +3148,10 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                   />
                   <strong>{behaviorConfig.context_q_limit}</strong>
                 </div>
-                <small>实时输入最多读取 q 条枝丫原文。</small>
+                <small>{tx('Live input reads at most q raw branches.', '实时输入最多读取 q 条枝丫原文。')}</small>
               </label>
               <label className="pixel-world-behavior-field">
-                <span>p 摘要阈值</span>
+                <span>p {tx('Summary Threshold', '摘要阈值')}</span>
                 <div className="pixel-world-behavior-slider-row">
                   <input
                     type="range"
@@ -3133,13 +3163,13 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                   />
                   <strong>{behaviorConfig.context_summary_threshold}</strong>
                 </div>
-                <small>q 窗口外未摘要枝丫积攒到 p 条时，生成前先用小模型总结；失败会中止本轮。</small>
+                <small>{tx('When unsummarized branches outside the q window reach p, a small model summarizes them before generation; failure stops this round.', 'q 窗口外未摘要枝丫积攒到 p 条时，生成前先用小模型总结；失败会中止本轮。')}</small>
               </label>
               <div className="pixel-world-behavior-context-stats">
-                摘要积攒：
+                {tx('Summary backlog:', '摘要积攒：')}
                 <strong>{behaviorContextStats.pending_summary_count} / {behaviorContextStats.p_summary_threshold}</strong>
-                条待总结，当前读取 {behaviorContextStats.active_summary_count} 轮摘要。
-                <span>原文 {behaviorContextStats.raw_readable_count} / {behaviorContextStats.q_raw_limit} 条</span>
+                {tx(' items pending summary, currently reading ', '条待总结，当前读取 ')}{behaviorContextStats.active_summary_count}{tx(' summary rounds.', ' 轮摘要。')}
+                <span>{tx('Raw', '原文')} {behaviorContextStats.raw_readable_count} / {behaviorContextStats.q_raw_limit}</span>
               </div>
             </div>
           )
@@ -3147,23 +3177,23 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
 
         {renderBehaviorFold(
           'constraints',
-          'AI 可选白名单',
-          `${behaviorOrderedPlaces.length} 锚点 / ${commercialV2BehaviorMovementActions.length} 移动动作`,
+          tx('AI Allowlist', 'AI 可选白名单'),
+          tx(`${behaviorOrderedPlaces.length} anchors / ${commercialV2BehaviorMovementActions.length} movement actions`, `${behaviorOrderedPlaces.length} 锚点 / ${commercialV2BehaviorMovementActions.length} 移动动作`),
           (
             <div className="pixel-world-behavior-constraints">
               <div>
-                <strong>房间锚点</strong>
+                <strong>{tx('Room Anchors', '房间锚点')}</strong>
                 <div className="pixel-world-behavior-chip-list">
                   {behaviorOrderedPlaces.map((place) => (
-                    <span key={place.placeId}>{place.order}. {place.name}</span>
+                    <span key={place.placeId}>{place.order}. {ptxt(place.name)}</span>
                   ))}
                 </div>
               </div>
               <div>
-                <strong>移动动作</strong>
+                <strong>{tx('Movement Actions', '移动动作')}</strong>
                 <div className="pixel-world-behavior-chip-list">
                   {commercialV2BehaviorMovementActions.map((action) => (
-                    <span key={action.id}>{action.label}</span>
+                    <span key={action.id}>{translatePixelAction(action, lang).label}</span>
                   ))}
                 </div>
               </div>
@@ -3173,17 +3203,17 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
 
         {renderBehaviorFold(
           'branchMap',
-          '行为分层',
-          '日常行为 / 互动回应',
+          tx('Behavior Layers', '行为分层'),
+          tx('Daily behavior / Interaction response', '日常行为 / 互动回应'),
           (
             <div className="pixel-world-behavior-branch-map">
               <div>
-                <strong>互动回应</strong>
-                <span>player_interaction · 玩家点击互动或选择回应后，AI 会把新的互动行为写到这里。</span>
+                <strong>{tx('Interaction Response', '互动回应')}</strong>
+                <span>{tx('player_interaction: after the player clicks interact or chooses a reply, AI writes the new interaction behavior here.', 'player_interaction · 玩家点击互动或选择回应后，AI 会把新的互动行为写到这里。')}</span>
               </div>
               <div>
-                <strong>日常行为</strong>
-                <span>无互动时自动轮询：硬需求、本地例行、锚点能力、背景情绪、好奇、自由活动、微动作。</span>
+                <strong>{tx('Daily Behavior', '日常行为')}</strong>
+                <span>{tx('Auto-polled without interaction: hard needs, local routine, anchor capability, background mood, curiosity, free movement, and micro-actions.', '无互动时自动轮询：硬需求、本地例行、锚点能力、背景情绪、好奇、自由活动、微动作。')}</span>
               </div>
             </div>
           )
@@ -3191,17 +3221,17 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
 
         {renderBehaviorFold(
           'interaction',
-          '互动设置',
-          behaviorInteractionState.nearby ? `距离 ${Math.round(behaviorInteractionState.distance)} / ${commercialV2BehaviorInteractionDistance}` : '靠近后弹出菜单',
+          tx('Interaction Settings', '互动设置'),
+          behaviorInteractionState.nearby ? tx(`Distance ${Math.round(behaviorInteractionState.distance)} / ${commercialV2BehaviorInteractionDistance}`, `距离 ${Math.round(behaviorInteractionState.distance)} / ${commercialV2BehaviorInteractionDistance}`) : tx('Menu appears when nearby', '靠近后弹出菜单'),
           (
             <>
               <div className={`pixel-world-behavior-proximity ${behaviorInteractionState.nearby ? 'nearby' : ''}`}>
-                <strong>{behaviorInteractionState.nearby ? '角色已在互动范围' : '玩家靠近角色后弹出菜单'}</strong>
-                <span>距离 {Math.round(behaviorInteractionState.distance)} / {commercialV2BehaviorInteractionDistance}</span>
+                <strong>{behaviorInteractionState.nearby ? tx('Character is in interaction range', '角色已在互动范围') : tx('Menu appears when the player approaches', '玩家靠近角色后弹出菜单')}</strong>
+                <span>{tx('Distance', '距离')} {Math.round(behaviorInteractionState.distance)} / {commercialV2BehaviorInteractionDistance}</span>
               </div>
 
               <label className="pixel-world-behavior-field">
-                <span>目标锚点</span>
+                <span>{tx('Target Anchor', '目标锚点')}</span>
                 <select
                   value={behaviorPlaceId}
                   onChange={(event) => setBehaviorPlaceId(event.target.value)}
@@ -3212,16 +3242,16 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                       {option.order ? `${option.order}. ` : ''}{option.label}
                     </option>
                   )) : (
-                    <option value="">暂无锚点</option>
+                    <option value="">{tx('No anchors', '暂无锚点')}</option>
                   )}
                 </select>
               </label>
               <label className="pixel-world-behavior-field">
-                <span>补充输入</span>
+                <span>{tx('Extra Input', '补充输入')}</span>
                 <textarea
                   value={behaviorPromptText}
                   onChange={(event) => setBehaviorPromptText(event.target.value)}
-                  placeholder="例如：玩家想让角色陪自己去床边坐一下，但角色要有一点临场反应。"
+                  placeholder={tx('Example: the player wants the character to sit near the bed with them, but the character should still react naturally.', '例如：玩家想让角色陪自己去床边坐一下，但角色要有一点临场反应。')}
                 />
               </label>
 
@@ -3230,26 +3260,26 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                   type="button"
                   onClick={requestBehaviorInput}
                   disabled={behaviorLoading || !behaviorCharacterId}
-                  title="整理角色记忆、当前房间、家具和锚点白名单，查看 AI 实际会收到的上文。"
+                  title={tx('Assemble character memory, current room, furniture, and anchor allowlist to inspect the AI context.', '整理角色记忆、当前房间、家具和锚点白名单，查看 AI 实际会收到的上文。')}
                 >
-                  读取 AI 上文
+                  {tx('Read AI Context', '读取 AI 上文')}
                 </button>
                 <button
                   type="button"
                   onClick={generateBaseBehaviorBranches}
                   disabled={behaviorLoading || !behaviorCharacterId}
-                  title="让 AI 生成无人互动时会自动轮询的房间日常行动池。"
+                  title={tx('Let AI generate a room daily-action pool for automatic polling when nobody interacts.', '让 AI 生成无人互动时会自动轮询的房间日常行动池。')}
                 >
-                  生成行为枝丫
+                  {tx('Generate Branches', '生成行为枝丫')}
                 </button>
                 <button
                   type="button"
                   className="primary"
                   onClick={generateBehaviorBranch}
                   disabled={behaviorLoading || !behaviorCharacterId}
-                  title="根据当前玩家动作、目标家具锚点和补充输入，生成下一段互动回应。"
+                  title={tx('Generate the next interaction response from the current player action, target furniture anchor, and extra input.', '根据当前玩家动作、目标家具锚点和补充输入，生成下一段互动回应。')}
                 >
-                  生成互动回应
+                  {tx('Generate Response', '生成互动回应')}
                 </button>
                 <button
                   type="button"
@@ -3264,25 +3294,25 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                     setBehaviorStatus(`已试跑日常行为：${branch.title}`);
                   }}
                   disabled={behaviorLoading || !behaviorCharacterId}
-                  title="从已生成的日常行动池中挑一条立刻执行。"
+                  title={tx('Pick one generated daily action and run it immediately.', '从已生成的日常行动池中挑一条立刻执行。')}
                 >
-                  试跑日常行为
+                  {tx('Run Daily Behavior', '试跑日常行为')}
                 </button>
                 <button
                   type="button"
                   onClick={() => executeBehaviorBranch(behaviorOutput?.branch, 'replay')}
                   disabled={behaviorLoading || !behaviorOutput?.branch}
-                  title="重新执行上一次 AI 生成的互动行为。"
+                  title={tx('Replay the last AI-generated interaction behavior.', '重新执行上一次 AI 生成的互动行为。')}
                 >
-                  重跑当前行为
+                  {tx('Replay Current Behavior', '重跑当前行为')}
                 </button>
                 <button
                   type="button"
                   onClick={() => executeBehaviorBranch(commercialV2BehaviorLastDemoBranch, 'demo')}
                   disabled={behaviorLoading}
-                  title="载入内置示例，用来快速测试行为树对话流程。"
+                  title={tx('Load the built-in example to quickly test the behavior-tree dialogue flow.', '载入内置示例，用来快速测试行为树对话流程。')}
                 >
-                  运行示例互动
+                  {tx('Run Example', '运行示例互动')}
                 </button>
                 <button
                   type="button"
@@ -3296,9 +3326,9 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                     setBehaviorStatus('完整房间行为树已重置。');
                   }}
                   disabled={behaviorLoading}
-                  title="清空已生成的行为节点，恢复默认行为树。"
+                  title={tx('Clear generated behavior nodes and restore the default behavior tree.', '清空已生成的行为节点，恢复默认行为树。')}
                 >
-                  清空行为树
+                  {tx('Clear Behavior Tree', '清空行为树')}
                 </button>
               </div>
             </>
@@ -3307,16 +3337,16 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
 
         {renderBehaviorFold(
           'runtime',
-          '运行状态',
-          activeBehaviorBranch ? activeBehaviorBranch.title : `版本 ${behaviorTreeState.version} · patch ${behaviorTreeState.patch_history?.length || 0}`,
+          tx('Runtime', '运行状态'),
+          activeBehaviorBranch ? ptxt(activeBehaviorBranch.title) : tx(`Version ${behaviorTreeState.version} · patch ${behaviorTreeState.patch_history?.length || 0}`, `版本 ${behaviorTreeState.version} · patch ${behaviorTreeState.patch_history?.length || 0}`),
           (
             <>
-              <div className="pixel-world-behavior-status">{behaviorLoading ? '处理中...' : behaviorStatus}</div>
+              <div className="pixel-world-behavior-status">{behaviorLoading ? tx('Processing...', '处理中...') : ptxt(behaviorStatus)}</div>
               <div className={`pixel-world-behavior-runtime ${activeBehaviorBranch ? 'active' : ''}`}>
                 {activeBehaviorBranch ? (
                   <>
-                    <strong>{activeBehaviorBranch.branchKindLabel || '完整树运行节点'}</strong>
-                    <span>{activeBehaviorBranch.title}</span>
+                    <strong>{ptxt(activeBehaviorBranch.branchKindLabel || '完整树运行节点')}</strong>
+                    <span>{ptxt(activeBehaviorBranch.title)}</span>
                     <small>
                       {Math.min((activeBehaviorBranch.stepIndex || 0) + 1, activeBehaviorBranch.totalSteps || 1)}
                       /{activeBehaviorBranch.totalSteps || 1}
@@ -3325,10 +3355,10 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                     </small>
                     {activeBehaviorDialog && (
                       <div className="pixel-world-behavior-runtime-control">
-                        <strong>{activeBehaviorDialog.type === 'choice' ? '等待玩家选择' : '等待点击下一句'}</strong>
+                        <strong>{activeBehaviorDialog.type === 'choice' ? tx('Waiting for player choice', '等待玩家选择') : tx('Waiting for next line', '等待点击下一句')}</strong>
                         <p>{activeBehaviorDialog.text}</p>
                         {activeBehaviorDialog.type === 'pending' ? (
-                          <button type="button" disabled>生成中...</button>
+                          <button type="button" disabled>{tx('Generating...', '生成中...')}</button>
                         ) : activeBehaviorDialog.type === 'choice' && activeBehaviorDialog.choices?.length ? (
                           <div className="pixel-world-behavior-runtime-choice-grid">
                             {activeBehaviorDialog.choices.map((choice) => (
@@ -3338,7 +3368,7 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                                 onClick={() => chooseBehaviorDialogChoice(choice)}
                                 disabled={behaviorLoading}
                               >
-                                {choice.label}
+                                {ptxt(choice.label)}
                               </button>
                             ))}
                             <button
@@ -3347,20 +3377,20 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                               onClick={exitBehaviorDialog}
                               disabled={behaviorLoading}
                             >
-                              退出对话
+                              {tx('Exit Dialog', '退出对话')}
                             </button>
                           </div>
                         ) : (
-                          <button type="button" onClick={continueBehaviorDialog}>下一句</button>
+                          <button type="button" onClick={continueBehaviorDialog}>{tx('Next Line', '下一句')}</button>
                         )}
                       </div>
                     )}
                   </>
                 ) : (
                   <>
-                    <strong>完整行为树</strong>
-                    <span>版本 {behaviorTreeState.version} · patch {behaviorTreeState.patch_history?.length || 0}</span>
-                    <small>日常行为会自动轮询；玩家互动会生成互动回应并立即执行。</small>
+                    <strong>{tx('Full Behavior Tree', '完整行为树')}</strong>
+                    <span>{tx('Version', '版本')} {behaviorTreeState.version} · patch {behaviorTreeState.patch_history?.length || 0}</span>
+                    <small>{tx('Daily behavior is auto-polled; player interaction generates and immediately runs an interaction response.', '日常行为会自动轮询；玩家互动会生成互动回应并立即执行。')}</small>
                   </>
                 )}
               </div>
@@ -3370,25 +3400,51 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
 
         {renderBehaviorFold(
           'debug',
-          '调试 JSON',
-          '完整树 / 输入 / Patch / 输出',
+          tx('Debug JSON', '调试 JSON'),
+          tx('Full Tree / Input / Patch / Output', '完整树 / 输入 / Patch / 输出'),
           (
             <div className="pixel-world-behavior-json-grid">
               <section>
-                <h4>完整树</h4>
+                <h4>{tx('Full Tree', '完整树')}</h4>
                 <pre>{formatBehaviorJson(behaviorTreeState)}</pre>
               </section>
               <section>
-                <h4>输入</h4>
+                <h4>{tx('Input', '输入')}</h4>
                 <pre>{formatBehaviorJson(behaviorInput || buildBehaviorPayload())}</pre>
               </section>
               <section>
-                <h4>Patch</h4>
-                <pre>{formatBehaviorJson(behaviorPatchOutput || { patch: null, note: '生成后显示本次局部行为树 patch。' })}</pre>
+                <h4>{tx('Patch', '补丁')}</h4>
+                <pre>{formatBehaviorJson(behaviorPatchOutput || { patch: null, note: tx('The local behavior-tree patch for this generation appears here.', '生成后显示本次局部行为树 patch。') })}</pre>
               </section>
               <section>
-                <h4>输出</h4>
-                <pre>{formatBehaviorJson(behaviorOutput || { base_branches: null, interaction_branches: null, branch: null, tree_patch: null, note: '点击“生成行为枝丫”会显示自动行动池和互动开场池；互动按钮会先执行 player_interaction 里的开场枝丫，选项会继续生成互动回应。' })}</pre>
+                <h4>{tx('Output', '输出')}</h4>
+                <pre>{formatBehaviorJson(behaviorOutput || { base_branches: null, interaction_branches: null, branch: null, tree_patch: null, note: tx('Click Generate Branches to show the auto-action pool and interaction opener pool. The interact button first runs an opener in player_interaction, and choices continue generating responses.', '点击“生成行为枝丫”会显示自动行动池和互动开场池；互动按钮会先执行 player_interaction 里的开场枝丫，选项会继续生成互动回应。') })}</pre>
+              </section>
+              <section>
+                <h4>{tx('Selection', '选中')}</h4>
+                <pre>{formatBehaviorJson(selectedItem && selectedAsset ? {
+                  asset_id: selectedItem.assetId,
+                  name: selectedAsset.name,
+                  box: {
+                    x: Math.round(selectedItem.x),
+                    y: Math.round(selectedItem.y),
+                    w: Math.round(selectedItem.w),
+                    h: Math.round(selectedItem.h)
+                  },
+                  ground_layer: Boolean(selectedItem.groundLayer),
+                  place_anchor: selectedPlaceAnchorLocalPoint
+                } : {
+                  selected: null,
+                  note: tx('No selected room asset.', '当前没有选中房间素材。')
+                })}</pre>
+              </section>
+              <section>
+                <h4>{tx('AI Layout Context', 'AI 布局上下文')}</h4>
+                <pre>{aiLayoutPrompt}</pre>
+              </section>
+              <section>
+                <h4>{tx('Layout JSON', '布局 JSON')}</h4>
+                <pre>{layoutJson}</pre>
               </section>
             </div>
           )
@@ -3521,9 +3577,9 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
           onClick={() => toggleRoomBehaviorFold(key)}
           aria-expanded={open}
         >
-          <span>{title}</span>
-          {summary && <small>{summary}</small>}
-          <strong>{open ? '收起' : '展开'}</strong>
+          <span>{ptxt(title)}</span>
+          {summary && <small>{ptxt(summary)}</small>}
+          <strong>{open ? tx('Collapse', '收起') : tx('Expand', '展开')}</strong>
         </button>
         {open && (
           <div className="pixel-world-behavior-fold-body">
@@ -3536,13 +3592,14 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
 
   function renderRoomPlayer(targetPlayer) {
     const character = getCommercialV2PlayerCharacter(targetPlayer);
+    const visualDimensions = getPlayerVisualDimensions(targetPlayer);
     const isControlled = targetPlayer.id === controlledPlayerId;
     const actorKind = targetPlayer.id === commercialV2RoleActorId
       ? 'role-actor'
       : targetPlayer.id === commercialV2UserActorId
         ? 'user-actor'
         : '';
-    const actorLabel = targetPlayer.id === commercialV2RoleActorId ? '角色' : '玩家';
+    const actorLabel = targetPlayer.id === commercialV2RoleActorId ? tx('Character', '角色') : tx('Player', '玩家');
     const frameName = targetPlayer.moving ? commercialV2PlayerFrameOrder[targetPlayer.frame] : 'idle';
     const src = commercialV2PlayerFrame(targetPlayer, `${targetPlayer.direction || 'front'}_walk_${frameName}.png`);
     const zIndex = getRoomEditorPlayerRenderZIndex(
@@ -3551,18 +3608,18 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
     );
     const behaviorDialog = targetPlayer.id === commercialV2RoleActorId ? activeBehaviorDialog : null;
     const actionBubble = behaviorDialog ? '' : targetPlayer.bubble;
-    const playerLeftPx = ((targetPlayer.x || 0) - playerDimensions.width / 2) * zoom;
-    const playerTopPx = ((targetPlayer.y || 0) - playerDimensions.height + playerDimensions.footOffset) * zoom;
-    const nameplateTop = (((targetPlayer.y || 0) - playerDimensions.height + playerDimensions.footOffset - 22) / stageSize.height) * 100;
-    const bubbleTop = (((targetPlayer.y || 0) - playerDimensions.height + playerDimensions.footOffset - 8) / stageSize.height) * 100;
-    const dialogTop = (Math.max(20, (targetPlayer.y || 0) - playerDimensions.height + playerDimensions.footOffset - 34) / stageSize.height) * 100;
+    const playerLeftPx = ((targetPlayer.x || 0) - visualDimensions.width / 2) * zoom;
+    const playerTopPx = ((targetPlayer.y || 0) - visualDimensions.height + visualDimensions.footOffset) * zoom;
+    const nameplateTop = (((targetPlayer.y || 0) - visualDimensions.height + visualDimensions.footOffset - 22) / stageSize.height) * 100;
+    const bubbleTop = (((targetPlayer.y || 0) - visualDimensions.height + visualDimensions.footOffset - 8) / stageSize.height) * 100;
+    const dialogTop = (Math.max(20, (targetPlayer.y || 0) - visualDimensions.height + visualDimensions.footOffset - 34) / stageSize.height) * 100;
     const footprintWidth = Math.max(
       commercialV2PlayerPeerCollision.minWidth,
-      playerDimensions.width * commercialV2PlayerPeerCollision.widthRatio
+      visualDimensions.width * commercialV2PlayerPeerCollision.widthRatio
     );
     const footprintHeight = Math.max(
       commercialV2PlayerPeerCollision.minHeight,
-      playerDimensions.footOffset * commercialV2PlayerPeerCollision.heightRatio
+      visualDimensions.footOffset * commercialV2PlayerPeerCollision.heightRatio
     );
     return (
       <React.Fragment key={`room-player-${targetPlayer.id}`}>
@@ -3571,12 +3628,12 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
           src={src}
           alt=""
           draggable={false}
-          title={`${character.label} · ${actorLabel}`}
+          title={`${ptxt(character.label)} · ${actorLabel}`}
           style={{
             left: 0,
             top: 0,
-            width: `${playerDimensions.width * zoom}px`,
-            height: `${playerDimensions.height * zoom}px`,
+            width: `${visualDimensions.width * zoom}px`,
+            height: `${visualDimensions.height * zoom}px`,
             transform: `translate3d(${playerLeftPx}px, ${playerTopPx}px, 0)`,
             zIndex
           }}
@@ -3600,7 +3657,7 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
               zIndex: zIndex + 1000
             }}
           >
-            {actionBubble}
+            {ptxt(actionBubble)}
           </span>
         )}
         {behaviorDialog && (
@@ -3614,12 +3671,12 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
             onPointerDown={(event) => event.stopPropagation()}
           >
             <div className="pixel-world-behavior-dialog-head">
-              <strong>{behaviorDialog.title || '角色'}</strong>
+              <strong>{behaviorDialog.title || tx('Character', '角色')}</strong>
               <span>{Math.min((behaviorDialog.stepIndex || 0) + 1, behaviorDialog.totalSteps || 1)}/{behaviorDialog.totalSteps || 1}</span>
             </div>
             <p>{behaviorDialog.text}</p>
             {behaviorDialog.type === 'pending' ? (
-              <button type="button" disabled>生成中...</button>
+              <button type="button" disabled>{tx('Generating...', '生成中...')}</button>
             ) : behaviorDialog.type === 'choice' && behaviorDialog.choices?.length ? (
               <div className="pixel-world-behavior-dialog-choices">
                 {behaviorDialog.choices.map((choice) => (
@@ -3629,7 +3686,7 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                     onClick={() => chooseBehaviorDialogChoice(choice)}
                     disabled={behaviorLoading}
                   >
-                    {choice.label}
+                    {ptxt(choice.label)}
                   </button>
                 ))}
                 <button
@@ -3638,12 +3695,12 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                   onClick={exitBehaviorDialog}
                   disabled={behaviorLoading}
                 >
-                  退出对话
+                  {tx('Exit Dialog', '退出对话')}
                 </button>
               </div>
             ) : (
               <button type="button" onClick={continueBehaviorDialog}>
-                下一句
+                {tx('Next Line', '下一句')}
               </button>
             )}
           </div>
@@ -3674,7 +3731,7 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
     [assetById, controlledPlayerId, items, playerScale, stageSize]
   );
   const roomBehaviorDebugJson = useMemo(() => {
-    if (!behaviorFoldOpen.debug) return '';
+    if (!roomBehaviorFoldOpen.debug) return '';
     return JSON.stringify({
       scene: 'room',
       controlledPlayerId,
@@ -3709,11 +3766,11 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
     aiLayout.ascii,
     aiLayout.gridSize,
     assetById,
-    behaviorFoldOpen.debug,
     behaviorTreeState,
     controlledPlayerId,
     playerScale,
     roomAnchors,
+    roomBehaviorFoldOpen.debug,
     roomBehaviorInteractionState.distance,
     roomBehaviorInteractionState.nearby,
     stageSize
@@ -3774,9 +3831,9 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
       <div className={`pixel-world-behavior-actor ${actorId === commercialV2UserActorId ? 'user' : 'role'}`}>
         <img src={commercialV2PlayerFrame(actor, `${actor.direction || 'front'}_walk_idle.png`)} alt="" draggable={false} />
         <div>
-          <strong>{title}</strong>
-          <span>{character.label} · x{Math.round(actor.x)} y{Math.round(actor.y)}</span>
-          <small>{note}</small>
+          <strong>{ptxt(title)}</strong>
+          <span>{ptxt(character.label)} · x{Math.round(actor.x)} y{Math.round(actor.y)}</span>
+          <small>{ptxt(note)}</small>
         </div>
       </div>
     );
@@ -3790,12 +3847,12 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
             type="button"
             className="pixel-world-behavior-panel-expand"
             onClick={() => setRoomBehaviorPanelCollapsed(false)}
-            title="展开房间行为树面板"
-            aria-label="展开房间行为树面板"
+            title={tx('Expand room behavior-tree panel', '展开房间行为树面板')}
+            aria-label={tx('Expand room behavior-tree panel', '展开房间行为树面板')}
           >
-            <span>房间行为树</span>
-            <strong>Room</strong>
-            <small>展开</small>
+            <span>{tx('Room Behavior Tree', '房间行为树')}</span>
+            <strong>{tx('Room', '房间')}</strong>
+            <small>{tx('Expand', '展开')}</small>
           </button>
         </aside>
       );
@@ -3803,92 +3860,98 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
 
     return (
       <aside className="pixel-world-behavior-panel room-behavior-panel">
-        <div className="pixel-world-behavior-head">
-          <div>
-            <h3>房间行为树 V1</h3>
-            <span>两小人 / 家具锚点 / 房间上下文</span>
-          </div>
-          <div className="pixel-world-behavior-head-actions">
-            <strong>{roomBehaviorInteractionState.nearby ? 'Near' : 'Room'}</strong>
-            <button
-              type="button"
-              onClick={() => setRoomBehaviorPanelCollapsed(true)}
-              title="收起房间行为树面板"
-            >
-              收起
-            </button>
-          </div>
-        </div>
-
-        <div className="pixel-world-behavior-actors">
-          {renderRoomBehaviorActorCard(commercialV2RoleActorId, '角色小人', '行为树驱动对象')}
-          {renderRoomBehaviorActorCard(commercialV2UserActorId, '玩家小人', controlledPlayerId === commercialV2UserActorId ? '当前键盘控制' : '可切换控制')}
-        </div>
-
-        {renderRoomBehaviorFold(
-          'constraints',
-          '房间白名单',
-          `${roomAnchors.length} 锚点 / ${commercialV2BehaviorMovementActions.length} 行为动作`,
-          (
-            <div className="pixel-world-behavior-constraints">
-              <div>
-                <strong>家具锚点</strong>
-                <div className="pixel-world-behavior-chip-list">
-                  {roomAnchors.length ? roomAnchors.map((anchor) => (
-                    <span key={anchor.id}>{anchor.name}</span>
-                  )) : (
-                    <span>暂无锚点</span>
-                  )}
-                </div>
-              </div>
-              <div>
-                <strong>可复用动作</strong>
-                <div className="pixel-world-behavior-chip-list">
-                  {commercialV2BehaviorMovementActions.map((action) => (
-                    <span key={action.id}>{action.label}</span>
-                  ))}
-                </div>
-              </div>
+        <div
+          className="pixel-world-room-settings-scroll"
+          tabIndex={0}
+          aria-label={tx('Room behavior settings scroll area', '房间行为设置滚动区')}
+        >
+          <div className="pixel-world-behavior-head">
+            <div>
+              <h3>{tx('Room Behavior Tree V1', '房间行为树 V1')}</h3>
+              <span>{tx('Two sprites / furniture anchors / room context', '两小人 / 家具锚点 / 房间上下文')}</span>
             </div>
-          )
-        )}
+            <div className="pixel-world-behavior-head-actions">
+              <strong>{roomBehaviorInteractionState.nearby ? 'Near' : 'Room'}</strong>
+              <button
+                type="button"
+                onClick={() => setRoomBehaviorPanelCollapsed(true)}
+                title={tx('Collapse room behavior-tree panel', '收起房间行为树面板')}
+              >
+                {tx('Collapse', '收起')}
+              </button>
+            </div>
+          </div>
 
-        {renderRoomBehaviorFold(
-          'runtime',
-          '运行状态',
-          roomBehaviorInteractionState.nearby
-            ? `距离 ${Math.round(roomBehaviorInteractionState.distance)}`
-            : `距离 ${Math.round(roomBehaviorInteractionState.distance)} / ${commercialV2BehaviorInteractionDistance}`,
-          (
-            <>
-              <div className={`pixel-world-behavior-proximity ${roomBehaviorInteractionState.nearby ? 'nearby' : ''}`}>
-                <strong>{roomBehaviorInteractionState.nearby ? '已在互动范围' : '还没有靠近'}</strong>
-                <span>{Math.round(roomBehaviorInteractionState.distance)} / {commercialV2BehaviorInteractionDistance}</span>
-              </div>
-              <div className="pixel-world-behavior-run-row">
-                <button type="button" onClick={approachRoomPlayer}>角色靠近玩家</button>
-                <button type="button" onClick={faceRoomPlayers}>面对彼此</button>
-                <button type="button" onClick={wanderRoomPlayer}>房间闲逛</button>
-                <button type="button" onClick={clearRoomPlayerBubbles}>清空气泡</button>
-                <button type="button" onClick={resetRoomPlayers}>重置小人</button>
-              </div>
-              <div className="pixel-world-behavior-status">
-                {roomBehaviorStatus}
-              </div>
-            </>
-          )
-        )}
+          <div className="pixel-world-behavior-actors">
+            {renderRoomBehaviorActorCard(commercialV2RoleActorId, '角色小人', '行为树驱动对象')}
+            {renderRoomBehaviorActorCard(commercialV2UserActorId, '玩家小人', controlledPlayerId === commercialV2UserActorId ? '当前键盘控制' : '可切换控制')}
+          </div>
 
-        {renderRoomBehaviorFold(
-          'debug',
-          '调试上下文',
-          `${roomBehaviorTreeSnapshot.node_count} 节点继承通用骨架`,
-          (
-            <pre className="pixel-world-behavior-json">
-              {roomBehaviorDebugJson}
-            </pre>
-          )
-        )}
+          {renderRoomBehaviorFold(
+            'constraints',
+            tx('Room Allowlist', '房间白名单'),
+            tx(`${roomAnchors.length} anchors / ${commercialV2BehaviorMovementActions.length} behavior actions`, `${roomAnchors.length} 锚点 / ${commercialV2BehaviorMovementActions.length} 行为动作`),
+            (
+              <div className="pixel-world-behavior-constraints">
+                <div>
+                  <strong>{tx('Furniture Anchors', '家具锚点')}</strong>
+                  <div className="pixel-world-behavior-chip-list">
+                    {roomAnchors.length ? roomAnchors.map((anchor) => (
+                      <span key={anchor.id}>{ptxt(anchor.name)}</span>
+                    )) : (
+                      <span>{tx('No anchors', '暂无锚点')}</span>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <strong>{tx('Reusable Actions', '可复用动作')}</strong>
+                  <div className="pixel-world-behavior-chip-list">
+                    {commercialV2BehaviorMovementActions.map((action) => (
+                      <span key={action.id}>{translatePixelAction(action, lang).label}</span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )
+          )}
+
+          {renderRoomBehaviorFold(
+            'runtime',
+            tx('Runtime', '运行状态'),
+            roomBehaviorInteractionState.nearby
+              ? tx(`Distance ${Math.round(roomBehaviorInteractionState.distance)}`, `距离 ${Math.round(roomBehaviorInteractionState.distance)}`)
+              : tx(`Distance ${Math.round(roomBehaviorInteractionState.distance)} / ${commercialV2BehaviorInteractionDistance}`, `距离 ${Math.round(roomBehaviorInteractionState.distance)} / ${commercialV2BehaviorInteractionDistance}`),
+            (
+              <>
+                <div className={`pixel-world-behavior-proximity ${roomBehaviorInteractionState.nearby ? 'nearby' : ''}`}>
+                  <strong>{roomBehaviorInteractionState.nearby ? tx('In interaction range', '已在互动范围') : tx('Not close yet', '还没有靠近')}</strong>
+                  <span>{Math.round(roomBehaviorInteractionState.distance)} / {commercialV2BehaviorInteractionDistance}</span>
+                </div>
+                <div className="pixel-world-behavior-run-row">
+                  <button type="button" onClick={approachRoomPlayer}>{tx('Character approaches player', '角色靠近玩家')}</button>
+                  <button type="button" onClick={faceRoomPlayers}>{tx('Face Each Other', '面对彼此')}</button>
+                  <button type="button" onClick={wanderRoomPlayer}>{tx('Room Wander', '房间闲逛')}</button>
+                  <button type="button" onClick={clearRoomPlayerBubbles}>{tx('Clear Bubbles', '清空气泡')}</button>
+                  <button type="button" onClick={resetRoomPlayers}>{tx('Reset Sprites', '重置小人')}</button>
+                </div>
+                <div className="pixel-world-behavior-status">
+                  {ptxt(behaviorStatus)}
+                </div>
+              </>
+            )
+          )}
+
+          {renderRoomBehaviorFold(
+            'debug',
+            tx('Debug Context', '调试上下文'),
+            tx(`${roomBehaviorTreeSnapshot.node_count} nodes inherit the shared skeleton`, `${roomBehaviorTreeSnapshot.node_count} 节点继承通用骨架`),
+            (
+              <pre className="pixel-world-behavior-json">
+                {roomBehaviorDebugJson}
+              </pre>
+            )
+          )}
+        </div>
       </aside>
     );
   }
@@ -3896,142 +3959,192 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
   return (
     <div className={`pixel-world-editor room-editor ${viewMode ? 'view-mode' : ''}`}>
       <div className="pixel-world-editor-toolbar">
-        <button onClick={saveLayout}>保存布局</button>
-        <button onClick={saveCurrentAsDefaultScene}>保存当前场景为默认场景</button>
-        <button onClick={copyLayout}>复制 JSON</button>
-        <button onClick={copyAiLayout}>复制 AI 布局上下文</button>
-        <button
-          className={viewMode ? 'active' : ''}
-          onClick={toggleViewMode}
-          title={viewMode ? '素材已锁定，关闭后才能移动和编辑' : '开启后锁定素材，避免误拖'}
-        >
-          {viewMode ? '观赏模式' : '编辑模式'}
-        </button>
-        <button onClick={() => setZoom((value) => Math.max(0.35, Number((value - 0.08).toFixed(2))))}>画布缩小</button>
-        <button onClick={() => setZoom((value) => Math.min(1.25, Number((value + 0.08).toFixed(2))))}>画布放大</button>
-        <strong>{Math.round(zoom * 100)}%</strong>
-        <span className="pixel-world-player-help">WASD / 方向键移动小人</span>
-        <label className="pixel-world-player-switch-control">
-          <span>控制</span>
-          <select
-            value={controlledPlayerId}
-            onChange={(event) => updateControlledPlayerId(event.target.value)}
+        <div className="pixel-world-toolbar-section pixel-world-toolbar-section--primary">
+          <button onClick={saveLayout}>{tx('Save Layout', '保存布局')}</button>
+          <button
+            className={viewMode ? 'active' : ''}
+            onClick={toggleViewMode}
+            title={viewMode ? tx('Assets are locked. Turn this off to move and edit.', '素材已锁定，关闭后才能移动和编辑') : tx('Lock assets to avoid accidental dragging.', '开启后锁定素材，避免误拖')}
           >
-            {commercialV2PlayerCharacters.map((character) => (
-              <option key={character.id} value={character.id}>{character.label}</option>
-            ))}
-          </select>
-          <strong>{getCommercialV2PlayerCharacter(controlledPlayer).label}</strong>
-        </label>
-        <label className="pixel-world-player-scale-control">
-          <span>小人尺寸</span>
-          <input
-            type="range"
-            min={roomEditorMinPlayerScale}
-            max={roomEditorMaxPlayerScale}
-            step="0.05"
-            value={playerScale}
-            onChange={(event) => updatePlayerScale(event.target.value)}
-          />
-          <input
-            type="number"
-            min={roomEditorMinPlayerScale}
-            max={roomEditorMaxPlayerScale}
-            step="0.05"
-            value={playerScale}
-            onChange={(event) => updatePlayerScale(event.target.value)}
-          />
-          <strong>{Math.round(playerScale * 100)}%</strong>
-        </label>
+            {viewMode ? tx('View Mode', '观赏模式') : tx('Edit Mode', '编辑模式')}
+          </button>
+          <label className="pixel-world-player-switch-control">
+            <span>{tx('Control', '控制')}</span>
+            <select
+              value={controlledPlayerId}
+              onChange={(event) => updateControlledPlayerId(event.target.value)}
+            >
+              {commercialV2PlayerCharacters.map((character) => (
+                <option key={character.id} value={character.id}>{ptxt(character.label)}</option>
+              ))}
+            </select>
+            <strong>{ptxt(getCommercialV2PlayerCharacter(controlledPlayer).label)}</strong>
+          </label>
+        </div>
+
+        <div className="pixel-world-toolbar-section pixel-world-toolbar-section--status">
+          <strong>{Math.round(zoom * 100)}%</strong>
+          <span className="pixel-world-player-help">{tx('Move sprites with WASD / arrow keys', 'WASD / 方向键移动小人')}</span>
+        </div>
+
         <button
-          className={showCollisionLines ? 'active' : ''}
-          onClick={toggleCollisionLines}
-          title="只切换碰撞箱线条显示；碰撞数据默认会保存"
+          type="button"
+          className={`pixel-world-toolbar-more ${showAdvancedToolbar ? 'active' : ''}`}
+          onClick={() => setShowAdvancedToolbar((value) => !value)}
         >
-          {showCollisionLines ? '隐藏碰撞箱线' : '查看碰撞箱线'}
+          {showAdvancedToolbar ? tx('Hide Advanced', '收起高级') : tx('Advanced Tools', '高级工具')}
         </button>
-        <button
-          className={showPlaceAnchors ? 'active' : ''}
-          onClick={togglePlaceAnchors}
-          title="查看后续角色交互、家具靠近点或站位锚点"
-        >
-          {showPlaceAnchors ? '隐藏地点锚点' : '查看地点锚点'}
-        </button>
-        <button
-          className={showLayerPanel ? 'active' : ''}
-          onClick={() => setShowLayerPanel((value) => !value)}
-          title="显示统一图层序号和右侧图层列表"
-        >
-          {showLayerPanel ? '隐藏图层' : '查看图层'}
-        </button>
-        <button
-          className={canEditLayout && groupEditMode ? 'active' : ''}
-          onClick={() => setGroupEditMode((value) => !value)}
-          disabled={!canEditLayout}
-          title="开启后拖动、缩放和微调会作用于全部素材"
-        >
-          {groupEditMode ? '整体编辑中' : '整体编辑'}
-        </button>
-        <button onClick={() => scaleSelected(0.92)} disabled={!canEditLayout || (groupEditMode ? items.length === 0 : !selectedItem)}>{groupEditMode ? '整体缩小' : '素材缩小'}</button>
-        <button onClick={() => scaleSelected(1.08)} disabled={!canEditLayout || (groupEditMode ? items.length === 0 : !selectedItem)}>{groupEditMode ? '整体放大' : '素材放大'}</button>
-        <button onClick={cycleSelectedDirection} disabled={!canRotateSelected}>旋转方向</button>
-        <button onClick={() => moveSelectedLayer('up')} disabled={!canEditLayout || groupEditMode || !selectedItem}>上移图层</button>
-        <button onClick={() => moveSelectedLayer('down')} disabled={!canEditLayout || groupEditMode || !selectedItem}>下移图层</button>
-        <button onClick={bringSelectedToFront} disabled={!canEditLayout || groupEditMode || !selectedItem}>置顶</button>
-        <button onClick={sendSelectedToBack} disabled={!canEditLayout || groupEditMode || !selectedItem}>置底</button>
-        <button onClick={deleteSelected} disabled={!canEditLayout || groupEditMode || !selectedItem}>删除</button>
-        <button onClick={restoreResetBackup} disabled={!canEditLayout}>恢复上次布局</button>
-        <button onClick={resetLayout} disabled={!canEditLayout}>恢复默认</button>
-        <span>{notice}</span>
+
+        {showAdvancedToolbar && (
+          <div className="pixel-world-toolbar-advanced">
+            <div className="pixel-world-toolbar-section">
+              <button onClick={saveCurrentAsDefaultScene}>{tx('Save Current as Default', '保存当前场景为默认场景')}</button>
+              <button onClick={copyLayout}>{tx('Copy JSON', '复制 JSON')}</button>
+              <button onClick={copyAiLayout}>{tx('Copy AI Layout Context', '复制 AI 布局上下文')}</button>
+              <button onClick={() => setZoom((value) => Math.max(0.35, Number((value - 0.08).toFixed(2))))}>{tx('Zoom Out', '画布缩小')}</button>
+              <button onClick={() => setZoom((value) => Math.min(1.25, Number((value + 0.08).toFixed(2))))}>{tx('Zoom In', '画布放大')}</button>
+              <button
+                className={showCollisionLines ? 'active' : ''}
+                onClick={toggleCollisionLines}
+                title={tx('Only toggles collision-line visibility. Collision data is still saved.', '只切换碰撞箱线条显示；碰撞数据默认会保存')}
+              >
+                {showCollisionLines ? tx('Hide Collision', '隐藏碰撞箱线') : tx('Show Collision', '查看碰撞箱线')}
+              </button>
+              <button
+                className={showPlaceAnchors ? 'active' : ''}
+                onClick={togglePlaceAnchors}
+                title={tx('Show future character interaction points, furniture approach points, or standing anchors.', '查看后续角色交互、家具靠近点或站位锚点')}
+              >
+                {showPlaceAnchors ? tx('Hide Anchors', '隐藏地点锚点') : tx('Show Anchors', '查看地点锚点')}
+              </button>
+              <button
+                className={showLayerPanel ? 'active' : ''}
+                onClick={() => setShowLayerPanel((value) => !value)}
+                title={tx('Show unified layer numbers and the right-side layer list.', '显示统一图层序号和右侧图层列表')}
+              >
+                {showLayerPanel ? tx('Hide Layers', '隐藏图层') : tx('Show Layers', '查看图层')}
+              </button>
+            </div>
+
+            <div className="pixel-world-toolbar-section">
+              <label className="pixel-world-player-scale-control">
+                <span>{tx('Sprite Size', '小人尺寸')}</span>
+                <input
+                  type="range"
+                  min={roomEditorMinPlayerScale}
+                  max={roomEditorMaxPlayerScale}
+                  step="0.05"
+                  value={playerScale}
+                  onChange={(event) => updatePlayerScale(event.target.value)}
+                />
+                <input
+                  type="number"
+                  min={roomEditorMinPlayerScale}
+                  max={roomEditorMaxPlayerScale}
+                  step="0.05"
+                  value={playerScale}
+                  onChange={(event) => updatePlayerScale(event.target.value)}
+                />
+                <strong>{Math.round(playerScale * 100)}%</strong>
+              </label>
+            </div>
+
+            {canEditLayout ? (
+              <div className="pixel-world-toolbar-section pixel-world-toolbar-section--edit">
+                <button
+                  className={groupEditMode ? 'active' : ''}
+                  onClick={() => setGroupEditMode((value) => !value)}
+                  title={tx('Drag, scale, and nudge all assets together.', '开启后拖动、缩放和微调会作用于全部素材')}
+                >
+                  {groupEditMode ? tx('Group Editing', '整体编辑中') : tx('Group Edit', '整体编辑')}
+                </button>
+                <button onClick={restoreResetBackup}>{tx('Restore Previous', '恢复上次布局')}</button>
+                <button onClick={resetLayout}>{tx('Restore Default', '恢复默认')}</button>
+              </div>
+            ) : (
+              <span className="pixel-world-toolbar-muted">
+                {tx('Switch to edit mode to reveal layout and selected-asset tools.', '切到编辑模式后才显示图层和选中素材工具。')}
+              </span>
+            )}
+
+            {canEditLayout && (groupEditMode || selectedItem) && (
+              <div className="pixel-world-toolbar-section pixel-world-toolbar-section--selection">
+                <button onClick={() => scaleSelected(0.92)} disabled={groupEditMode ? items.length === 0 : !selectedItem}>{groupEditMode ? tx('Shrink All', '整体缩小') : tx('Shrink Asset', '素材缩小')}</button>
+                <button onClick={() => scaleSelected(1.08)} disabled={groupEditMode ? items.length === 0 : !selectedItem}>{groupEditMode ? tx('Grow All', '整体放大') : tx('Grow Asset', '素材放大')}</button>
+                {!groupEditMode && (
+                  <>
+                    <button onClick={cycleSelectedDirection} disabled={!canRotateSelected}>{tx('Rotate', '旋转方向')}</button>
+                    <button onClick={() => moveSelectedLayer('up')} disabled={!selectedItem}>{tx('Layer Up', '上移图层')}</button>
+                    <button onClick={() => moveSelectedLayer('down')} disabled={!selectedItem}>{tx('Layer Down', '下移图层')}</button>
+                    <button onClick={bringSelectedToFront} disabled={!selectedItem}>{tx('Bring Front', '置顶')}</button>
+                    <button onClick={sendSelectedToBack} disabled={!selectedItem}>{tx('Send Back', '置底')}</button>
+                    <button onClick={deleteSelected} disabled={!selectedItem}>{tx('Delete', '删除')}</button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        <span className="pixel-world-toolbar-notice">{ptxt(notice)}</span>
       </div>
 
-      <div className={`pixel-world-editor-body room-editor-body ${behaviorPanelCollapsed ? 'behavior-collapsed' : ''}`}>
+      <div
+        className={`pixel-world-editor-body room-editor-body ${roomBehaviorPanelCollapsed ? 'behavior-collapsed' : ''}`}
+        style={{ '--pixel-world-room-frame-height': `${Math.ceil(stageSize.height * zoom + 38)}px` }}
+      >
         <aside className="pixel-world-asset-panel">
-          <h3>房间素材</h3>
-          {groupedAssets.length > 0 ? (
-            <>
-              <div className="pixel-world-asset-type-tabs" role="tablist" aria-label="房间素材分类">
-                {groupedAssets.map(([type, assets]) => (
-                  <button
-                    key={type}
-                    className={activeAssetGroup?.[0] === type ? 'active' : ''}
-                    onClick={() => setActiveAssetType(type)}
-                    title={`${type} (${assets.length})`}
-                  >
-                    {type}
-                    <span>{assets.length}</span>
-                  </button>
-                ))}
-              </div>
-              {activeAssetGroup && (
-                <div className="pixel-world-asset-group" key={activeAssetGroup[0]}>
-                  <strong>{activeAssetGroup[0]}</strong>
-                  <div className="pixel-world-asset-grid">
-                    {activeAssetGroup[1].map((asset) => {
-                      const price = getRoomEditorFurniturePrice(asset.id);
-                      return (
-                        <button
-                          key={asset.id}
-                          onClick={() => addAsset(asset)}
-                          title={price ? `${asset.name} / 价格 ${price}` : asset.name}
-                          disabled={!canEditLayout}
-                        >
-                          <img src={roomEditorAsset(asset.path)} alt="" draggable={false} loading="lazy" />
-                          <span className="pixel-world-asset-name">{getRoomEditorPaletteAssetName(asset)}</span>
-                          {price ? <small className="pixel-world-asset-price">价格 {price}</small> : null}
-                        </button>
-                      );
-                    })}
-                  </div>
+          <div
+            className="pixel-world-room-settings-scroll"
+            tabIndex={0}
+            aria-label={tx('Room asset settings scroll area', '房间素材设置滚动区')}
+          >
+            <h3>{tx('Room Assets', '房间素材')}</h3>
+            {groupedAssets.length > 0 ? (
+              <>
+                <div className="pixel-world-asset-type-tabs" role="tablist" aria-label={tx('Room asset categories', '房间素材分类')}>
+                  {groupedAssets.map(([type, assets]) => (
+                    <button
+                      key={type}
+                      className={activeAssetGroup?.[0] === type ? 'active' : ''}
+                      onClick={() => setActiveAssetType(type)}
+                      title={`${ptxt(type)} (${assets.length})`}
+                    >
+                      {ptxt(type)}
+                      <span>{assets.length}</span>
+                    </button>
+                  ))}
                 </div>
-              )}
-            </>
-          ) : (
-            <div className="pixel-world-asset-empty">
-              <strong>暂无房间素材</strong>
-              <p>家具、墙饰或站位点素材接入后，会复用这里的缩放、碰撞箱、锚点和图层逻辑。</p>
-            </div>
-          )}
+                {activeAssetGroup && (
+                  <div className="pixel-world-asset-group" key={activeAssetGroup[0]}>
+                    <strong>{ptxt(activeAssetGroup[0])}</strong>
+                    <div className="pixel-world-asset-grid">
+                      {activeAssetGroup[1].map((asset) => {
+                        const price = getRoomEditorFurniturePrice(asset.id);
+                        return (
+                          <button
+                            key={asset.id}
+                            onClick={() => addAsset(asset)}
+                            title={price ? tx(`${ptxt(asset.name)} / price ${price}`, `${asset.name} / 价格 ${price}`) : ptxt(asset.name)}
+                            disabled={!canEditLayout}
+                          >
+                            <img src={roomEditorAsset(asset.path)} alt="" draggable={false} loading="lazy" />
+                            <span className="pixel-world-asset-name">{ptxt(getRoomEditorPaletteAssetName(asset))}</span>
+                            {price ? <small className="pixel-world-asset-price">{tx('Price', '价格')} {price}</small> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="pixel-world-asset-empty">
+                <strong>{tx('No Room Assets', '暂无房间素材')}</strong>
+                <p>{tx('Furniture, wall decor, and standing-point assets will reuse this scaling, collision, anchor, and layer logic.', '家具、墙饰或站位点素材接入后，会复用这里的缩放、碰撞箱、锚点和图层逻辑。')}</p>
+              </div>
+            )}
+          </div>
         </aside>
 
         <div
@@ -4039,7 +4152,7 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
           ref={canvasWrapRef}
           tabIndex={0}
           onPointerDownCapture={focusCanvasForKeyboard}
-          aria-label="居住房间素材画布"
+          aria-label={tx('Room asset canvas', '居住房间素材画布')}
         >
           <div
             className={`pixel-world-editor-stage pixel-world-room-editor-stage ${showCollisionLines ? 'collision-lines-visible' : ''}`}
@@ -4074,19 +4187,19 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
         </div>
 
         <aside className="pixel-world-inspector">
-          <h3>选中</h3>
+          <h3>{tx('Selection', '选中')}</h3>
           {viewMode ? (
-            <p>观赏模式已开启，素材不会被选中或拖动；切到编辑模式后可以移动素材。</p>
+            <p>{tx('View mode is on. Assets cannot be selected or dragged. Switch to edit mode to move them.', '观赏模式已开启，素材不会被选中或拖动；切到编辑模式后可以移动素材。')}</p>
           ) : selectedItem && selectedAsset ? (
             <>
-              <div className="pixel-world-selected-name">{selectedAsset.name}</div>
+              <div className="pixel-world-selected-name">{ptxt(selectedAsset.name)}</div>
               {selectedDirectionGroup && (
                 <div className="pixel-world-direction-card">
                   <div className="pixel-world-direction-card-head">
-                    <strong>方向</strong>
-                    <button onClick={cycleSelectedDirection} disabled={!canRotateSelected}>旋转方向</button>
+                    <strong>{tx('Direction', '方向')}</strong>
+                    <button onClick={cycleSelectedDirection} disabled={!canRotateSelected}>{tx('Rotate', '旋转方向')}</button>
                   </div>
-                  <div className="pixel-world-direction-grid" role="group" aria-label={`${selectedDirectionGroup.name}方向`}>
+                  <div className="pixel-world-direction-grid" role="group" aria-label={tx(`${ptxt(selectedDirectionGroup.name)} direction`, `${selectedDirectionGroup.name}方向`)}>
                     {roomEditorDirectionOrder.map((direction) => {
                       const variant = selectedDirectionGroup.variants?.[direction];
                       return (
@@ -4096,14 +4209,14 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                           className={selectedDirection === direction ? 'active' : ''}
                           onClick={() => updateSelectedDirection(direction)}
                           disabled={!canRotateSelected || !variant}
-                          title={variant?.name || `${selectedDirectionGroup.name}-${roomEditorDirectionLabels[direction]}`}
+                          title={ptxt(variant?.name || `${selectedDirectionGroup.name}-${roomEditorDirectionLabels[direction]}`)}
                         >
                           {variant ? (
                             <img src={roomEditorAsset(variant.path)} alt="" draggable={false} loading="lazy" />
                           ) : (
                             <span aria-hidden="true">--</span>
                           )}
-                          <em>{roomEditorDirectionLabels[direction]}</em>
+                          <em>{ptxt(roomEditorDirectionLabels[direction])}</em>
                         </button>
                       );
                     })}
@@ -4112,32 +4225,32 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
               )}
               <div className={`pixel-world-layer-mode-card ${selectedIsGroundLayer ? 'ground' : ''}`}>
                 <div className="pixel-world-layer-mode-head">
-                  <strong>图层属性</strong>
+                  <strong>{tx('Layer Properties', '图层属性')}</strong>
                   <label className="pixel-world-collision-toggle">
                     <input
                       type="checkbox"
                       checked={selectedIsGroundLayer}
                       onChange={(event) => updateSelectedGroundLayer(event.target.checked)}
                     />
-                    <span>地面层</span>
+                    <span>{tx('Ground Layer', '地面层')}</span>
                   </label>
                 </div>
                 <small>
                   {selectedIsGroundLayer
-                    ? '当前实例会恒在普通素材下方；碰撞箱保留但不会阻挡人物。'
-                    : '普通素材会按图层顺序显示，碰撞箱可用于后续人物阻挡。'}
+                    ? tx('This instance stays below normal assets. Its collision box is saved but does not block characters.', '当前实例会恒在普通素材下方；碰撞箱保留但不会阻挡人物。')
+                    : tx('Normal assets render by layer order, and collision boxes can block characters later.', '普通素材会按图层顺序显示，碰撞箱可用于后续人物阻挡。')}
                 </small>
               </div>
               {selectedPlace && (
                 <div className="pixel-world-place-card">
                   <div className="pixel-world-place-card-head">
-                    <strong>地点锚点</strong>
+                    <strong>{tx('Place Anchor', '地点锚点')}</strong>
                     {!showPlaceAnchors && (
-                      <button onClick={togglePlaceAnchors}>查看锚点</button>
+                      <button onClick={togglePlaceAnchors}>{tx('Show Anchors', '查看锚点')}</button>
                     )}
                   </div>
-                  <span>{selectedPlace.name}</span>
-                  <small>用途: 家具靠近点 / 站位点 / 交互点预留</small>
+                  <span>{ptxt(selectedPlace.name)}</span>
+                  <small>{tx('Use: furniture approach point / standing point / reserved interaction point', '用途: 家具靠近点 / 站位点 / 交互点预留')}</small>
                   {selectedPlaceAnchorLocalPoint && (
                     <>
                       <div className="pixel-world-place-fields">
@@ -4153,10 +4266,10 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                         ))}
                       </div>
                       <div className="pixel-world-collision-actions">
-                        <button onClick={resetSelectedPlaceAnchor}>默认锚点</button>
+                        <button onClick={resetSelectedPlaceAnchor}>{tx('Default Anchor', '默认锚点')}</button>
                       </div>
                       <div className="pixel-world-inspector-hint">
-                        显示锚点后，拖粉色点就能改靠近点；保存布局会一起保存。
+                        {tx('After showing anchors, drag the pink point to edit the approach point. Saving the layout saves it too.', '显示锚点后，拖粉色点就能改靠近点；保存布局会一起保存。')}
                       </div>
                     </>
                   )}
@@ -4172,21 +4285,21 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                   />
                 </label>
               ))}
-              <div className="pixel-world-nudge-pad" aria-label="微调位置">
+              <div className="pixel-world-nudge-pad" aria-label={tx('Nudge position', '微调位置')}>
                 <button onClick={() => nudgeSelected(0, -4)}>↑</button>
                 <button onClick={() => nudgeSelected(-4, 0)}>←</button>
                 <button onClick={() => nudgeSelected(4, 0)}>→</button>
                 <button onClick={() => nudgeSelected(0, 4)}>↓</button>
               </div>
               <div className="pixel-world-scale-row">
-                <button onClick={() => scaleSelected(0.96)}>{groupEditMode ? '整体小一点' : '小一点'}</button>
-                <button onClick={() => scaleSelected(1.04)}>{groupEditMode ? '整体大一点' : '大一点'}</button>
+                <button onClick={() => scaleSelected(0.96)}>{groupEditMode ? tx('Smaller All', '整体小一点') : tx('Smaller', '小一点')}</button>
+                <button onClick={() => scaleSelected(1.04)}>{groupEditMode ? tx('Larger All', '整体大一点') : tx('Larger', '大一点')}</button>
               </div>
               <div className={`pixel-world-collision-editor ${showCollisionLines ? 'active' : ''}`}>
                 <div className="pixel-world-collision-editor-head">
-                  <strong>碰撞体积</strong>
+                  <strong>{tx('Collision Volume', '碰撞体积')}</strong>
                   {!showCollisionLines && (
-                    <button onClick={toggleCollisionLines}>查看碰撞箱线</button>
+                    <button onClick={toggleCollisionLines}>{tx('Show Collision', '查看碰撞箱线')}</button>
                   )}
                   <label className="pixel-world-collision-toggle">
                     <input
@@ -4195,7 +4308,7 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                       disabled={!isCommercialV2CollisionAsset(selectedAsset) || !selectedCollisionCanTakeEffect}
                       onChange={(event) => updateSelectedCollisionEnabled(event.target.checked)}
                     />
-                    <span>启用</span>
+                    <span>{tx('Enabled', '启用')}</span>
                   </label>
                 </div>
                 {selectedCollisionCanTakeEffect && selectedCollisionLocalBox ? (
@@ -4213,34 +4326,34 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                       ))}
                     </div>
                     <div className="pixel-world-collision-actions">
-                      <button onClick={resetSelectedCollision}>默认</button>
-                      <button onClick={fitSelectedCollisionToSprite}>贴合整图</button>
+                      <button onClick={resetSelectedCollision}>{tx('Default', '默认')}</button>
+                      <button onClick={fitSelectedCollisionToSprite}>{tx('Fit Sprite', '贴合整图')}</button>
                     </div>
                     <div className="pixel-world-inspector-hint">
-                      显示线条后，拖绿色框移动碰撞箱，拖蓝色点调整大小。
+                      {tx('After showing lines, drag the green box to move the collision area and blue handles to resize it.', '显示线条后，拖绿色框移动碰撞箱，拖蓝色点调整大小。')}
                     </div>
                   </>
                 ) : (
                   <div className="pixel-world-inspector-hint">
                     {selectedIsGroundLayer
-                      ? '地面层规则：这个实例的碰撞箱不会参与人物阻挡。'
-                      : '这个素材还没有可编辑的碰撞箱。'}
+                      ? tx('Ground-layer rule: this collision box will not block characters.', '地面层规则：这个实例的碰撞箱不会参与人物阻挡。')
+                      : tx('This asset has no editable collision box yet.', '这个素材还没有可编辑的碰撞箱。')}
                   </div>
                 )}
               </div>
             </>
           ) : (
-            <p>点击画布上的房间素材开始编辑；素材还没接入时，右侧 JSON 会保持为空房间模板。</p>
+            <p>{tx('Click a room asset on the canvas to edit it. Before assets are connected, the JSON on the right stays as an empty room template.', '点击画布上的房间素材开始编辑；素材还没接入时，右侧 JSON 会保持为空房间模板。')}</p>
           )}
           {showLayerPanel && (
             <section className="pixel-world-layer-panel">
               <div className="pixel-world-layer-panel-head">
-                <strong>图层</strong>
-                <small>上方后绘制；地面层不参与碰撞。</small>
+                <strong>{tx('Layers', '图层')}</strong>
+                <small>{tx('Upper rows render later. Ground layers do not participate in collision.', '上方后绘制；地面层不参与碰撞。')}</small>
               </div>
               {selectedLayerRow && (
                 <div className="pixel-world-layer-current">
-                  当前：{selectedLayerRow.asset?.name || selectedLayerRow.item.assetId}
+                  {tx('Current:', '当前：')}{ptxt(selectedLayerRow.asset?.name || selectedLayerRow.item.assetId)}
                   <span>#{selectedLayerRow.layerIndex + 1}</span>
                 </div>
               )}
@@ -4256,21 +4369,21 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
                     <span className="pixel-world-layer-index">#{row.layerIndex + 1}</span>
                     <span className="pixel-world-layer-name">
                       {row.asset?.name || row.item.assetId}
-                      <small>{row.asset?.type || '未知'} · z {row.zIndex} · {row.playerRule}</small>
+                      <small>{ptxt(row.asset?.type || '未知')} · z {row.zIndex} · {ptxt(row.playerRule)}</small>
                     </span>
-                    <span className="pixel-world-layer-kind">{row.isGround ? '地面' : '素材'}</span>
+                    <span className="pixel-world-layer-kind">{row.isGround ? tx('Ground', '地面') : tx('Asset', '素材')}</span>
                   </button>
                 ))}
               </div>
             </section>
           )}
-          <h3>AI 布局上下文</h3>
+          <h3>{tx('AI Layout Context', 'AI 布局上下文')}</h3>
           <textarea className="pixel-world-ai-layout-textarea" value={aiLayoutPrompt} readOnly />
-          <h3>布局 JSON</h3>
+          <h3>{tx('Layout JSON', '布局 JSON')}</h3>
           <textarea value={layoutJson} readOnly />
         </aside>
 
-        {renderBehaviorTreePanel()}
+        {renderRoomBehaviorTreePanel()}
       </div>
     </div>
   );

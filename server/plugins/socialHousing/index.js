@@ -211,38 +211,141 @@ function clampNumber(value, min, max) {
     return Math.max(min, Math.min(max, num));
 }
 
-function applyRentStressPatch(character = {}, binding = {}) {
-    const missed = Math.max(1, Number(binding.missed_rent_count || 1));
+function normalizeRentModelConfig(character = {}) {
+    const endpoint = compactText(character.api_endpoint);
+    const key = compactText(character.api_key);
+    const model = compactText(character.model_name);
+    if (!endpoint || !key || !model) {
+        throw new Error('收租文案需要角色 API 配置，请配置角色 API 后重试。');
+    }
+    return { endpoint, key, model };
+}
+
+function summarizeRentCharacter(character = {}, binding = {}) {
     return {
-        stress: clampNumber(Number(character.stress || 20) + 6 + missed * 2, 0, 100),
-        mood: clampNumber(Number(character.mood || 50) - 3 - missed, 0, 100),
-        social_need: clampNumber(Number(character.social_need || 50) + 2, 0, 100),
-        pressure_level: clampNumber(Number(character.pressure_level || 0) + 1, 0, 4)
+        id: String(character.id || ''),
+        name: String(character.name || character.id || ''),
+        wallet: Number(character.wallet || 0)
     };
 }
 
-function buildRentLog(char = {}, binding = {}, paid = false, amount = 0) {
-    const homeLabel = `${binding.housing_emoji || ''}${binding.housing_name || binding.housing_id || '住所'}`.trim();
-    if (paid) {
-        return `${char.name} 支付了 ${amount} 金币房租，${homeLabel} 的租约又稳了一周。`;
-    }
-    return `${char.name} 的 ${homeLabel} 房租到期，但钱包余额不足，居住状态变成拖欠。`;
+function summarizeRentHome(home = {}, binding = {}) {
+    return {
+        id: String(home.id || binding.housing_id || ''),
+        name: String(home.name || binding.housing_name || binding.housing_id || ''),
+        emoji: String(home.emoji || binding.housing_emoji || ''),
+        weekly_rent: Number(binding.rent_weekly || home.weekly_rent || 0),
+        district: String(home.district || home.location || ''),
+        description: String(home.description || '').slice(0, 500)
+    };
 }
 
-function buildFridayAgencyRentLog(char = {}, binding = {}, paid = false, amount = 0) {
-    const homeLabel = `${binding.housing_emoji || ''}${binding.housing_name || binding.housing_id || '住所'}`.trim();
-    if (paid) {
-        return `周五中介收费日，安家置业来收 ${homeLabel} 的本周房租。${char.name} 付出 ${amount} 金币，租约继续稳定一周。`;
+const RENT_EVENT_TIMEZONE = 'Asia/Shanghai';
+const RENT_WEEKDAY_KEY_RE = /^(?:星期|周|礼拜)([一二三四五六日天])$/;
+
+function getRentEventTimeFacts(now = Date.now()) {
+    const parts = {};
+    for (const part of new Intl.DateTimeFormat('zh-CN', {
+        timeZone: RENT_EVENT_TIMEZONE,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        weekday: 'long',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+    }).formatToParts(new Date(now))) {
+        if (part.type !== 'literal') parts[part.type] = part.value;
     }
-    return `周五中介收费日，安家置业来收 ${homeLabel} 的本周房租，但 ${char.name} 钱包余额不足，当场被中介赶了出去，重新变成无固定住所。`;
+    return {
+        timezone: RENT_EVENT_TIMEZONE,
+        date: `${parts.year}-${parts.month}-${parts.day}`,
+        weekday: parts.weekday || '',
+        time: `${parts.hour || '00'}:${parts.minute || '00'}`
+    };
 }
 
-function buildFridayRentPrivateMessage(char = {}, binding = {}, paid = false, amount = 0) {
-    const homeLabel = `${binding.housing_emoji || ''}${binding.housing_name || binding.housing_id || '住所'}`.trim();
-    if (paid) {
-        return `今天周五，中介来收 ${homeLabel} 的房租。我付了 ${amount} 金币，这周租约稳住了。`;
+function getRentWeekdayKey(label = '') {
+    const match = String(label || '').match(RENT_WEEKDAY_KEY_RE);
+    if (!match) return '';
+    return match[1] === '天' ? '日' : match[1];
+}
+
+function findRentWeekdayMentions(text = '') {
+    return Array.from(String(text || '').matchAll(/(?:星期|周|礼拜)[一二三四五六日天]/g))
+        .map((match) => match[0])
+        .filter(Boolean);
+}
+
+function buildRentCollectionFacts(character = {}, housingContext = {}, amount = 0, paid = false, weeklyAgencyCollection = false, now = Date.now()) {
+    const binding = housingContext.binding || {};
+    const home = housingContext.housing || {};
+    const walletBefore = Number(character.wallet || 0);
+    return {
+        event: 'housing_rent_collection',
+        event_time: getRentEventTimeFacts(now),
+        collection_type: weeklyAgencyCollection ? 'friday_agency_collection' : 'manual_rent_collection',
+        character: summarizeRentCharacter(character, binding),
+        home: summarizeRentHome(home, binding),
+        rent: {
+            amount: Number(amount || 0),
+            wallet_before: walletBefore,
+            wallet_after: paid ? walletBefore - Number(amount || 0) : walletBefore,
+            paid: !!paid,
+            evicted: !paid,
+            reason: paid ? 'wallet_enough' : 'insufficient_funds'
+        },
+        system_result: paid
+            ? 'rent_paid_and_home_kept'
+            : 'insufficient_funds_evicted_home_cleared'
+    };
+}
+
+function requireRentTextField(parsed, field, label) {
+    const text = compactText(parsed?.[field]);
+    if (!text) {
+        throw new Error(`${label} 输出缺少 ${field}，请重试。`);
     }
-    return `今天周五，中介来收 ${homeLabel} 的房租，但我钱不够。他们把我赶出来了，我现在又没有固定住所了。`;
+    return text;
+}
+
+function parseRentCityLogOutput(raw) {
+    try {
+        return parseLooseAgencyJsonText(raw);
+    } catch (error) {
+        const text = unwrapAgencyJsonText(raw);
+        const keyMatch = text.match(/["']city_log["']\s*:\s*["']/);
+        if (!keyMatch) throw error;
+        const start = (keyMatch.index || 0) + keyMatch[0].length;
+        const tail = text.slice(start);
+        const closeBraceIndex = tail.lastIndexOf('}');
+        const valuePortion = closeBraceIndex >= 0 ? tail.slice(0, closeBraceIndex) : tail;
+        const quoteIndex = Math.max(valuePortion.lastIndexOf('"'), valuePortion.lastIndexOf("'"));
+        const recovered = compactText((quoteIndex >= 0 ? valuePortion.slice(0, quoteIndex) : valuePortion)
+            .replace(/\\n/g, '\n')
+            .replace(/\\"/g, '"')
+            .replace(/\\\\/g, '\\'));
+        if (!recovered) throw error;
+        return { city_log: recovered };
+    }
+}
+
+function assertRentCityLogMatchesFacts(text, facts = {}) {
+    const content = compactText(text);
+    if (!/(收租|房租|租金|周租|房东|中介|扣款|交租)/.test(content)) {
+        throw new Error('收租商业街描述没有写出收租事件，请重试。');
+    }
+    if (facts?.rent?.evicted && !/(赶.{0,6}(走|出)|收回|失去|无固定住所|搬离|离开)/.test(content)) {
+        throw new Error('收租商业街描述没有写出被赶走/失去住房，请重试。');
+    }
+    const expectedWeekday = getRentWeekdayKey(facts?.event_time?.weekday);
+    const wrongWeekday = expectedWeekday
+        ? findRentWeekdayMentions(content).find((weekday) => getRentWeekdayKey(weekday) !== expectedWeekday)
+        : '';
+    if (wrongWeekday) {
+        throw new Error('收租商业街描述的星期和事实不一致，请重试。');
+    }
+    return content;
 }
 
 function doesAgencyAdReferenceHome(ad, home) {
@@ -609,9 +712,9 @@ function normalizeAgencyRoomAssemblyOutput(parsed, furnitureList = [], budget = 
         .filter(Boolean);
     const resolvedShopItems = shopItems.length > 0 ? shopItems : [
         { assetId: 'room_front_bed_peach_lemon_v1', item: 'bed', label: '床', style: '基础', price: 70, maxQuantity: 99, cells: { front: '5x5' }, preferred_dir: 'front', directional: true },
-        { assetId: 'room_front_peach_nightstand_v1', item: 'nightstand', label: '床头柜', style: '基础', price: 22, maxQuantity: 99, cells: { front: '3x3' }, preferred_dir: 'front', directional: true },
-        { assetId: 'room_front_peach_wardrobe_v1', item: 'wardrobe', label: '衣柜', style: '基础', price: 55, maxQuantity: 99, cells: { front: '3x5' }, preferred_dir: 'front', directional: true },
-        { assetId: 'room_front_peach_vanity_v1', item: 'vanity', label: '梳妆台', style: '基础', price: 45, maxQuantity: 99, cells: { front: '4x5' }, preferred_dir: 'front', directional: true }
+        { assetId: 'room_front_ocean_nightstand_v1', item: 'nightstand', label: '床头柜', style: '基础', price: 40, maxQuantity: 99, cells: { front: '3x3' }, preferred_dir: 'front', directional: true },
+        { assetId: 'room_front_ocean_wardrobe_v1', item: 'wardrobe', label: '衣柜', style: '基础', price: 100, maxQuantity: 99, cells: { front: '3x5' }, preferred_dir: 'front', directional: true },
+        { assetId: 'room_front_ocean_vanity_v1', item: 'vanity', label: '梳妆台', style: '基础', price: 95, maxQuantity: 99, cells: { front: '4x5' }, preferred_dir: 'front', directional: true }
     ];
     const source = Array.isArray(parsed?.placements)
         ? parsed.placements
@@ -717,15 +820,28 @@ async function generateAgencyRoomAssembly({ callLLM, db, config, home = {}, pale
         cols: clampNumber(room?.size?.cols || room?.cols || 16, 8, 24),
         rows: clampNumber(room?.size?.rows || room?.rows || 16, 8, 24)
     };
+    const roomConstraints = room && typeof room === 'object' && !Array.isArray(room)
+        ? (room.constraints || {})
+        : {};
+    const bedTopBaselineY = Math.round(clampNumber(
+        roomConstraints.bed_top_baseline_y_px ?? roomConstraints.bedTopBaselineY ?? 79,
+        0,
+        2000
+    ));
+    const bedMinGridY = Math.round(clampNumber(
+        roomConstraints.bed_min_grid_y ?? roomConstraints.bedMinGridY ?? 3,
+        0,
+        Number(roomSize.rows || 16)
+    ));
     const roomBudget = normalizeRoomAssemblyBudget(budget || home?.room_budget || home?.assembly_budget);
     const safeFurniture = (Array.isArray(furniture) ? furniture : [])
         .map(normalizeRoomAssemblyShopItem)
         .filter(Boolean);
     const furnitureList = safeFurniture.length > 0 ? safeFurniture : [
         { assetId: 'room_front_bed_peach_lemon_v1', item: 'bed', label: '床', style: '基础', price: 70, maxQuantity: 99, cells: { front: '5x5' }, preferred_dir: 'front', directional: true },
-        { assetId: 'room_front_peach_nightstand_v1', item: 'nightstand', label: '床头柜', style: '基础', price: 22, maxQuantity: 99, cells: { front: '3x3' }, preferred_dir: 'front', directional: true },
-        { assetId: 'room_front_peach_wardrobe_v1', item: 'wardrobe', label: '衣柜', style: '基础', price: 55, maxQuantity: 99, cells: { front: '3x5' }, preferred_dir: 'front', directional: true },
-        { assetId: 'room_front_peach_vanity_v1', item: 'vanity', label: '梳妆台', style: '基础', price: 45, maxQuantity: 99, cells: { front: '4x5' }, preferred_dir: 'front', directional: true }
+        { assetId: 'room_front_ocean_nightstand_v1', item: 'nightstand', label: '床头柜', style: '基础', price: 40, maxQuantity: 99, cells: { front: '3x3' }, preferred_dir: 'front', directional: true },
+        { assetId: 'room_front_ocean_wardrobe_v1', item: 'wardrobe', label: '衣柜', style: '基础', price: 100, maxQuantity: 99, cells: { front: '3x5' }, preferred_dir: 'front', directional: true },
+        { assetId: 'room_front_ocean_vanity_v1', item: 'vanity', label: '梳妆台', style: '基础', price: 95, maxQuantity: 99, cells: { front: '4x5' }, preferred_dir: 'front', directional: true }
     ];
     const homeSummary = {
         name: scrubRoomAssemblyPromptText(home?.name || home?.id || '样板房'),
@@ -765,6 +881,12 @@ async function generateAgencyRoomAssembly({ callLLM, db, config, home = {}, pale
         '[装修预算]',
         String(roomBudget),
         '',
+        '[房间硬约束]',
+        JSON.stringify({
+            bed_top_baseline_y_px: bedTopBaselineY,
+            bed_min_grid_y: bedMinGridY
+        }, null, 2),
+        '',
         '[家具商店]',
         JSON.stringify(furnitureList, null, 2),
         '',
@@ -777,6 +899,7 @@ async function generateAgencyRoomAssembly({ callLLM, db, config, home = {}, pale
         '6. 家具商店包含功能家具和装饰品；装饰品包括 rug、floorLamp、wallArt，它们是房屋档次的一部分，不是可忽略杂物。',
         '7. 必需品优先级：床、床头柜、衣柜、梳妆台；然后按房源档次加入书桌、书架、沙发、地毯、灯、挂画。',
         '8. 普通家具 bed/nightstand/wardrobe/vanity/desk/bookshelf/sofa/floorLamp 只放在 [d] 地面范围内；床、书架、衣柜、书桌、梳妆台、沙发等大件推荐靠后墙或侧墙，但不能为了靠墙压住 [w]/[m] 或墙地过渡线。',
+        `8a. 床的最高点不得高过当前床顶边基线：渲染后的床顶 y 必须 >= ${bedTopBaselineY}px；换算到输出网格时，bed 的 placements.y 必须 >= ${bedMinGridY}，宁可把床往下放，不要让床越过这条基线。`,
         '9. rug 最多 1 张，必须放在地面/地毯区域，不要挂到墙面；wallArt 最好只放 1 张，必须放在墙面区域，不要贴地、不要落到地板。',
         '10. rug 和 wallArt 都是置底图层，可以被其他家具部分遮盖；但最好仍露出主要图案，不要被床、沙发、衣柜等大件完全盖住。',
         '11. 除 rug/wallArt 外，所有家具必须用 cells 占地面积做碰撞检查，任意两个普通家具的占地矩形不能重叠；可以紧凑摆放，留出一条可读走道即可。',
@@ -935,7 +1058,130 @@ module.exports = function initSocialHousingPlugin(app, context) {
         };
     }
 
-    function settleCharacterRent(db, characterId, options = {}) {
+    async function generateRentCityLog({ db, userId, character, housingContext, amount, paid, weeklyAgencyCollection, now = Date.now() }) {
+        if (typeof callLLM !== 'function') {
+            throw new Error('收租商业街描述需要模型服务，请稍后重试。');
+        }
+        const { endpoint, key, model } = normalizeRentModelConfig(character);
+        const facts = buildRentCollectionFacts(character, housingContext, amount, paid, weeklyAgencyCollection, now);
+        const universal = await buildUniversalContext({
+            getUserDb,
+            getMemory,
+            userId,
+            forceCityDetail: true
+        }, character, '住房系统收租事件', false, []);
+        const systemPrompt = [
+            `请根据 ${character.name} 的设定和上下文，为商业街活动流写一条公开日志。`,
+            '只输出严格 JSON，不要输出 Markdown 或解释。',
+            'JSON 格式必须是 {"city_log":"..."}。'
+        ].join('\n');
+        const userPrompt = [
+            '[默认大输入库]',
+            universal?.preamble || '',
+            '',
+            '[收租事实]',
+            JSON.stringify(facts, null, 2),
+            '',
+            '[任务]',
+            '根据收租事实生成一条商业街活动描述。',
+            '硬性要求：',
+            `0. 当前实际日期为 ${facts.event_time.date} ${facts.event_time.weekday} ${facts.event_time.time}（${facts.event_time.timezone}）；如果提到日期或星期，必须和这个事实一致。`,
+            '1. city_log 用中文，适合商业街公开活动流。',
+            '2. 必须尊重事实：这是角色本人被收租，不是用户替角色交租。',
+            facts.rent.paid
+                ? '3. 事实结果：本次房租已付，住房保留。'
+                : '3. 事实结果：角色钱不够交租，住房已被房东/中介收回，住房状态已清除。',
+            '4. 除以上事实边界外，具体反应、语气、细节由模型根据角色和上下文自由发挥。',
+            '5. 不要输出模板、字段名、系统、API 或 JSON 之外的内容。'
+        ].join('\n');
+
+        recordAgencyDebug(db, character, 'input', {
+            system_prompt: systemPrompt,
+            user_prompt: userPrompt
+        }, {
+            context_type: 'social_housing_rent_city_log',
+            model,
+            endpoint
+        });
+
+        const result = await callLLM({
+            endpoint,
+            key,
+            model,
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt }
+            ],
+            maxTokens: 800,
+            temperature: 0.72,
+            responseFormat: { type: 'json_object' },
+            returnUsage: true,
+            maxAttempts: 1
+        });
+
+        const raw = typeof result === 'string' ? result : result?.content;
+        const finishReason = String(result?.finishReason || '').trim();
+
+        recordAgencyDebug(db, character, 'output', String(raw || ''), {
+            context_type: 'social_housing_rent_city_log',
+            model,
+            endpoint,
+            finishReason,
+            cached: !!result?.cached,
+            usage: result?.usage || null
+        });
+
+        if (finishReason === 'length') {
+            throw new Error('收租商业街描述被截断，请重试。');
+        }
+
+        let parsed;
+        try {
+            parsed = parseRentCityLogOutput(raw);
+        } catch (e) {
+            throw new Error('收租商业街描述不是合法 JSON，请重试。');
+        }
+
+        const cityLog = requireRentTextField(parsed, 'city_log', '收租商业街描述');
+        return assertRentCityLogMatchesFacts(cityLog, facts);
+    }
+
+    async function triggerRentPrivateReply({ db, userId, character, housingContext, amount, paid, weeklyAgencyCollection, now = Date.now() }) {
+        if (!userId) {
+            throw new Error('缺少用户上下文，无法触发收租私聊，请重试。');
+        }
+        const engine = getEngine(userId);
+        if (!engine || typeof engine.triggerImmediateUserReply !== 'function') {
+            throw new Error('私聊引擎不可用，请重试。');
+        }
+        const wsClients = getWsClients(userId);
+        const facts = buildRentCollectionFacts(character, housingContext, amount, paid, weeklyAgencyCollection, now);
+        const source = weeklyAgencyCollection
+            ? 'social_housing_friday_rent_collection'
+            : 'social_housing_manual_rent_collection';
+        await engine.triggerImmediateUserReply(character.id, wsClients, {
+            propagateError: true,
+            extraSystemDirective: [
+                '[系统事件：住房系统收租]',
+                '事实边界：这是房东/中介向角色本人收取本次房租，不是用户在交租，也不是给用户租房。',
+                `当前实际日期：${facts.event_time.date} ${facts.event_time.weekday} ${facts.event_time.time}（${facts.event_time.timezone}）。`,
+                '[收租事实]',
+                JSON.stringify(facts, null, 2),
+                '只把这些事实当作当前事件背景；不要预设心情、态度或剧情细节。',
+                '请基于私聊前文、RAG 记忆和你的性格自由回应。',
+                '不要输出 [CITY_ACTION:...] 或 [CITY_INTENT:...]；不要说这是模板或系统消息；不要改变上述事实。'
+            ].join('\n'),
+            eventUserDirective: '住房系统刚触发一次收租事件，事实见系统事件。请按角色本人和私聊记忆自由回应。',
+            extraDirectiveRole: 'system',
+            skipTopicSwitchGate: true,
+            triggerSource: source,
+            triggerRoute: weeklyAgencyCollection ? 'socialHousing.weeklyRent' : 'socialHousing.payRent',
+            triggerNote: `${facts.home.id || 'home'}:${facts.rent.paid ? 'paid' : 'evicted'}`
+        });
+        return { triggered: true, source };
+    }
+
+    async function settleCharacterRent(db, characterId, options = {}) {
         const socialHousingDb = ensureSocialHousingDb(db);
         const cityDb = ensureCityDb(db);
         const character = db.getCharacter(characterId);
@@ -947,113 +1193,98 @@ module.exports = function initSocialHousingPlugin(app, context) {
         const amount = Number(binding.rent_weekly || home.weekly_rent || 0);
         if (!Number.isFinite(amount) || amount <= 0) return { success: false, reason: 'rent_not_configured' };
         const weeklyAgencyCollection = String(options.source || '') === 'weekly_friday_agency';
-
-        const sendWeeklyPrivate = (paid, nextBinding, extra = {}) => {
-            if (!weeklyAgencyCollection || options.notifyPrivate === false) return null;
-            const content = buildFridayRentPrivateMessage(character, { ...binding, housing_name: home.name, housing_emoji: home.emoji }, paid, amount);
-            const metadata = {
-                source: 'social_housing_friday_rent_collection',
-                paid: !!paid,
-                evicted: !!extra.evicted,
+        const paid = Number(character.wallet || 0) >= amount;
+        const settledAt = Date.now();
+        const cityLog = await generateRentCityLog({
+            db,
+            userId: options.userId,
+            character,
+            housingContext,
+            amount,
+            paid,
+            weeklyAgencyCollection,
+            now: settledAt
+        });
+        const privateReply = options.notifyPrivate === false
+            ? null
+            : await triggerRentPrivateReply({
+                db,
+                userId: options.userId,
+                character,
+                housingContext,
                 amount,
-                home_id: home.id || binding.housing_id || '',
-                next_rent_due_at: Number(nextBinding?.rent_due_at || 0),
-                missed_rent_count: Number(nextBinding?.missed_rent_count || 0)
-            };
-            const { id: msgId, timestamp: msgTs } = db.addMessage(character.id, 'character', content, metadata);
-            const engine = options.userId ? getEngine(options.userId) : null;
-            const wsClients = options.userId ? getWsClients(options.userId) : new Set();
-            engine?.broadcastNewMessage?.(wsClients, {
-                id: msgId,
-                character_id: character.id,
-                role: 'character',
-                content,
-                timestamp: msgTs,
-                read: 0,
-                metadata
+                paid,
+                weeklyAgencyCollection,
+                now: settledAt
             });
-            engine?.broadcastEvent?.(wsClients, { type: 'refresh_contacts' });
-            return { id: msgId, content };
-        };
 
-        if (Number(character.wallet || 0) >= amount) {
+        if (paid) {
             db.updateCharacter(character.id, { wallet: Number(character.wallet || 0) - amount });
-            const nextBinding = socialHousingDb.markRentPaid(character.id, Date.now());
-            const log = weeklyAgencyCollection
-                ? buildFridayAgencyRentLog(character, { ...binding, housing_name: home.name, housing_emoji: home.emoji }, true, amount)
-                : buildRentLog(character, { ...binding, housing_name: home.name, housing_emoji: home.emoji }, true, amount);
+            const nextBinding = socialHousingDb.markRentPaid(character.id, settledAt);
             cityDb.logAction(
                 character.id,
                 weeklyAgencyCollection ? 'AGENCY_RENT_COLLECTION' : 'RENT',
-                log,
+                cityLog,
                 0,
                 -amount,
                 character.location || 'home'
             );
-            return { success: true, paid: true, amount, character: db.getCharacter(character.id), binding: nextBinding, private_message: sendWeeklyPrivate(true, nextBinding) };
+            return {
+                success: true,
+                paid: true,
+                evicted: false,
+                amount,
+                character: db.getCharacter(character.id),
+                binding: nextBinding,
+                private_reply: privateReply
+            };
         }
 
-        let nextBinding = null;
-        let stressPatch = applyRentStressPatch(character, binding);
-        if (weeklyAgencyCollection) {
-            socialHousingDb.saveBinding(character.id, {
-                social_class_id: binding.social_class_id || '',
-                housing_id: '',
-                housing_status: 'homeless',
-                rent_weekly: 0,
-                rent_due_day: 7,
-                rent_due_at: 0,
-                rent_last_paid_at: Number(binding.rent_last_paid_at || 0),
-                deposit_paid: 0,
-                missed_rent_count: Number(binding.missed_rent_count || 0) + 1,
-                note: `周五中介收费失败：${home.name || binding.housing_id || '住所'} 被收回`
-            });
-            nextBinding = socialHousingDb.getBinding(character.id);
-            stressPatch = {
-                ...stressPatch,
-                stress: clampNumber(Number(character.stress || 20) + 12, 0, 100),
-                mood: clampNumber(Number(character.mood || 50) - 8, 0, 100),
-                social_need: clampNumber(Number(character.social_need || 50) + 4, 0, 100),
-                pressure_level: clampNumber(Number(character.pressure_level || 0) + 2, 0, 4)
-            };
-        } else {
-            nextBinding = socialHousingDb.markRentOverdue(character.id);
-        }
-        db.updateCharacter(character.id, stressPatch);
-        const log = weeklyAgencyCollection
-            ? buildFridayAgencyRentLog(character, { ...binding, housing_name: home.name, housing_emoji: home.emoji }, false, amount)
-            : buildRentLog(character, { ...binding, housing_name: home.name, housing_emoji: home.emoji }, false, amount);
+        socialHousingDb.saveBinding(character.id, {
+            social_class_id: binding.social_class_id || '',
+            housing_id: '',
+            housing_status: 'homeless',
+            rent_weekly: 0,
+            rent_due_day: 7,
+            rent_due_at: 0,
+            rent_last_paid_at: Number(binding.rent_last_paid_at || 0),
+            deposit_paid: 0,
+            missed_rent_count: Number(binding.missed_rent_count || 0) + 1,
+            note: `收租失败：${home.name || binding.housing_id || '住所'} 被房东或中介收回`
+        });
+        const nextBinding = socialHousingDb.getBinding(character.id);
         cityDb.logAction(
             character.id,
-            weeklyAgencyCollection ? 'AGENCY_RENT_EVICTION' : 'RENT_OVERDUE',
-            log,
+            weeklyAgencyCollection ? 'AGENCY_RENT_EVICTION' : 'RENT_EVICTION',
+            cityLog,
             0,
             0,
-            weeklyAgencyCollection ? 'street' : (character.location || 'home')
+            character.location || 'street'
         );
         return {
             success: true,
             paid: false,
-            evicted: !!weeklyAgencyCollection,
+            evicted: true,
             amount,
             character: db.getCharacter(character.id),
             binding: nextBinding,
-            private_message: sendWeeklyPrivate(false, nextBinding, { evicted: !!weeklyAgencyCollection })
+            private_reply: privateReply
         };
     }
 
-    function settleDueRentsForDb(db, options = {}) {
+    async function settleDueRentsForDb(db, options = {}) {
         const socialHousingDb = ensureSocialHousingDb(db);
         const dueBindings = socialHousingDb.getDueRentBindings(Date.now());
         const results = [];
         for (const binding of dueBindings) {
             try {
-                results.push(settleCharacterRent(db, binding.character_id, {
+                results.push(await settleCharacterRent(db, binding.character_id, {
                     source: 'weekly_friday_agency',
                     notifyPrivate: true,
                     userId: options.userId
                 }));
             } catch (e) {
+                console.warn('[SocialHousing] rent settlement item failed:', e.message);
                 results.push({ success: false, character_id: binding.character_id, error: e.message });
             }
         }
@@ -1176,13 +1407,17 @@ module.exports = function initSocialHousingPlugin(app, context) {
         }
     });
 
-    app.post('/api/social-housing/characters/:id/pay-rent', authMiddleware, (req, res) => {
+    app.post('/api/social-housing/characters/:id/pay-rent', authMiddleware, async (req, res) => {
         try {
             const character = req.db.getCharacter(req.params.id);
             if (!character) {
                 return res.status(404).json({ success: false, error: '角色不存在' });
             }
-            const result = settleCharacterRent(req.db, character.id, { manual: true });
+            const result = await settleCharacterRent(req.db, character.id, {
+                manual: true,
+                notifyPrivate: true,
+                userId: req.user.id
+            });
             if (!result.success) {
                 return res.status(400).json({ success: false, error: result.reason || '房租结算失败' });
             }
@@ -1437,14 +1672,14 @@ module.exports = function initSocialHousingPlugin(app, context) {
         }
     }, AUTO_TICK_MS);
 
-    setInterval(() => {
+    setInterval(async () => {
         const users = typeof authDb.getAllUsers === 'function'
             ? filterAutomationUsers(authDb.getAllUsers(), Date.now())
             : [];
         for (const user of users) {
             try {
                 const db = getUserDb(user.id);
-                const results = settleDueRentsForDb(db, { userId: user.id });
+                const results = await settleDueRentsForDb(db, { userId: user.id });
                 if (!results.some((item) => item?.success)) continue;
                 const wsClients = getWsClients(user.id);
                 wsClients?.forEach((client) => {

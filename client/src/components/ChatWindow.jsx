@@ -7,7 +7,7 @@ import AvatarWithFrame from './AvatarWithFrame';
 import { Send, Smile, Paperclip, Bell, Users, ShieldBan, Trash, BookOpen, Brain, MoreHorizontal, UserPlus, Gift, Heart, UserMinus, ShieldAlert, BadgeInfo, ChevronLeft } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
-import { deriveEmotion, derivePhysicalState } from '../utils/emotion';
+import { deriveEmotion, derivePhysicalState, getStateDisplayLabel } from '../utils/emotion';
 
 function normalizeMessages(list = []) {
     const byId = new Map();
@@ -129,6 +129,9 @@ function RagHeaderProgress({ progress, lang }) {
     const railPercent = pipelineSteps.length > 1
         ? Math.round((activeIndex / (pipelineSteps.length - 1)) * 100)
         : percent;
+    const activeSegment = pipelineSteps.length > 1
+        ? Math.round((100 / (pipelineSteps.length - 1)) * 100) / 100
+        : 100;
     const statusText = progress?.status === 'completed'
         ? (lang === 'en' ? 'Completed' : '\u5DF2\u5B8C\u6210')
         : progress?.status === 'error'
@@ -138,7 +141,14 @@ function RagHeaderProgress({ progress, lang }) {
                 : (lang === 'en' ? 'Searching' : '\u68C0\u7D22\u4E2D');
 
     return (
-        <div className="rag-header-rail" title={`${lang === 'en' ? 'RAG Pipeline' : 'RAG \u6D41\u7A0B'}: ${percent}% - ${statusText}`}>
+        <div
+            className="rag-header-rail"
+            style={{
+                '--rag-active-position': `${railPercent}%`,
+                '--rag-active-segment': `${activeSegment}%`
+            }}
+            title={`${lang === 'en' ? 'RAG Pipeline' : 'RAG \u6D41\u7A0B'}: ${percent}% - ${statusText}`}
+        >
             <div className="rag-header-rail__summary">
                 <span className="rag-header-rail__label">RAG {statusText}</span>
                 <span className="rag-header-rail__percent">{percent}%</span>
@@ -148,7 +158,6 @@ function RagHeaderProgress({ progress, lang }) {
                 <span
                     className="rag-header-rail__bar"
                     style={{
-                        width: `${railPercent}%`,
                         animation: displayStep > 0 && progress?.status !== 'completed' ? 'ragPulse 1.8s ease-in-out infinite' : 'none'
                     }}
                 />
@@ -556,7 +565,7 @@ function ChatWindow({
         <>
             <div className="chat-header">
                 <div className="chat-header-main">
-                    <button className="mobile-back-btn" onClick={onBack} title="Back">
+                    <button className="mobile-back-btn" onClick={onBack} title={lang === 'en' ? 'Back' : '返回'}>
                         <ChevronLeft size={24} />
                     </button>
                     <div className="chat-header-avatar-shell">
@@ -577,11 +586,11 @@ function ChatWindow({
                             </span>
                         </div>
                         <div className="chat-header-chips">
-                            <span className="chat-state-chip" title="心理状态" style={{ color: emotion.color }}>
-                                {emotion.emoji} {emotion.label}
+                            <span className="chat-state-chip" title={lang === 'en' ? 'Emotional state' : '心理状态'} style={{ color: emotion.color }}>
+                                {emotion.emoji} {getStateDisplayLabel(emotion, lang)}
                             </span>
-                            <span className="chat-state-chip" title="生理状态" style={{ color: physical.color }}>
-                                {physical.emoji} {physical.label}
+                            <span className="chat-state-chip" title={lang === 'en' ? 'Physical state' : '生理状态'} style={{ color: physical.color }}>
+                                {physical.emoji} {getStateDisplayLabel(physical, lang)}
                             </span>
                             <span className="chat-state-chip chat-state-chip--energy" title={lang === 'en' ? 'Energy' : '精力'}>
                                 {lang === 'en' ? 'Energy 72' : '精力 72'}
@@ -599,7 +608,7 @@ function ChatWindow({
                     </button>
                     <button onClick={() => setIsRecommendModalOpen(true)} title={lang === 'en' ? 'Recommend Contact' : '推荐联系人'}>
                         <UserPlus size={20} />
-                        <span>{lang === 'en' ? 'Recommend' : '推荐联系人'}</span>
+                        <span>{lang === 'en' ? 'Recommend' : '推荐'}</span>
                     </button>
                     <button onPointerEnter={onPreloadMemo} onFocus={onPreloadMemo} onClick={onToggleMemo} title={t('Memories')}>
                         <Brain size={20} />
@@ -618,7 +627,7 @@ function ChatWindow({
 
             {isCurrentlyBlocked && (
                 <div style={{ textAlign: 'center', padding: '8px', background: '#ffebeb', color: 'var(--danger)', fontSize: '14px', fontWeight: 'bold', borderBottom: '1px solid #ffcccc' }}>
-                    You are blocked by {contact.name}. You cannot send messages.
+                    {lang === 'en' ? `You are blocked by ${contact.name}. You cannot send messages.` : `你已被 ${contact.name} 拉黑，暂时无法发送消息。`}
                 </div>
             )}
 

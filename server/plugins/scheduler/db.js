@@ -1,7 +1,6 @@
-const fs = require('fs');
-const path = require('path');
 const Database = require('better-sqlite3');
 const { isUserDbDeleting } = require('../../db');
+const { getDataDir, getUserDbPath } = require('../../paths');
 
 function normalizeDbTaskId(taskId) {
     const parsed = Number(taskId);
@@ -16,12 +15,8 @@ function getSchedulerDb(userId) {
     }
     if (userDbs.has(userId)) return userDbs.get(userId);
 
-    const dataDir = path.join(__dirname, '..', '..', 'data');
-    if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir, { recursive: true });
-    }
-
-    const dbPath = path.join(dataDir, `chatpulse_user_${userId}.db`);
+    getDataDir();
+    const dbPath = getUserDbPath(userId);
     const db = new Database(dbPath);
 
     db.exec(`

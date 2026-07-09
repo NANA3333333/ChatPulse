@@ -2,18 +2,18 @@ import React from 'react';
 import AuthenticatedImage from './AuthenticatedImage';
 
 export const AVATAR_FRAME_OPTIONS = [
-    { id: 'none', label: '无头像框', group: '基础' },
-    { id: 'rose-lace', label: '玫瑰蕾丝', group: '花朵', shape: 'circle', asset: 'rose-lace.png' },
-    { id: 'garden-wreath', label: '花园环', group: '花朵', shape: 'circle', asset: 'garden-wreath.png' },
-    { id: 'daisy-lace', label: '雏菊蕾丝', group: '花朵', shape: 'circle', asset: 'daisy-lace.png' },
-    { id: 'bow-pearl', label: '珍珠蝴蝶结', group: '蝴蝶结', shape: 'circle', asset: 'bow-pearl.png' },
-    { id: 'paper-bloom', label: '纸片花束', group: '贴纸', shape: 'square', asset: 'paper-bloom.png' },
-    { id: 'cherry-bow', label: '樱花小结', group: '混合', shape: 'square', asset: 'cherry-bow.png' },
-    { id: 'pearl-garden', label: '珍珠花园', group: '混合', shape: 'circle', asset: 'pearl-garden.png' },
-    { id: 'flower-bow-circle', label: '花枝蝴蝶结', group: '花朵', shape: 'circle', asset: 'flower-bow-circle.png' },
-    { id: 'rose-chain', label: '玫瑰珠链', group: '花朵', shape: 'circle', asset: 'rose-chain.png' },
-    { id: 'flower-ticket', label: '花边票券', group: '方形', shape: 'square', asset: 'flower-ticket.png' },
-    { id: 'photo-tape', label: '胶带相纸', group: '方形', shape: 'square', asset: 'photo-tape.png' }
+    { id: 'none', label: '无头像框', labelEn: 'No Frame', group: '基础', groupEn: 'Basic' },
+    { id: 'rose-lace', label: '玫瑰蕾丝', labelEn: 'Rose Lace', group: '花朵', groupEn: 'Flowers', shape: 'circle', asset: 'rose-lace.png' },
+    { id: 'garden-wreath', label: '花园环', labelEn: 'Garden Wreath', group: '花朵', groupEn: 'Flowers', shape: 'circle', asset: 'garden-wreath.png' },
+    { id: 'daisy-lace', label: '雏菊蕾丝', labelEn: 'Daisy Lace', group: '花朵', groupEn: 'Flowers', shape: 'circle', asset: 'daisy-lace.png' },
+    { id: 'bow-pearl', label: '珍珠蝴蝶结', labelEn: 'Pearl Bow', group: '蝴蝶结', groupEn: 'Bows', shape: 'circle', asset: 'bow-pearl.png' },
+    { id: 'paper-bloom', label: '纸片花束', labelEn: 'Paper Bloom', group: '贴纸', groupEn: 'Stickers', shape: 'square', asset: 'paper-bloom.png' },
+    { id: 'cherry-bow', label: '樱花小结', labelEn: 'Cherry Bow', group: '混合', groupEn: 'Mixed', shape: 'square', asset: 'cherry-bow.png' },
+    { id: 'pearl-garden', label: '珍珠花园', labelEn: 'Pearl Garden', group: '混合', groupEn: 'Mixed', shape: 'circle', asset: 'pearl-garden.png' },
+    { id: 'flower-bow-circle', label: '花枝蝴蝶结', labelEn: 'Flower Bow', group: '花朵', groupEn: 'Flowers', shape: 'circle', asset: 'flower-bow-circle.png' },
+    { id: 'rose-chain', label: '玫瑰珠链', labelEn: 'Rose Chain', group: '花朵', groupEn: 'Flowers', shape: 'circle', asset: 'rose-chain.png' },
+    { id: 'flower-ticket', label: '花边票券', labelEn: 'Flower Ticket', group: '方形', groupEn: 'Square', shape: 'square', asset: 'flower-ticket.png' },
+    { id: 'photo-tape', label: '胶带相纸', labelEn: 'Tape Photo', group: '方形', groupEn: 'Square', shape: 'square', asset: 'photo-tape.png' }
 ];
 
 const FRAME_IDS = new Set(AVATAR_FRAME_OPTIONS.map(option => option.id));

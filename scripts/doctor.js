@@ -39,9 +39,9 @@ function exists(relPath) {
 
 async function checkQdrant() {
   const url = (process.env.QDRANT_URL || 'http://127.0.0.1:6333').replace(/\/+$/, '');
-  const enabled = process.env.QDRANT_ENABLED === '0' ? false : true;
+  const enabled = !/^(0|false|no|off)$/i.test(String(process.env.QDRANT_ENABLED || '').trim());
   if (!enabled) {
-    return { ok: true, detail: 'disabled by QDRANT_ENABLED=0; vectra fallback will be used' };
+    return { ok: true, detail: 'explicitly disabled by QDRANT_ENABLED=0; local memory fallback will be used' };
   }
   try {
     const response = await fetch(`${url}/collections`);
@@ -50,7 +50,7 @@ async function checkQdrant() {
     }
     return { ok: false, detail: `responded with HTTP ${response.status} at ${url}` };
   } catch (e) {
-    return { ok: false, detail: `not reachable at ${url}; vectra fallback will be used` };
+    return { ok: false, detail: `not reachable at ${url}; startup will fail unless QDRANT_ENABLED=0 is set intentionally` };
   }
 }
 
@@ -100,8 +100,8 @@ async function main() {
   const qdrant = await checkQdrant();
   printCheck('Qdrant', qdrant.ok, qdrant.detail);
 
-  console.log('\n[doctor] Fresh clones can still run without Qdrant.');
-  console.log('[doctor] SQLite, auth DB, uploads, vectra indices, and cache directories are auto-created on first start.');
+  console.log('\n[doctor] Qdrant is required by default. Set QDRANT_ENABLED=0 only when local memory fallback is intentional.');
+  console.log('[doctor] SQLite, auth DB, uploads, local memory indices, and cache directories are auto-created on first start.');
 }
 
 main().catch((error) => {

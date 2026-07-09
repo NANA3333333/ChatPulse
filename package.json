@@ -7,6 +7,10 @@
     "dev": "node scripts/dev.js",
     "dev:server": "npm --prefix server run start",
     "dev:client": "npm --prefix client run dev",
+    "build:client": "npm --prefix client run build",
+    "desktop:dev": "npm run build:client && electron .",
+    "desktop:pack": "npm run build:client && electron-builder --dir",
+    "desktop:dist": "npm run build:client && electron-builder --win nsis --x64",
     "migrate:qdrant": "npm --prefix server run migrate:qdrant",
     "cleanup:city-memories": "npm --prefix server run cleanup:city-memories"
   },
@@ -17,11 +21,11 @@
   },
   "version": "1.0.0",
   "description": "ChatPulse 是一个本地优先的 AI 社交模拟应用，前端使用 React，后端使用 Express，主存储是 SQLite，并支持接入 Qdrant 做向量记忆检索。",
-  "main": "e2e.js",
-  "directories": {
-    "doc": "docs"
+  "main": "desktop/main.cjs",
+  "devDependencies": {
+    "electron": "^42.5.0",
+    "electron-builder": "^26.15.3"
   },
-  "devDependencies": {},
   "repository": {
     "type": "git",
     "url": "git+https://github.com/NANA3333333/ChatPulse.git"
@@ -30,6 +34,88 @@
   "author": "",
   "license": "ISC",
   "type": "commonjs",
+  "build": {
+    "appId": "com.nana.chatpulse",
+    "productName": "ChatPulse",
+    "icon": "desktop/assets/chatpulse-klein.ico",
+    "disableAsarIntegrity": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "server",
+        "to": "server",
+        "filter": [
+          "**/*",
+          "!node_modules/**",
+          "!public/uploads/**",
+          "!data/**",
+          "!*.log",
+          "!*.out.log",
+          "!*.err.log"
+        ]
+      },
+      {
+        "from": "server/node_modules",
+        "to": "server/node_modules",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "client/dist",
+        "to": "client/dist"
+      },
+      {
+        "from": "config",
+        "to": "config"
+      },
+      {
+        "from": "tools/qdrant",
+        "to": "tools/qdrant",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": ".runtime/node20",
+        "to": ".runtime/node20",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "desktop/assets/chatpulse-klein.ico",
+      "signAndEditExecutable": true,
+      "signExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "installerIcon": "desktop/assets/chatpulse-klein.ico",
+      "uninstallerIcon": "desktop/assets/chatpulse-klein.ico",
+      "installerHeader": "desktop/assets/installer-header.bmp",
+      "installerSidebar": "desktop/assets/installer-sidebar.bmp"
+    }
+  },
   "bugs": {
     "url": "https://github.com/NANA3333333/ChatPulse/issues"
   },

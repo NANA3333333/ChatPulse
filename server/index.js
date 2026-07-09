@@ -15,20 +15,28 @@ const { deriveEmotion } = require('./emotion');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 const fs = require('fs');
+const {
+    getDataDir,
+    getJwtSecretPath,
+    getUploadsDir,
+    getUserUploadDir,
+    getTtsDir,
+    getClientDistDir
+} = require('./paths');
 
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 // Generate or load a persistent JWT secret (never hardcoded in source)
 function getJwtSecret() {
     if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
-    const secretPath = path.join(__dirname, 'data', '.jwt_secret');
+    const secretPath = getJwtSecretPath();
     try {
         if (fs.existsSync(secretPath)) {
             return fs.readFileSync(secretPath, 'utf8').trim();
         }
     } catch (e) { /* fall through to generate */ }
     // Generate a strong 256-bit random secret and persist
-    const dataDir = path.join(__dirname, 'data');
+    const dataDir = getDataDir();
     if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
     const secret = require('crypto').randomBytes(32).toString('base64url');
     fs.writeFileSync(secretPath, secret, { mode: 0o600 });
@@ -39,6 +47,7 @@ const JWT_SECRET = getJwtSecret();
 const AUTH_TOKEN_TTL = String(process.env.CP_AUTH_TOKEN_TTL || '7d');
 const PUBLIC_MODE = /^(1|true|yes|on)$/i.test(String(process.env.CP_PUBLIC_MODE || ''));
 const TRUST_PROXY = /^(1|true|yes|on)$/i.test(String(process.env.CP_TRUST_PROXY || ''));
+const DESKTOP_MODE = /^(1|true|yes|on)$/i.test(String(process.env.CP_DESKTOP_MODE || ''));
 const ALLOWED_ORIGINS = String(process.env.CP_ALLOWED_ORIGINS || '')
     .split(',')
     .map(origin => origin.trim())
@@ -97,6 +106,26 @@ const qdrant = require('./qdrant');
 const crypto = require('crypto');
 
 let pluginContext = null;
+
+function isEnvDisabled(value) {
+    return /^(0|false|no|off)$/i.test(String(value || '').trim());
+}
+
+function isQdrantRequiredForStartup() {
+    const config = qdrant.getQdrantConfig();
+    if (!config.enabled) return false;
+    return !isEnvDisabled(process.env.QDRANT_REQUIRED);
+}
+
+async function assertQdrantStartupReady() {
+    if (!isQdrantRequiredForStartup()) return;
+    const config = qdrant.getQdrantConfig();
+    const ok = await qdrant.healthcheck();
+    if (!ok) {
+        throw new Error(`QDRANT_ENABLED=1 but Qdrant is not reachable at ${config.url}. Start Qdrant first, or set QDRANT_ENABLED=0 only when vectra fallback is intentional.`);
+    }
+    console.log(`[Startup] Qdrant is reachable at ${config.url}`);
+}
 
 function createRequestTraceId(prefix = 'req') {
     const randomPart = typeof crypto.randomUUID === 'function'
@@ -293,13 +322,14 @@ app.use('/api/', (req, res, next) => {
 
 
 // Serve static uploaded files with CORP header to bypass browser COEP blocks
+const uploadsDir = getUploadsDir();
 app.use('/uploads', (req, res, next) => {
     if (req.path === '/users' || req.path.startsWith('/users/')) {
         return res.status(404).json({ error: 'File not found' });
     }
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     next();
-}, express.static(path.join(__dirname, 'public/uploads')));
+}, express.static(uploadsDir));
 
 const allowedImageMimeTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const allowedImageExtensions = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
@@ -335,7 +365,7 @@ function cleanupUploadedFile(file) {
     } catch (e) { }
 }
 
-const ttsAudioRoot = path.resolve(__dirname, '..', 'data', 'tts');
+const ttsAudioRoot = path.resolve(getTtsDir());
 
 function resolveTtsAudioPath(userId, audioPath) {
     if (!audioPath) return null;
@@ -356,10 +386,7 @@ function sanitizeTtsMimeType(value) {
 // Configure Multer for local image uploads
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-        const uploadDir = path.join(__dirname, 'public/uploads/users', String(req.user?.id || 'default'));
-        if (!fs.existsSync(uploadDir)) {
-            fs.mkdirSync(uploadDir, { recursive: true });
-        }
+        const uploadDir = getUserUploadDir(req.user?.id || 'default');
         cb(null, uploadDir);
     },
     filename: function (req, file, cb) {
@@ -386,7 +413,7 @@ const upload = multer({
 function resolveUserUploadPath(userId, filename) {
     const safeFilename = path.basename(String(filename || '').trim());
     if (!safeFilename || safeFilename !== String(filename || '').trim()) return null;
-    const userUploadRoot = path.resolve(__dirname, 'public/uploads/users', String(userId || 'default'));
+    const userUploadRoot = path.resolve(getUserUploadDir(userId || 'default'));
     const resolvedPath = path.resolve(userUploadRoot, safeFilename);
     if (resolvedPath !== userUploadRoot && !resolvedPath.startsWith(userUploadRoot + path.sep)) {
         return null;
@@ -2129,6 +2156,7 @@ function verifyAuthToken(token) {
             username: authUser.username,
             role: authUser.role || decoded.role || 'user',
             status: authUser.status || 'active',
+            created_at: Number(authUser.created_at || 0),
             tokenVersion: authUser.token_version || 0,
             sessionId: decoded.sessionId
         }
@@ -2246,6 +2274,34 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
         const { token } = issueAuthToken(result.user, req);
         getUserDb(result.user.id);
         res.json({ success: true, token, user: result.user });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/desktop/session', (req, res) => {
+    try {
+        if (!DESKTOP_MODE || !isLocalRequest(req)) {
+            return res.status(404).json({ error: 'Not found' });
+        }
+        const expectedToken = String(process.env.CP_DESKTOP_SESSION_TOKEN || '');
+        const providedToken = String(req.get('x-chatpulse-desktop-token') || '');
+        if (!expectedToken || providedToken !== expectedToken) {
+            return res.status(403).json({ error: 'Forbidden' });
+        }
+        const desktopUsername = String(process.env.CP_DESKTOP_USERNAME || 'Nana').trim() || 'Nana';
+        const authUser = authDb.getUserByUsername(desktopUsername) || authDb.getUserByUsername('Nana');
+        if (!authUser) return res.status(404).json({ error: 'Desktop user not found' });
+        const user = {
+            id: authUser.id,
+            username: authUser.username,
+            role: authUser.role || 'user',
+            status: authUser.status || 'active',
+            tokenVersion: authUser.token_version || 0
+        };
+        const { token } = issueAuthToken(user, req);
+        getUserDb(user.id);
+        res.json({ success: true, token, user });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -2416,7 +2472,12 @@ app.get('/api/user', authMiddleware, (req, res) => {
     const db = req.db;
     try {
         const profile = typeof db.getUserProfile === 'function' ? db.getUserProfile() : null;
-        res.json(redactSecretFields({ ...(profile || { name: req.user.username }), username: req.user.username, role: req.user.role || 'user' }, PROFILE_SECRET_FIELDS));
+        res.json(redactSecretFields({
+            ...(profile || { name: req.user.username }),
+            username: req.user.username,
+            role: req.user.role || 'user',
+            created_at: Number(req.user.created_at || 0)
+        }, PROFILE_SECRET_FIELDS));
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -2431,7 +2492,12 @@ app.post('/api/user', authMiddleware, (req, res) => {
             db.updateUserProfile(preserveExistingSecretFields(req.body, currentProfile, PROFILE_SECRET_FIELDS));
         }
         const updatedProfile = typeof db.getUserProfile === 'function' ? db.getUserProfile() : null;
-        res.json({ success: true, profile: redactSecretFields({ ...(updatedProfile || { name: req.user.username }), username: req.user.username, role: req.user.role || 'user' }, PROFILE_SECRET_FIELDS) });
+        res.json({ success: true, profile: redactSecretFields({
+            ...(updatedProfile || { name: req.user.username }),
+            username: req.user.username,
+            role: req.user.role || 'user',
+            created_at: Number(req.user.created_at || 0)
+        }, PROFILE_SECRET_FIELDS) });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -2802,6 +2868,7 @@ app.get('/api/characters', authMiddleware, (req, res) => {
                 unread_count: db.getUnreadCount(c.id),
                 first_message_at: Number(messageStats.first_message_at || 0),
                 last_message_at: Number(messageStats.last_message_at || 0),
+                last_user_message_at: Number(messageStats.last_user_message_at || c.last_user_msg_time || 0),
                 private_message_count: Number(messageStats.private_message_count || 0),
                 user_message_count: Number(messageStats.user_message_count || 0),
                 character_message_count: Number(messageStats.character_message_count || 0),
@@ -2828,6 +2895,7 @@ app.get('/api/characters/:id/message-stats', authMiddleware, (req, res) => {
             : {
                 first_message_at: 0,
                 last_message_at: 0,
+                last_user_message_at: 0,
                 private_message_count: 0,
                 user_message_count: 0,
                 character_message_count: 0
@@ -3079,6 +3147,7 @@ app.post('/api/messages', authMiddleware, async (req, res) => {
         // If character has blocked the user, save message but return blocked flag
         if (charObj.is_blocked) {
             const { id: msgId, timestamp: msgTs } = db.addMessage(characterId, 'user', content);
+            db.updateCharacter(characterId, { last_user_msg_time: msgTs });
             const savedMessage = { id: msgId, character_id: characterId, role: 'user', content, timestamp: msgTs, isBlocked: true };
             engine.broadcastNewMessage?.(wsClients, savedMessage);
             return res.json({ success: true, blocked: true, message: savedMessage });
@@ -3113,10 +3182,8 @@ app.post('/api/messages', authMiddleware, async (req, res) => {
         // Check if other characters get jealous that user is talking to this character
         engine.triggerJealousyCheck(characterId, wsClients);
 
-        // Asynchronously trigger memory extraction using the small AI
-        // (Memory extraction is handled by engine.js AFTER the AI replies to ensure full context)
-        const recentMessages = db.getMessages(characterId, 10);
-        memory.extractHiddenState(charObj, recentMessages).catch(e => console.error('[Memory] Background hidden state error:', e));
+        // Hidden mood is no longer inferred by a background small model.
+        // The character may change visible mood only through EMOTION_STATE in its main reply.
 
         res.json({ success: true, message: savedMessage });
     } catch (e) {
@@ -3351,7 +3418,8 @@ app.post('/api/transfer', authMiddleware, (req, res) => {
         // Unblock them and reset pressure
         db.updateCharacter(characterId, {
             is_blocked: 0,
-            pressure_level: 0
+            pressure_level: 0,
+            last_user_msg_time: msgTs
         });
 
         // Tell the engine to process the unblock reaction
@@ -6431,7 +6499,12 @@ app.put('/api/user', authMiddleware, (req, res) => {
     const wsClients = getWsClients(req.user.id);
     try {
         db.updateUserProfile(req.body);
-        res.json({ success: true, profile: { ...(db.getUserProfile() || {}), username: req.user.username, role: req.user.role || 'user' } });
+        res.json({ success: true, profile: {
+            ...(db.getUserProfile() || {}),
+            username: req.user.username,
+            role: req.user.role || 'user',
+            created_at: Number(req.user.created_at || 0)
+        } });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -7276,7 +7349,7 @@ app.delete('/api/characters/:id', authMiddleware, async (req, res) => {
 
 
 // Serve React Frontend (Production)
-const clientDistPath = path.join(__dirname, '..', 'client', 'dist');
+const clientDistPath = getClientDistDir();
 app.use(express.static(clientDistPath, {
     index: false,
     setHeaders: (res, filePath) => {
@@ -7305,12 +7378,22 @@ app.use((req, res, next) => {
 });
 
 
-// Start listening
-console.log('[Express] Attempting to listen on port 8000...');
 const PORT = process.env.PORT || 8000;
-server.listen(PORT, () => {
-    console.log(`[Express] ChatPulse Server running on http://localhost:${PORT}`);
-});
+// Start listening
+async function startHttpServer() {
+    try {
+        await assertQdrantStartupReady();
+        console.log(`[Express] Attempting to listen on port ${PORT}...`);
+        server.listen(PORT, () => {
+            console.log(`[Express] ChatPulse Server running on http://localhost:${PORT}`);
+        });
+    } catch (e) {
+        console.error('[Startup] Failed to start ChatPulse server:', e.message);
+        process.exit(1);
+    }
+}
+
+startHttpServer();
 
 // Private background engines are now dynamically started via WS Auth
 

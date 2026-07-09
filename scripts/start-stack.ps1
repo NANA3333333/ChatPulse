@@ -103,7 +103,7 @@ function Start-Qdrant() {
         if (Try-StartLocalQdrant) {
             return $true
         }
-        Write-Host '[stack] local Qdrant failed after retry; backend will use vectra fallback'
+        Write-Host '[stack] local Qdrant failed after retry'
         if (Test-Path $qdrantOut) { Get-Content $qdrantOut -Tail 60 }
         if (Test-Path $qdrantErr) { Get-Content $qdrantErr -Tail 60 }
         return $false
@@ -137,7 +137,18 @@ foreach ($log in @($qdrantOut, $qdrantErr, $serverOut, $serverErr, $clientOut, $
     if (Test-Path $log) { Remove-Item $log -Force -ErrorAction SilentlyContinue }
 }
 
-$qdrantReady = Start-Qdrant
+$qdrantDisabled = "$env:QDRANT_ENABLED" -match '^(0|false|no|off)$'
+$qdrantReady = $false
+if ($qdrantDisabled) {
+    Write-Host '[stack] Qdrant disabled by QDRANT_ENABLED=0; backend will use vectra fallback'
+} else {
+    $qdrantReady = Start-Qdrant
+    if (-not $qdrantReady) {
+        Write-Host '[stack] Qdrant startup failed; aborting stack startup'
+        Write-Host '[stack] Set QDRANT_ENABLED=0 only if you intentionally want vectra fallback.'
+        exit 1
+    }
+}
 
 Write-Host '[stack] starting backend on http://localhost:8000'
 $serverProc = if ($qdrantReady) {
@@ -192,7 +203,7 @@ if ($qdrantReady) {
     Write-Host '[stack] qdrant   : http://127.0.0.1:6333'
     if (Test-Path $qdrantPidFile) { Write-Host "[stack] qdrant pid: $((Get-Content $qdrantPidFile | Select-Object -First 1))" }
 } else {
-    Write-Host '[stack] qdrant   : disabled for this run, backend using vectra fallback'
+    Write-Host '[stack] qdrant   : explicitly disabled for this run, backend using vectra fallback'
 }
 Write-Host '[stack] backend  : http://localhost:8000'
 Write-Host '[stack] frontend : http://127.0.0.1:5173'

@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLanguage } from '../../LanguageContext';
+import { pixelTx, translatePixelAction, translatePixelText } from './pixelWorldI18n';
 import {
   commercialV2BehaviorConfigStorageKey,
   commercialV2BehaviorTreeStorageKey,
@@ -179,8 +181,12 @@ import {
   isCommercialV2WalkableAsset,
   isCommercialV2MainRoadAsset,
   isCommercialV2StreetCruiseRoadAsset,
+  isCommercialV2BackgroundSceneryAsset,
+  isCommercialV2BackgroundSceneryItem,
   isCommercialV2GroundLayerAsset,
   isCommercialV2GroundLayerItem,
+  getCommercialV2ItemLayerRank,
+  normalizeCommercialV2ItemLayerOrder,
   isCommercialV2DynamicOcclusionItem,
   canCommercialV2ItemCollisionTakeEffect,
   getCommercialV2PlaceLink,
@@ -250,9 +256,15 @@ function readStoredCommercialV2BehaviorActorBindings() {
 }
 
 function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
+  const { lang } = useLanguage();
+  const tx = useCallback((en, zh) => pixelTx(en, zh, lang), [lang]);
+  const ptxt = useCallback((value) => translatePixelText(value, lang), [lang]);
   const stageRef = useRef(null);
   const canvasWrapRef = useRef(null);
   const loopScrollGuardRef = useRef(false);
+  const loopScrollSettleTimerRef = useRef(null);
+  const loopScrollPointerActiveRef = useRef(false);
+  const loopScrollPendingNormalizeRef = useRef(false);
   const pendingLoopScrollRef = useRef('middle');
   const dragRef = useRef(null);
   const dragFrameRef = useRef(null);
@@ -288,6 +300,8 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   const [showCollisionLines, setShowCollisionLines] = useState(false);
   const [showPlaceAnchors, setShowPlaceAnchors] = useState(false);
   const [showLayerPanel, setShowLayerPanel] = useState(false);
+  const [showAdvancedToolbar, setShowAdvancedToolbar] = useState(false);
+  const [assetPanelOpen, setAssetPanelOpen] = useState(false);
   const [activeAssetType, setActiveAssetType] = useState('建筑');
   const [autoTargetId, setAutoTargetId] = useState('');
   const [autoTravelActive, setAutoTravelActive] = useState(false);
@@ -321,6 +335,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   const [behaviorShowKey, setBehaviorShowKey] = useState(false);
   const [behaviorPanelCollapsed, setBehaviorPanelCollapsed] = useState(true);
   const [behaviorFoldOpen, setBehaviorFoldOpen] = useState({
+    selection: false,
     model: false,
     context: false,
     constraints: false,
@@ -407,6 +422,15 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     height: commercialV2PlayerSize.height * playerScale,
     footOffset: commercialV2PlayerSize.footOffset * playerScale
   }), [playerScale]);
+  const getPlayerVisualDimensions = useCallback((targetPlayer) => {
+    const character = getCommercialV2PlayerCharacter(targetPlayer);
+    const visualScale = Math.max(0.25, Number(character?.visualScale) || 1);
+    return {
+      width: playerDimensions.width * visualScale,
+      height: playerDimensions.height * visualScale,
+      footOffset: playerDimensions.footOffset * visualScale
+    };
+  }, [playerDimensions]);
   const selectedItem = items.find((item) => item.id === selectedId) || null;
   const selectedAsset = selectedItem ? assetById.get(selectedItem.assetId) : null;
   const selectedCollisionCanTakeEffect = Boolean(
@@ -426,16 +450,26 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     : null;
   const selectedIsBuiltInGroundLayer = Boolean(selectedAsset && isCommercialV2GroundLayerAsset(selectedAsset));
   const selectedIsGroundLayer = Boolean(selectedItem && selectedAsset && isCommercialV2GroundLayerItem(selectedItem, selectedAsset));
+  const selectedIsBackgroundSceneryAsset = Boolean(selectedAsset && isCommercialV2BackgroundSceneryAsset(selectedAsset));
   const layerRows = useMemo(() => items.map((item, layerIndex) => {
     const asset = assetById.get(item.assetId);
     const isGround = Boolean(asset && isCommercialV2GroundLayerItem(item, asset));
+    const isBackgroundScenery = Boolean(asset && isCommercialV2BackgroundSceneryItem(item, asset));
+    const playerRule = asset?.type === '天空'
+      ? '天空底层'
+      : isBackgroundScenery
+        ? '背景树木 / 天空上方 / 地面下方'
+        : asset?.type === '道路'
+          ? '地面层 / 背景树木上方 / 人物下方'
+          : '普通素材 / 地面上方 / 遮挡判断';
     return {
       item,
       asset,
       layerIndex,
       zIndex: getCommercialV2ItemRenderZIndex(layerIndex, item, asset),
       isGround,
-      playerRule: isGround ? '恒在人物下方 / 忽略碰撞' : '按图层顺序 / 遮挡判断'
+      isBackgroundScenery,
+      playerRule
     };
   }), [assetById, items]);
   const selectedLayerRow = selectedId
@@ -477,19 +511,21 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     || null;
   const activeBehaviorCharacterId = behaviorCharacter?.id || '';
   const behaviorBindingSummary = behaviorBoundCharacter
-    ? `${behaviorActorCharacter.label} -> ${behaviorBoundCharacter.name || behaviorBoundCharacter.id}`
-    : `${behaviorActorCharacter.label} 尚未绑定实际角色`;
+    ? `${ptxt(behaviorActorCharacter.label)} -> ${behaviorBoundCharacter.name || behaviorBoundCharacter.id}`
+    : tx(`${ptxt(behaviorActorCharacter.label)} is not bound to an actual character`, `${behaviorActorCharacter.label} 尚未绑定实际角色`);
   const controlledBoundCharacterId = behaviorActorBindings[controlledPlayerId] || '';
   const controlledBoundCharacter = behaviorCharacters.find((item) => item.id === controlledBoundCharacterId) || null;
   const controlledBindingSummary = controlledBoundCharacter
-    ? `已绑定：${controlledBoundCharacter.name || controlledBoundCharacter.id}`
-    : '未绑定';
+    ? tx(`Bound: ${controlledBoundCharacter.name || controlledBoundCharacter.id}`, `已绑定：${controlledBoundCharacter.name || controlledBoundCharacter.id}`)
+    : tx('Not bound', '未绑定');
   const behaviorPrimaryActions = commercialV2BehaviorPrimaryActionIds
     .map((id) => commercialV2BehaviorActions.find((item) => item.id === id))
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((action) => translatePixelAction(action, lang));
   const behaviorContextActions = commercialV2BehaviorContextActionIds
     .map((id) => commercialV2BehaviorActions.find((item) => item.id === id))
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((action) => translatePixelAction(action, lang));
   const behaviorInteractionState = useMemo(() => {
     const dx = getCommercialV2LoopDeltaX(behaviorTargetActor.x, behaviorUserActor.x, stageSize.width);
     const dy = behaviorUserActor.y - behaviorTargetActor.y;
@@ -564,10 +600,13 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   const commitItems = useCallback((updater) => {
     const previous = itemsRef.current;
     const next = typeof updater === 'function' ? updater(previous) : updater;
-    itemsRef.current = next;
-    setItemsState(next);
-    return next;
-  }, []);
+    const orderedNext = Array.isArray(next)
+      ? normalizeCommercialV2ItemLayerOrder(next, assetById)
+      : next;
+    itemsRef.current = orderedNext;
+    setItemsState(orderedNext);
+    return orderedNext;
+  }, [assetById]);
 
   const commitSegmentCount = useCallback((updater) => {
     const previous = segmentCountRef.current;
@@ -859,7 +898,6 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       ? controlledPlayerId
       : commercialV2RoleActorId;
     bindBehaviorActorToCharacter(safeActorId, behaviorCharacterId);
-    setBehaviorPanelCollapsed(false);
   }
 
   function resolveBehaviorAction(actionId = behaviorAction) {
@@ -1050,7 +1088,6 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       return;
     }
     const pendingMessage = '正在读取 AI 上文...';
-    setBehaviorPanelCollapsed(false);
     setBehaviorFoldOpen((current) => ({ ...current, runtime: true, debug: true }));
     setBehaviorLoading(true);
     setBehaviorStatus(pendingMessage);
@@ -1098,7 +1135,6 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     if (actionId !== behaviorAction) setBehaviorAction(actionId);
     if (placeId && placeId !== behaviorPlaceId) setBehaviorPlaceId(placeId);
     const pendingMessage = '正在生成互动回应...模型请求可能需要几十秒，请稍等。';
-    setBehaviorPanelCollapsed(false);
     setBehaviorFoldOpen((current) => ({ ...current, runtime: true, debug: true }));
     setBehaviorLoading(true);
     setBehaviorStatus(pendingMessage);
@@ -1166,7 +1202,6 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       return;
     }
     const pendingMessage = '正在生成行为枝丫池...基础枝丫和互动开场会一起生成，可能需要 1-2 分钟。';
-    setBehaviorPanelCollapsed(false);
     setBehaviorLoading(true);
     setBehaviorStatus(pendingMessage);
     setNotice(pendingMessage);
@@ -1474,8 +1509,8 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
           onClick={() => setInteractionMenuOpen(true)}
           disabled={behaviorLoading || !activeBehaviorCharacterId}
         >
-          <strong>{behaviorLoading ? '生成中' : '互动'}</strong>
-          <span>{behaviorCharacter?.name || '角色'}</span>
+          <strong>{behaviorLoading ? tx('Generating', '生成中') : tx('Interact', '互动')}</strong>
+          <span>{behaviorCharacter?.name || tx('Character', '角色')}</span>
         </button>
       );
     }
@@ -1486,13 +1521,13 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
         onPointerDown={(event) => event.stopPropagation()}
       >
         <div className="pixel-world-interaction-menu-head">
-          <strong>{behaviorCharacter?.name || '角色'}</strong>
+          <strong>{behaviorCharacter?.name || tx('Character', '角色')}</strong>
           <button
             type="button"
             className="pixel-world-interaction-close"
             onClick={() => setInteractionMenuOpen(false)}
           >
-            收起
+            {tx('Collapse', '收起')}
           </button>
         </div>
         <div className="pixel-world-interaction-menu-primary">
@@ -1510,19 +1545,19 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
           ))}
         </div>
         <div className="pixel-world-interaction-menu-target">
-          <span>目的地</span>
+          <span>{tx('Destination', '目的地')}</span>
           <select
             value={behaviorPlaceId}
             onChange={(event) => setBehaviorPlaceId(event.target.value)}
             disabled={behaviorLoading || !behaviorPlaceOptions.length}
-            aria-label="互动目的地"
+            aria-label={tx('Interaction destination', '互动目的地')}
           >
             {behaviorPlaceOptions.length ? behaviorPlaceOptions.map((option) => (
               <option key={option.id} value={option.id}>
                 {option.order ? `${option.order}. ` : ''}{option.label}
               </option>
             )) : (
-              <option value="">暂无地点</option>
+              <option value="">{tx('No places', '暂无地点')}</option>
             )}
           </select>
         </div>
@@ -1552,9 +1587,9 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       <div className={`pixel-world-behavior-actor ${actorKind}`}>
         <img src={commercialV2PlayerFrame(actor, `${actor.direction || 'front'}_walk_idle.png`)} alt="" draggable={false} />
         <div>
-          <strong>{title}</strong>
-          <span>{character.label} · 平移街区</span>
-          <small>{note}</small>
+          <strong>{ptxt(title)}</strong>
+          <span>{ptxt(character.label)} · {tx('Street translation', '平移街区')}</span>
+          <small>{ptxt(note)}</small>
         </div>
       </div>
     );
@@ -1577,9 +1612,9 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
           onClick={() => toggleBehaviorFold(key)}
           aria-expanded={open}
         >
-          <span>{title}</span>
-          {summary && <small>{summary}</small>}
-          <strong>{open ? '收起' : '展开'}</strong>
+          <span>{ptxt(title)}</span>
+          {summary && <small>{ptxt(summary)}</small>}
+          <strong>{open ? tx('Collapse', '收起') : tx('Expand', '展开')}</strong>
         </button>
         {open && (
           <div className="pixel-world-behavior-fold-body">
@@ -1590,55 +1625,221 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     );
   }
 
+  function getSelectionFoldSummary() {
+    if (viewMode) return tx('View Mode', '观赏模式');
+    if (selectedItem && selectedAsset) return ptxt(selectedAsset.name);
+    return tx('No Selection', '未选中');
+  }
+
+  function renderSelectionInspectorContent() {
+    return (
+      <div className="pixel-world-inspector pixel-world-behavior-selection-inspector">
+        {viewMode ? (
+          <p>{tx('View mode is on. Assets cannot be selected or dragged. Switch to edit mode to move them.', '观赏模式已开启，素材不会被选中或拖动；切到编辑模式后可以移动素材。')}</p>
+        ) : selectedItem && selectedAsset ? (
+          <>
+            <div className="pixel-world-selected-name">{ptxt(selectedAsset.name)}</div>
+            <div className={`pixel-world-layer-mode-card ${selectedIsGroundLayer ? 'ground' : ''}`}>
+              <div className="pixel-world-layer-mode-head">
+                <strong>{tx('Layer Properties', '图层属性')}</strong>
+                <label className="pixel-world-collision-toggle">
+                  <input
+                    type="checkbox"
+                    checked={selectedIsGroundLayer}
+                    disabled={selectedIsBuiltInGroundLayer}
+                    onChange={(event) => updateSelectedGroundLayer(event.target.checked)}
+                  />
+                  <span>{tx('Backdrop Layer', '背景/地面下层')}</span>
+                </label>
+              </div>
+              <small>
+                {selectedIsBuiltInGroundLayer
+                  ? tx('Sky and road assets use fixed base layers and do not block characters.', '天空和道路使用固定基础层，碰撞箱不会阻挡人物。')
+                  : selectedIsGroundLayer
+                    ? tx('This instance stays above the sky and below the road ground. Its collision box is saved but does not block characters.', '当前实例会在天空上方、地面下方；碰撞箱保留但不会阻挡人物。')
+                    : tx('Normal assets render above the road ground by layer and occlusion order.', '普通素材会在地面上方，按图层和遮挡判断显示。')}
+              </small>
+            </div>
+            {selectedPlace && (
+              <div className="pixel-world-place-card">
+                <div className="pixel-world-place-card-head">
+                  <strong>{tx('Place Link', '地点联动')}</strong>
+                  {!showPlaceAnchors && (
+                    <button onClick={togglePlaceAnchors}>{tx('Show Endpoint', '查看终点')}</button>
+                  )}
+                </div>
+                <span>{ptxt(selectedPlace.name)}</span>
+                <small>ID: {selectedPlace.placeId}</small>
+                <small>{tx('Backend places:', '后端地点:')} {selectedPlace.locationIds.join(' / ')}</small>
+                <small>{tx('Actions:', '动作:')} {selectedPlace.actions.join(' / ')}</small>
+                {selectedPlaceAnchorLocalPoint && (
+                  <>
+                    <div className="pixel-world-place-fields">
+                      {['x', 'y'].map((key) => (
+                        <label key={`place-anchor-${key}`}>
+                          <span>{key.toUpperCase()}</span>
+                          <input
+                            type="number"
+                            value={selectedPlaceAnchorLocalPoint[key]}
+                            onChange={(event) => updateSelectedPlaceAnchorLocalPoint(key, event.target.value)}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                    <div className="pixel-world-collision-actions">
+                      <button onClick={resetSelectedPlaceAnchor}>{tx('Default Endpoint', '默认终点')}</button>
+                    </div>
+                    <div className="pixel-world-inspector-hint">
+                      {tx('After showing endpoints, drag the pink point to edit the auto-travel landing point. Saving the layout saves it too.', '显示终点后，拖粉色点就能改自动循迹落点；保存布局会一起保存。')}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            {['x', 'y', 'w', 'h'].map((key) => (
+              <label key={key}>
+                <span>{key.toUpperCase()}</span>
+                <input
+                  type="number"
+                  value={Math.round(selectedItem[key])}
+                  onChange={(event) => updateItem(selectedItem.id, { [key]: Number(event.target.value) })}
+                />
+              </label>
+            ))}
+            <div className="pixel-world-nudge-pad" aria-label={tx('Nudge position', '微调位置')}>
+              <button onClick={() => nudgeSelected(0, -4)}>↑</button>
+              <button onClick={() => nudgeSelected(-4, 0)}>←</button>
+              <button onClick={() => nudgeSelected(4, 0)}>→</button>
+              <button onClick={() => nudgeSelected(0, 4)}>↓</button>
+            </div>
+            <div className="pixel-world-scale-row">
+              <button onClick={() => scaleSelected(0.96)}>{groupEditMode ? tx('Smaller All', '整体小一点') : tx('Smaller', '小一点')}</button>
+              <button onClick={() => scaleSelected(1.04)}>{groupEditMode ? tx('Larger All', '整体大一点') : tx('Larger', '大一点')}</button>
+            </div>
+            <div className={`pixel-world-collision-editor ${showCollisionLines ? 'active' : ''}`}>
+              <div className="pixel-world-collision-editor-head">
+                <strong>{tx('Collision Volume', '碰撞体积')}</strong>
+                {!showCollisionLines && (
+                  <button onClick={toggleCollisionLines}>{tx('Show Collision', '查看碰撞箱线')}</button>
+                )}
+                <label className="pixel-world-collision-toggle">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(selectedCollision?.enabled)}
+                    disabled={!isCommercialV2CollisionAsset(selectedAsset) || !selectedCollisionCanTakeEffect}
+                    onChange={(event) => updateSelectedCollisionEnabled(event.target.checked)}
+                  />
+                  <span>{tx('Enabled', '启用')}</span>
+                </label>
+              </div>
+              {selectedCollisionCanTakeEffect && selectedCollisionLocalBox ? (
+                <>
+                  <div className="pixel-world-collision-fields">
+                    {['x', 'y', 'w', 'h'].map((key) => (
+                      <label key={`collision-${key}`}>
+                        <span>{key.toUpperCase()}</span>
+                        <input
+                          type="number"
+                          value={selectedCollisionLocalBox[key]}
+                          onChange={(event) => updateSelectedCollisionLocalBox(key, event.target.value)}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                  <div className="pixel-world-collision-actions">
+                    <button onClick={resetSelectedCollision}>{tx('Default', '默认')}</button>
+                    <button onClick={fitSelectedCollisionToSprite}>{tx('Fit Sprite', '贴合整图')}</button>
+                  </div>
+                  <div className="pixel-world-inspector-hint">
+                    {tx('Collision is active by default. Show lines, then drag the green box to move it and blue handles to resize.', '碰撞默认生效；显示线条后，拖绿色框移动碰撞箱，拖蓝色点调整大小。')}
+                  </div>
+                </>
+              ) : (
+                <div className="pixel-world-inspector-hint">
+                  {selectedIsGroundLayer
+                    ? tx('Ground-layer rule: this collision box will not block characters or auto-travel paths.', '地面层规则：这个实例的碰撞箱不会参与人物阻挡或自动循迹绕路。')
+                    : tx('This asset has no editable collision box yet.', '这个素材还没有可编辑的碰撞箱。')}
+                </div>
+              )}
+            </div>
+            <div className="pixel-world-inspector-hint">
+              {groupEditMode ? tx('Group editing is on: dragging any asset moves all current buildings and props together.', '整体编辑已开启：拖动任意素材会带动当前全部建筑和道具。') : tx('Drag assets to move them. Use W/H to resize while preserving the source aspect ratio.', '拖动素材移动；用 W/H 调整大小，显示会保持原图比例。')}
+            </div>
+          </>
+        ) : (
+          <p>{tx('Click an asset on the canvas to start editing.', '点击画布上的素材开始编辑。')}</p>
+        )}
+        {showLayerPanel && (
+          <section className="pixel-world-layer-panel">
+            <div className="pixel-world-layer-panel-head">
+              <strong>{tx('Layers', '图层')}</strong>
+              <small>{tx('Upper rows render later. Backgrounds stay below characters and do not participate in collision.', '上方后绘制；背景板恒在人物下方且不参与碰撞。')}</small>
+            </div>
+            {selectedLayerRow && (
+              <div className="pixel-world-layer-current">
+                {tx('Current:', '当前：')}{ptxt(selectedLayerRow.asset?.name || selectedLayerRow.item.assetId)}
+                <span>#{selectedLayerRow.layerIndex + 1}</span>
+              </div>
+            )}
+            <div className="pixel-world-layer-list">
+              {layerRows.slice().reverse().map((row) => (
+                <button
+                  key={`layer-row-${row.item.id}`}
+                  type="button"
+                  className={`pixel-world-layer-row ${row.item.id === selectedId ? 'active' : ''} ${row.isGround ? 'ground' : 'asset'}`}
+                  onClick={() => setSelectedId(row.item.id)}
+                  title={`${row.asset?.name || row.item.assetId} / z-index ${row.zIndex}`}
+                >
+                  <span className="pixel-world-layer-index">#{row.layerIndex + 1}</span>
+                  <span className="pixel-world-layer-name">
+                    {row.asset?.name || row.item.assetId}
+                    <small>{ptxt(row.asset?.type || '未知')} · z {row.zIndex} · {ptxt(row.playerRule)}</small>
+                  </span>
+                  <span className="pixel-world-layer-kind">{row.isGround ? tx('Background', '背景板') : tx('Asset', '素材')}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+        <h3>{tx('Layout JSON', '布局 JSON')}</h3>
+        <textarea value={layoutJson} readOnly />
+      </div>
+    );
+  }
+
   function renderBehaviorTreePanel() {
     const behaviorPanelStateLabel = behaviorLoading
-      ? '生成中'
+      ? tx('Generating', '生成中')
       : behaviorOutput?.error
       ? 'Error'
       : (behaviorOutput?.fallback ? 'Fallback' : behaviorOutput ? 'AI' : 'Draft');
     const behaviorStatusTone = behaviorLoading
       ? 'busy'
       : (behaviorOutput?.error ? 'error' : (behaviorOutput ? 'ready' : 'idle'));
-    if (behaviorPanelCollapsed) {
-      return (
-        <aside className="pixel-world-behavior-panel collapsed">
-          <button
-            type="button"
-            className="pixel-world-behavior-panel-expand"
-            onClick={() => setBehaviorPanelCollapsed(false)}
-            title="展开行为树面板"
-            aria-label="展开行为树面板"
-          >
-            <span>行为树</span>
-            <strong>{behaviorPanelStateLabel}</strong>
-            <small>展开</small>
-          </button>
-        </aside>
-      );
-    }
+    if (behaviorPanelCollapsed) return null;
 
     return (
       <aside className="pixel-world-behavior-panel">
         <div className="pixel-world-behavior-head">
           <div>
-            <h3>行为树 V1</h3>
-            <span>单角色街区行为运行时</span>
+            <h3>{tx('Behavior Tree V1', '行为树 V1')}</h3>
+            <span>{tx('Single-character street behavior runtime', '单角色街区行为运行时')}</span>
           </div>
           <div className="pixel-world-behavior-head-actions">
             <strong>{behaviorPanelStateLabel}</strong>
             <button
               type="button"
               onClick={() => setBehaviorPanelCollapsed(true)}
-              title="收起整个行为树面板"
+              title={tx('Collapse the full behavior-tree panel', '收起整个行为树面板')}
             >
-              收起
+              {tx('Collapse', '收起')}
             </button>
           </div>
         </div>
 
         <div className={`pixel-world-behavior-live-status ${behaviorStatusTone}`} aria-live="polite">
-          <strong>{behaviorLoading ? '请求进行中' : (behaviorOutput?.error ? '请求失败' : '状态')}</strong>
-          <span>{behaviorLoading ? '模型正在生成行为树，请保持此页打开。' : behaviorStatus}</span>
+          <strong>{behaviorLoading ? tx('Request Running', '请求进行中') : (behaviorOutput?.error ? tx('Request Failed', '请求失败') : tx('Status', '状态'))}</strong>
+          <span>{behaviorLoading ? tx('The model is generating a behavior tree. Keep this page open.', '模型正在生成行为树，请保持此页打开。') : ptxt(behaviorStatus)}</span>
         </div>
 
         <div className="pixel-world-behavior-actors">
@@ -1648,18 +1849,18 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
 
         <div className="pixel-world-behavior-binding-grid">
           <label className="pixel-world-behavior-field">
-            <span>行为皮套</span>
+            <span>{tx('Behavior Skin', '行为皮套')}</span>
             <select
               value={behaviorTargetActorId}
               onChange={(event) => setBehaviorActorId(event.target.value)}
             >
               {commercialV2PlayerCharacters.map((character) => (
-                <option key={character.id} value={character.id}>{character.label}</option>
+                <option key={character.id} value={character.id}>{ptxt(character.label)}</option>
               ))}
             </select>
           </label>
           <label className="pixel-world-behavior-field">
-            <span>实际角色</span>
+            <span>{tx('Actual Character', '实际角色')}</span>
             <select
               value={behaviorCharacterId}
               onChange={(event) => setBehaviorCharacterId(event.target.value)}
@@ -1668,7 +1869,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
               {behaviorCharacters.length ? behaviorCharacters.map((item) => (
                 <option key={item.id} value={item.id}>{item.name || item.id}</option>
               )) : (
-                <option value="">暂无角色</option>
+                <option value="">{tx('No characters', '暂无角色')}</option>
               )}
             </select>
           </label>
@@ -1676,17 +1877,25 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
             type="button"
             onClick={() => bindBehaviorActorToCharacter(behaviorTargetActorId, behaviorCharacterId)}
             disabled={!behaviorCharacters.length || !behaviorCharacterId}
-            title="把选中的实际角色绑定到当前行为皮套；行为树生成会读取该角色的上下文。"
+            title={tx('Bind the selected actual character to this behavior skin. Behavior-tree generation will read that character context.', '把选中的实际角色绑定到当前行为皮套；行为树生成会读取该角色的上下文。')}
           >
-            绑定到此皮套
+            {tx('Bind to Skin', '绑定到此皮套')}
           </button>
           <button
             type="button"
             onClick={bindControlledSkinToBehaviorCharacter}
             disabled={!behaviorCharacters.length || !behaviorCharacterId}
-            title="把上方“控制角色”当前选中的皮套绑定到这个实际角色。"
+            title={tx('Bind the skin currently selected in Control Character to this actual character.', '把上方“控制角色”当前选中的皮套绑定到这个实际角色。')}
           >
-            绑定当前选中皮套
+            {tx('Bind Selected Skin', '绑定当前选中皮套')}
+          </button>
+          <button
+            type="button"
+            className="pixel-world-behavior-legacy-action"
+            onClick={addRoleCharacter}
+            title={tx('Legacy shortcut: bind the character sprite to the male character and spawn it beside the player.', '旧功能入口：把角色小人绑定到男孩，并生成在玩家旁边。')}
+          >
+            {tx('Spawn Character Sprite', '生成角色小人')}
           </button>
           <div className={`pixel-world-behavior-binding-status ${behaviorBoundCharacter ? 'bound' : ''}`}>
             {behaviorBindingSummary}
@@ -1694,9 +1903,16 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
         </div>
 
         {renderBehaviorFold(
+          'selection',
+          tx('Selection', '选中'),
+          getSelectionFoldSummary(),
+          renderSelectionInspectorContent()
+        )}
+
+        {renderBehaviorFold(
           'model',
-          '模型配置',
-          behaviorConfig.model_name || behaviorCharacter?.model_name || '使用绑定角色',
+          tx('Model Config', '模型配置'),
+          behaviorConfig.model_name || behaviorCharacter?.model_name || tx('Use Bound Character', '使用绑定角色'),
           (
             <div className="pixel-world-behavior-model-grid">
               <label className="pixel-world-behavior-field">
@@ -1704,25 +1920,25 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
                 <input
                   value={behaviorConfig.api_endpoint}
                   onChange={(event) => updateBehaviorConfig({ api_endpoint: event.target.value })}
-                  placeholder={behaviorCharacter?.api_endpoint ? '留空使用绑定角色 URL' : 'https://api.example.com/v1'}
+                  placeholder={behaviorCharacter?.api_endpoint ? tx('Leave empty to use bound character URL', '留空使用绑定角色 URL') : 'https://api.example.com/v1'}
                 />
               </label>
               <label className="pixel-world-behavior-field">
-                <span>Key</span>
+                <span>{tx('Key', '密钥')}</span>
                 <input
                   type={behaviorShowKey ? 'text' : 'password'}
                   value={behaviorConfig.api_key}
                   onChange={(event) => updateBehaviorConfig({ api_key: event.target.value })}
-                  placeholder="留空使用绑定角色 Key"
+                  placeholder={tx('Leave empty to use bound character Key', '留空使用绑定角色 Key')}
                 />
               </label>
               <label className="pixel-world-behavior-field">
-                <span>模型</span>
+                <span>{tx('Model', '模型')}</span>
                 <input
                   list="pixel-world-behavior-models"
                   value={behaviorConfig.model_name}
                   onChange={(event) => updateBehaviorConfig({ model_name: event.target.value })}
-                  placeholder={behaviorCharacter?.model_name || '模型名'}
+                  placeholder={behaviorCharacter?.model_name || tx('Model Name', '模型名')}
                 />
                 <datalist id="pixel-world-behavior-models">
                   {behaviorModelOptions.map((model) => <option key={model} value={model} />)}
@@ -1730,20 +1946,20 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
               </label>
               <div className="pixel-world-behavior-model-actions">
                 <button type="button" onClick={pullBehaviorModels} disabled={behaviorModelsLoading}>
-                  {behaviorModelsLoading ? '拉取中' : '拉取模型'}
+                  {behaviorModelsLoading ? tx('Loading', '拉取中') : tx('Fetch Models', '拉取模型')}
                 </button>
                 <button type="button" onClick={() => setBehaviorShowKey((value) => !value)}>
-                  {behaviorShowKey ? '隐藏 Key' : '显示 Key'}
+                  {behaviorShowKey ? tx('Hide Key', '隐藏 Key') : tx('Show Key', '显示 Key')}
                 </button>
               </div>
               <div className={`pixel-world-behavior-model-status ${behaviorModelStatus.includes('失败') ? 'error' : ''}`}>
-                {behaviorModelStatus}
+                {ptxt(behaviorModelStatus)}
               </div>
               {behaviorModelOptions.length > 0 && (
                 <div className="pixel-world-behavior-model-list">
                   <div className="pixel-world-behavior-model-list-head">
-                    <strong>模型列表</strong>
-                    <span>{behaviorModelOptions.length} 个</span>
+                    <strong>{tx('Model List', '模型列表')}</strong>
+                    <span>{tx(`${behaviorModelOptions.length} models`, `${behaviorModelOptions.length} 个`)}</span>
                   </div>
                   <div className="pixel-world-behavior-model-options">
                     {behaviorModelOptions.map((model) => (
@@ -1766,12 +1982,12 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
 
         {renderBehaviorFold(
           'context',
-          '枝丫上下文',
+          tx('Branch Context', '枝丫上下文'),
           `q ${behaviorConfig.context_q_limit} / p ${behaviorConfig.context_summary_threshold}`,
           (
             <div className="pixel-world-behavior-context-grid">
               <label className="pixel-world-behavior-field">
-                <span>q 原文窗口</span>
+                <span>q {tx('Raw Window', '原文窗口')}</span>
                 <div className="pixel-world-behavior-slider-row">
                   <input
                     type="range"
@@ -1783,10 +1999,10 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
                   />
                   <strong>{behaviorConfig.context_q_limit}</strong>
                 </div>
-                <small>实时输入最多读取 q 条枝丫原文。</small>
+                <small>{tx('Live input reads at most q raw branches.', '实时输入最多读取 q 条枝丫原文。')}</small>
               </label>
               <label className="pixel-world-behavior-field">
-                <span>p 摘要阈值</span>
+                <span>p {tx('Summary Threshold', '摘要阈值')}</span>
                 <div className="pixel-world-behavior-slider-row">
                   <input
                     type="range"
@@ -1798,13 +2014,13 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
                   />
                   <strong>{behaviorConfig.context_summary_threshold}</strong>
                 </div>
-                <small>q 窗口外未摘要枝丫积攒到 p 条时，生成前先用小模型总结；失败会中止本轮。</small>
+                <small>{tx('When unsummarized branches outside the q window reach p, a small model summarizes them before generation; failure stops this round.', 'q 窗口外未摘要枝丫积攒到 p 条时，生成前先用小模型总结；失败会中止本轮。')}</small>
               </label>
               <div className="pixel-world-behavior-context-stats">
-                摘要积攒：
+                {tx('Summary backlog:', '摘要积攒：')}
                 <strong>{behaviorContextStats.pending_summary_count} / {behaviorContextStats.p_summary_threshold}</strong>
-                条待总结，当前读取 {behaviorContextStats.active_summary_count} 轮摘要。
-                <span>原文 {behaviorContextStats.raw_readable_count} / {behaviorContextStats.q_raw_limit} 条</span>
+                {tx(' items pending summary, currently reading ', '条待总结，当前读取 ')}{behaviorContextStats.active_summary_count}{tx(' summary rounds.', ' 轮摘要。')}
+                <span>{tx('Raw', '原文')} {behaviorContextStats.raw_readable_count} / {behaviorContextStats.q_raw_limit}</span>
               </div>
             </div>
           )
@@ -1812,23 +2028,23 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
 
         {renderBehaviorFold(
           'constraints',
-          'AI 可选白名单',
-          `${behaviorOrderedPlaces.length} 地点 / ${commercialV2BehaviorMovementActions.length} 移动动作`,
+          tx('AI Allowlist', 'AI 可选白名单'),
+          tx(`${behaviorOrderedPlaces.length} places / ${commercialV2BehaviorMovementActions.length} movement actions`, `${behaviorOrderedPlaces.length} 地点 / ${commercialV2BehaviorMovementActions.length} 移动动作`),
           (
             <div className="pixel-world-behavior-constraints">
               <div>
-                <strong>地点</strong>
+                <strong>{tx('Places', '地点')}</strong>
                 <div className="pixel-world-behavior-chip-list">
                   {behaviorOrderedPlaces.map((place) => (
-                    <span key={place.placeId}>{place.order}. {place.name}</span>
+                    <span key={place.placeId}>{place.order}. {ptxt(place.name)}</span>
                   ))}
                 </div>
               </div>
               <div>
-                <strong>移动动作</strong>
+                <strong>{tx('Movement Actions', '移动动作')}</strong>
                 <div className="pixel-world-behavior-chip-list">
                   {commercialV2BehaviorMovementActions.map((action) => (
-                    <span key={action.id}>{action.label}</span>
+                    <span key={action.id}>{translatePixelAction(action, lang).label}</span>
                   ))}
                 </div>
               </div>
@@ -1838,17 +2054,17 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
 
         {renderBehaviorFold(
           'branchMap',
-          '行为分层',
-          '日常行为 / 互动回应',
+          tx('Behavior Layers', '行为分层'),
+          tx('Daily behavior / Interaction response', '日常行为 / 互动回应'),
           (
             <div className="pixel-world-behavior-branch-map">
               <div>
-                <strong>互动回应</strong>
-                <span>player_interaction · 玩家点击互动或选择回应后，AI 会把新的互动行为写到这里。</span>
+                <strong>{tx('Interaction Response', '互动回应')}</strong>
+                <span>{tx('player_interaction: after the player clicks interact or chooses a reply, AI writes the new interaction behavior here.', 'player_interaction · 玩家点击互动或选择回应后，AI 会把新的互动行为写到这里。')}</span>
               </div>
               <div>
-                <strong>日常行为</strong>
-                <span>无互动时自动轮询：硬需求、本地例行、地点能力、背景情绪、好奇、自由活动、微动作。</span>
+                <strong>{tx('Daily Behavior', '日常行为')}</strong>
+                <span>{tx('Auto-polled without interaction: hard needs, local routine, place capability, background mood, curiosity, free movement, and micro-actions.', '无互动时自动轮询：硬需求、本地例行、地点能力、背景情绪、好奇、自由活动、微动作。')}</span>
               </div>
             </div>
           )
@@ -1856,17 +2072,17 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
 
         {renderBehaviorFold(
           'interaction',
-          '互动设置',
-          behaviorInteractionState.nearby ? `距离 ${Math.round(behaviorInteractionState.distance)} / ${commercialV2BehaviorInteractionDistance}` : '靠近后弹出菜单',
+          tx('Interaction Settings', '互动设置'),
+          behaviorInteractionState.nearby ? tx(`Distance ${Math.round(behaviorInteractionState.distance)} / ${commercialV2BehaviorInteractionDistance}`, `距离 ${Math.round(behaviorInteractionState.distance)} / ${commercialV2BehaviorInteractionDistance}`) : tx('Menu appears when nearby', '靠近后弹出菜单'),
           (
             <>
               <div className={`pixel-world-behavior-proximity ${behaviorInteractionState.nearby ? 'nearby' : ''}`}>
-                <strong>{behaviorInteractionState.nearby ? '角色已在互动范围' : '玩家靠近角色后弹出菜单'}</strong>
-                <span>距离 {Math.round(behaviorInteractionState.distance)} / {commercialV2BehaviorInteractionDistance}</span>
+                <strong>{behaviorInteractionState.nearby ? tx('Character is in interaction range', '角色已在互动范围') : tx('Menu appears when the player approaches', '玩家靠近角色后弹出菜单')}</strong>
+                <span>{tx('Distance', '距离')} {Math.round(behaviorInteractionState.distance)} / {commercialV2BehaviorInteractionDistance}</span>
               </div>
 
         <label className="pixel-world-behavior-field">
-          <span>目标地点</span>
+          <span>{tx('Target Place', '目标地点')}</span>
           <select
             value={behaviorPlaceId}
             onChange={(event) => setBehaviorPlaceId(event.target.value)}
@@ -1877,16 +2093,16 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
                 {option.order ? `${option.order}. ` : ''}{option.label}
               </option>
             )) : (
-              <option value="">暂无地点</option>
+              <option value="">{tx('No places', '暂无地点')}</option>
             )}
           </select>
         </label>
         <label className="pixel-world-behavior-field">
-          <span>补充输入</span>
+          <span>{tx('Extra Input', '补充输入')}</span>
           <textarea
             value={behaviorPromptText}
             onChange={(event) => setBehaviorPromptText(event.target.value)}
-            placeholder="例如：玩家想让角色陪自己去便利店，但别太听话，要有一点临场反应。"
+            placeholder={tx('Example: the player wants the character to go to the convenience store with them, but not be too obedient; keep some spontaneous reaction.', '例如：玩家想让角色陪自己去便利店，但别太听话，要有一点临场反应。')}
           />
         </label>
 
@@ -1895,26 +2111,26 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
             type="button"
             onClick={requestBehaviorInput}
             disabled={behaviorLoading || !activeBehaviorCharacterId}
-            title="整理角色记忆、当前场景和地点白名单，查看 AI 实际会收到的上文。"
+            title={tx('Assemble character memory, current scene, and place allowlist to inspect the AI context.', '整理角色记忆、当前场景和地点白名单，查看 AI 实际会收到的上文。')}
           >
-            读取 AI 上文
+            {tx('Read AI Context', '读取 AI 上文')}
           </button>
           <button
             type="button"
             onClick={generateBaseBehaviorBranches}
             disabled={behaviorLoading || !activeBehaviorCharacterId}
-            title="让 AI 生成无人互动时会自动轮询的日常行动池。"
+            title={tx('Let AI generate a daily-action pool for automatic polling when nobody interacts.', '让 AI 生成无人互动时会自动轮询的日常行动池。')}
           >
-            {behaviorLoading ? '生成中...' : '生成行为枝丫'}
+            {behaviorLoading ? tx('Generating...', '生成中...') : tx('Generate Branches', '生成行为枝丫')}
           </button>
           <button
             type="button"
             className="primary"
             onClick={generateBehaviorBranch}
             disabled={behaviorLoading || !activeBehaviorCharacterId}
-            title="根据当前玩家动作、目标地点和补充输入，生成下一段互动回应。"
+            title={tx('Generate the next interaction response from the current player action, target place, and extra input.', '根据当前玩家动作、目标地点和补充输入，生成下一段互动回应。')}
           >
-            生成互动回应
+            {tx('Generate Response', '生成互动回应')}
           </button>
           <button
             type="button"
@@ -1929,25 +2145,25 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
               setBehaviorStatus(`已试跑日常行为：${branch.title}`);
             }}
             disabled={behaviorLoading || !activeBehaviorCharacterId}
-            title="从已生成的日常行动池中挑一条立刻执行。"
+            title={tx('Pick one generated daily action and run it immediately.', '从已生成的日常行动池中挑一条立刻执行。')}
           >
-            试跑日常行为
+            {tx('Run Daily Behavior', '试跑日常行为')}
           </button>
           <button
             type="button"
             onClick={() => executeBehaviorBranch(behaviorOutput?.branch, 'replay')}
             disabled={behaviorLoading || !behaviorOutput?.branch}
-            title="重新执行上一次 AI 生成的互动行为。"
+            title={tx('Replay the last AI-generated interaction behavior.', '重新执行上一次 AI 生成的互动行为。')}
           >
-            重跑当前行为
+            {tx('Replay Current Behavior', '重跑当前行为')}
           </button>
           <button
             type="button"
             onClick={() => executeBehaviorBranch(commercialV2BehaviorLastDemoBranch, 'demo')}
             disabled={behaviorLoading}
-            title="载入内置示例，用来快速测试行为树对话流程。"
+            title={tx('Load the built-in example to quickly test the behavior-tree dialogue flow.', '载入内置示例，用来快速测试行为树对话流程。')}
           >
-            运行示例互动
+            {tx('Run Example', '运行示例互动')}
           </button>
           <button
             type="button"
@@ -1958,9 +2174,9 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
               setBehaviorStatus('完整行为树已重置。');
             }}
             disabled={behaviorLoading}
-            title="清空已生成的行为节点，恢复默认行为树。"
+            title={tx('Clear generated behavior nodes and restore the default behavior tree.', '清空已生成的行为节点，恢复默认行为树。')}
           >
-            清空行为树
+            {tx('Clear Behavior Tree', '清空行为树')}
           </button>
         </div>
             </>
@@ -1969,16 +2185,16 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
 
         {renderBehaviorFold(
           'runtime',
-          '运行状态',
-          activeBehaviorBranch ? activeBehaviorBranch.title : `版本 ${behaviorTreeState.version} · patch ${behaviorTreeState.patch_history?.length || 0}`,
+          tx('Runtime', '运行状态'),
+          activeBehaviorBranch ? ptxt(activeBehaviorBranch.title) : tx(`Version ${behaviorTreeState.version} · patch ${behaviorTreeState.patch_history?.length || 0}`, `版本 ${behaviorTreeState.version} · patch ${behaviorTreeState.patch_history?.length || 0}`),
           (
             <>
-              <div className="pixel-world-behavior-status">{behaviorLoading ? '处理中...' : behaviorStatus}</div>
+              <div className="pixel-world-behavior-status">{behaviorLoading ? tx('Processing...', '处理中...') : ptxt(behaviorStatus)}</div>
               <div className={`pixel-world-behavior-runtime ${activeBehaviorBranch ? 'active' : ''}`}>
           {activeBehaviorBranch ? (
             <>
-              <strong>{activeBehaviorBranch.branchKindLabel || '完整树运行节点'}</strong>
-              <span>{activeBehaviorBranch.title}</span>
+              <strong>{ptxt(activeBehaviorBranch.branchKindLabel || '完整树运行节点')}</strong>
+              <span>{ptxt(activeBehaviorBranch.title)}</span>
               <small>
                 {Math.min((activeBehaviorBranch.stepIndex || 0) + 1, activeBehaviorBranch.totalSteps || 1)}
                 /{activeBehaviorBranch.totalSteps || 1}
@@ -1987,10 +2203,10 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
               </small>
               {activeBehaviorDialog && (
                 <div className="pixel-world-behavior-runtime-control">
-                  <strong>{activeBehaviorDialog.type === 'choice' ? '等待玩家选择' : '等待点击下一句'}</strong>
+                  <strong>{activeBehaviorDialog.type === 'choice' ? tx('Waiting for player choice', '等待玩家选择') : tx('Waiting for next line', '等待点击下一句')}</strong>
                   <p>{activeBehaviorDialog.text}</p>
                   {activeBehaviorDialog.type === 'pending' ? (
-                    <button type="button" disabled>生成中...</button>
+                    <button type="button" disabled>{tx('Generating...', '生成中...')}</button>
                   ) : activeBehaviorDialog.type === 'choice' && activeBehaviorDialog.choices?.length ? (
                     <div className="pixel-world-behavior-runtime-choice-grid">
                         {activeBehaviorDialog.choices.map((choice) => (
@@ -2000,7 +2216,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
                             onClick={() => chooseBehaviorDialogChoice(choice)}
                             disabled={behaviorLoading}
                         >
-                            {choice.label}
+                            {ptxt(choice.label)}
                           </button>
                         ))}
                         <button
@@ -2009,20 +2225,20 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
                           onClick={exitBehaviorDialog}
                           disabled={behaviorLoading}
                         >
-                          退出对话
+                          {tx('Exit Dialog', '退出对话')}
                         </button>
                       </div>
                   ) : (
-                    <button type="button" onClick={continueBehaviorDialog}>下一句</button>
+                    <button type="button" onClick={continueBehaviorDialog}>{tx('Next Line', '下一句')}</button>
                   )}
                 </div>
               )}
             </>
           ) : (
             <>
-              <strong>完整行为树</strong>
-              <span>版本 {behaviorTreeState.version} · patch {behaviorTreeState.patch_history?.length || 0}</span>
-              <small>日常行为会自动轮询；玩家互动会生成互动回应并立即执行。</small>
+              <strong>{tx('Full Behavior Tree', '完整行为树')}</strong>
+              <span>{tx('Version', '版本')} {behaviorTreeState.version} · patch {behaviorTreeState.patch_history?.length || 0}</span>
+              <small>{tx('Daily behavior is auto-polled; player interaction generates and immediately runs an interaction response.', '日常行为会自动轮询；玩家互动会生成互动回应并立即执行。')}</small>
             </>
           )}
               </div>
@@ -2032,25 +2248,25 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
 
         {renderBehaviorFold(
           'debug',
-          '调试 JSON',
-          '完整树 / 输入 / Patch / 输出',
+          tx('Debug JSON', '调试 JSON'),
+          tx('Full Tree / Input / Patch / Output', '完整树 / 输入 / Patch / 输出'),
           (
             <div className="pixel-world-behavior-json-grid">
               <section>
-                <h4>完整树</h4>
+                <h4>{tx('Full Tree', '完整树')}</h4>
                 <pre>{formatBehaviorJson(behaviorTreeState)}</pre>
               </section>
               <section>
-                <h4>输入</h4>
+                <h4>{tx('Input', '输入')}</h4>
                 <pre>{formatBehaviorJson(behaviorInput || buildBehaviorPayload())}</pre>
               </section>
               <section>
-                <h4>Patch</h4>
-                <pre>{formatBehaviorJson(behaviorPatchOutput || { patch: null, note: '生成后显示本次局部行为树 patch。' })}</pre>
+                <h4>{tx('Patch', '补丁')}</h4>
+                <pre>{formatBehaviorJson(behaviorPatchOutput || { patch: null, note: tx('The local behavior-tree patch for this generation appears here.', '生成后显示本次局部行为树 patch。') })}</pre>
               </section>
               <section>
-                <h4>输出</h4>
-                <pre>{formatBehaviorJson(behaviorOutput || { base_branches: null, interaction_branches: null, branch: null, tree_patch: null, note: '点击“生成行为枝丫”会显示自动行动池和互动开场池；互动按钮会先执行 player_interaction 里的开场枝丫，选项会继续生成互动回应。' })}</pre>
+                <h4>{tx('Output', '输出')}</h4>
+                <pre>{formatBehaviorJson(behaviorOutput || { base_branches: null, interaction_branches: null, branch: null, tree_patch: null, note: tx('Click Generate Branches to show the auto-action pool and interaction opener pool. The interact button first runs an opener in player_interaction, and choices continue generating responses.', '点击“生成行为枝丫”会显示自动行动池和互动开场池；互动按钮会先执行 player_interaction 里的开场枝丫，选项会继续生成互动回应。') })}</pre>
               </section>
             </div>
           )
@@ -2434,8 +2650,8 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     playerRef.current = nextRole;
     setPlayers(nextPlayers);
     setControlledPlayerId(commercialV2RoleActorId);
-    setWorldPlayerBubble(commercialV2RoleActorId, 'char 试用');
-    setNotice('已新增角色：角色小人现在绑定 char 试用版，并生成在玩家旁边。');
+    setWorldPlayerBubble(commercialV2RoleActorId, roleCharacter.label || '角色');
+    setNotice(`已新增角色：角色小人现在绑定 ${roleCharacter.label || '男孩'}，并生成在玩家旁边。`);
   }
 
   const getNearestMainRoadTravelPoint = useCallback((rawX, preferredY = null) => {
@@ -3909,6 +4125,39 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     return () => cancelAnimationFrame(frameId);
   }, [stageSize.width, zoom]);
 
+  useEffect(() => () => {
+    if (loopScrollSettleTimerRef.current) {
+      clearTimeout(loopScrollSettleTimerRef.current);
+      loopScrollSettleTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    function clearLoopScrollPointerState() {
+      loopScrollPointerActiveRef.current = false;
+      if (!loopScrollPendingNormalizeRef.current) return;
+      const wrap = canvasWrapRef.current;
+      loopScrollPendingNormalizeRef.current = false;
+      if (!wrap) return;
+      if (loopScrollSettleTimerRef.current) {
+        clearTimeout(loopScrollSettleTimerRef.current);
+      }
+      loopScrollSettleTimerRef.current = setTimeout(() => {
+        loopScrollSettleTimerRef.current = null;
+        normalizeLoopScrollAfterSettle(wrap);
+      }, 80);
+    }
+
+    window.addEventListener('pointerup', clearLoopScrollPointerState);
+    window.addEventListener('pointercancel', clearLoopScrollPointerState);
+    window.addEventListener('blur', clearLoopScrollPointerState);
+    return () => {
+      window.removeEventListener('pointerup', clearLoopScrollPointerState);
+      window.removeEventListener('pointercancel', clearLoopScrollPointerState);
+      window.removeEventListener('blur', clearLoopScrollPointerState);
+    };
+  }, [stageSize.width, zoom]);
+
   function updateItem(id, patch, options = {}) {
     if (!canEditLayout) return;
     commitItems((prev) => prev.map((item) => {
@@ -3920,10 +4169,16 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
 
   function updateSelectedGroundLayer(enabled) {
     if (!selectedItem || !selectedAsset || selectedIsBuiltInGroundLayer) return;
-    updateItem(selectedItem.id, { groundLayer: enabled ? true : undefined });
+    const patch = enabled
+      ? { groundLayer: true, foregroundLayer: undefined }
+      : {
+          groundLayer: undefined,
+          foregroundLayer: selectedIsBackgroundSceneryAsset ? true : undefined
+        };
+    updateItem(selectedItem.id, patch);
     setNotice(enabled
-      ? `${selectedAsset.name} 已切到地面层：会恒在人物下方，碰撞箱不再阻挡人物。`
-      : `${selectedAsset.name} 已切回普通素材：按图层和遮挡判断显示。`);
+      ? `${selectedAsset.name} 已切到背景层：会在天空上方、地面下方，碰撞箱不再阻挡人物。`
+      : `${selectedAsset.name} 已切回普通素材：会在地面上方，按图层和遮挡判断显示。`);
   }
 
   function addAsset(asset) {
@@ -4137,25 +4392,45 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     }, stageSize)));
   }
 
-  function bringSelectedToFront() {
-    if (!canEditLayout || !selectedId) return;
-    commitItems((prev) => {
-      const selected = prev.find((item) => item.id === selectedId);
-      if (!selected) return prev;
-      return [...prev.filter((item) => item.id !== selectedId), selected];
-    });
+  function getLayerRankForItem(item) {
+    return getCommercialV2ItemLayerRank(item, assetById.get(item.assetId));
   }
 
-  function sendSelectedToBack() {
+  function getLayerEdgeInsertIndex(items, rank, edge) {
+    if (edge === 'back') {
+      const sameIndex = items.findIndex((item) => getLayerRankForItem(item) === rank);
+      if (sameIndex >= 0) return sameIndex;
+      const greaterIndex = items.findIndex((item) => getLayerRankForItem(item) > rank);
+      return greaterIndex >= 0 ? greaterIndex : items.length;
+    }
+    let lastSameOrLowerIndex = -1;
+    items.forEach((item, index) => {
+      if (getLayerRankForItem(item) <= rank) lastSameOrLowerIndex = index;
+    });
+    return lastSameOrLowerIndex + 1;
+  }
+
+  function moveSelectedToLayerEdge(edge) {
     if (!canEditLayout || !selectedId) return;
     commitItems((prev) => {
       const index = prev.findIndex((item) => item.id === selectedId);
-      if (index <= 0) return prev;
+      if (index < 0) return prev;
+      const selected = prev[index];
+      const rank = getLayerRankForItem(selected);
       const next = prev.slice();
-      const [selected] = next.splice(index, 1);
-      next.unshift(selected);
+      next.splice(index, 1);
+      const insertIndex = getLayerEdgeInsertIndex(next, rank, edge);
+      next.splice(insertIndex, 0, selected);
       return next;
     });
+  }
+
+  function bringSelectedToFront() {
+    moveSelectedToLayerEdge('front');
+  }
+
+  function sendSelectedToBack() {
+    moveSelectedToLayerEdge('back');
   }
 
   function moveSelectedLayer(direction) {
@@ -4163,13 +4438,31 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     commitItems((prev) => {
       const index = prev.findIndex((item) => item.id === selectedId);
       if (index < 0) return prev;
-      const nextIndex = direction === 'up'
-        ? Math.min(prev.length - 1, index + 1)
-        : Math.max(0, index - 1);
-      if (nextIndex === index) return prev;
+      const selected = prev[index];
+      const rank = getLayerRankForItem(selected);
+      let targetIndex = -1;
+      if (direction === 'up') {
+        for (let i = index + 1; i < prev.length; i += 1) {
+          if (getLayerRankForItem(prev[i]) === rank) {
+            targetIndex = i;
+            break;
+          }
+        }
+      } else {
+        for (let i = index - 1; i >= 0; i -= 1) {
+          if (getLayerRankForItem(prev[i]) === rank) {
+            targetIndex = i;
+            break;
+          }
+        }
+      }
+      if (targetIndex < 0) return prev;
+      const targetId = prev[targetIndex].id;
       const next = prev.slice();
       const [item] = next.splice(index, 1);
-      next.splice(nextIndex, 0, item);
+      const targetNextIndex = next.findIndex((candidate) => candidate.id === targetId);
+      if (targetNextIndex < 0) return prev;
+      next.splice(direction === 'up' ? targetNextIndex + 1 : targetNextIndex, 0, item);
       return next;
     });
   }
@@ -4545,27 +4838,57 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     pendingLoopScrollRef.current = 'leftEdge';
   }
 
-  function onLoopScroll(event) {
-    if (loopScrollGuardRef.current) return;
-    const wrap = event.currentTarget;
+  function getLoopScrollWrapTarget(wrap) {
     const panelWidth = stageSize.width * zoom;
-    if (!panelWidth) return;
+    if (!wrap || !panelWidth) return null;
     const leftWrapPoint = Math.max(0, panelWidth - wrap.clientWidth);
     const rightWrapPoint = panelWidth * 2;
     if (wrap.scrollLeft <= leftWrapPoint) {
-      loopScrollGuardRef.current = true;
-      wrap.scrollLeft += panelWidth;
-      requestAnimationFrame(() => {
-        loopScrollGuardRef.current = false;
-      });
-      return;
+      return wrap.scrollLeft + panelWidth;
     }
     if (wrap.scrollLeft >= rightWrapPoint) {
-      loopScrollGuardRef.current = true;
-      wrap.scrollLeft -= panelWidth;
-      requestAnimationFrame(() => {
-        loopScrollGuardRef.current = false;
-      });
+      return wrap.scrollLeft - panelWidth;
+    }
+    return null;
+  }
+
+  function normalizeLoopScrollAfterSettle(wrap) {
+    const targetLeft = getLoopScrollWrapTarget(wrap);
+    if (!wrap || targetLeft === null) return;
+    const maxLeft = Math.max(0, wrap.scrollWidth - wrap.clientWidth);
+    const nextLeft = Math.max(0, Math.min(maxLeft, targetLeft));
+    if (Math.abs(nextLeft - wrap.scrollLeft) < 1) return;
+    loopScrollGuardRef.current = true;
+    wrap.scrollLeft = nextLeft;
+    requestAnimationFrame(() => {
+      loopScrollGuardRef.current = false;
+    });
+  }
+
+  function onLoopScroll(event) {
+    if (loopScrollGuardRef.current) return;
+    const wrap = event.currentTarget;
+    if (loopScrollSettleTimerRef.current) {
+      clearTimeout(loopScrollSettleTimerRef.current);
+      loopScrollSettleTimerRef.current = null;
+    }
+    if (getLoopScrollWrapTarget(wrap) === null) return;
+    if (loopScrollPointerActiveRef.current) {
+      loopScrollPendingNormalizeRef.current = true;
+      return;
+    }
+    loopScrollSettleTimerRef.current = setTimeout(() => {
+      loopScrollSettleTimerRef.current = null;
+      normalizeLoopScrollAfterSettle(wrap);
+    }, 240);
+  }
+
+  function onLoopScrollPointerDown() {
+    loopScrollPointerActiveRef.current = true;
+    loopScrollPendingNormalizeRef.current = false;
+    if (loopScrollSettleTimerRef.current) {
+      clearTimeout(loopScrollSettleTimerRef.current);
+      loopScrollSettleTimerRef.current = null;
     }
   }
 
@@ -4754,16 +5077,16 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
             top: `${(place.anchor.y / stageSize.height) * 100}%`,
             zIndex: playerZIndex + 80 + layerIndex
           }}
-          title={`${place.name} -> ${locationText}`}
+          title={`${ptxt(place.name)} -> ${locationText}`}
         >
-          <span>{place.name}</span>
+          <span>{ptxt(place.name)}</span>
         </span>
       );
     }
 
     function getPlayerLoopOffsets(targetPlayer) {
       const offsets = [0];
-      const halfWidth = playerDimensions.width / 2;
+      const halfWidth = getPlayerVisualDimensions(targetPlayer).width / 2;
       if (targetPlayer.x - halfWidth < 0) offsets.push(stageSize.width);
       if (targetPlayer.x + halfWidth > stageSize.width) offsets.push(-stageSize.width);
       return offsets;
@@ -4771,33 +5094,34 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
 
     function renderPlayer(targetPlayer, offset = 0, zIndex = getPlayerZIndex(targetPlayer)) {
       const isControlled = targetPlayer.id === controlledPlayerId;
+      const visualDimensions = getPlayerVisualDimensions(targetPlayer);
       const actorKind = targetPlayer.id === behaviorTargetActorId
         ? 'role-actor'
         : targetPlayer.id === behaviorUserActorId
           ? 'user-actor'
           : '';
       const actorLabel = actorKind === 'role-actor'
-        ? (behaviorCharacter?.name || '角色')
+        ? (behaviorCharacter?.name || tx('Character', '角色'))
         : actorKind === 'user-actor'
-          ? '玩家'
+          ? tx('Player', '玩家')
           : '';
       const frameName = targetPlayer.moving ? commercialV2PlayerFrameOrder[targetPlayer.frame] : 'idle';
       const src = commercialV2PlayerFrame(targetPlayer, `${targetPlayer.direction}_walk_${frameName}.png`);
       const visualX = targetPlayer.x + offset;
       const behaviorDialog = targetPlayer.id === behaviorTargetActorId ? activeBehaviorDialog : null;
       const actionBubble = behaviorDialog ? '' : (playerActionBubbles[targetPlayer.id] || (isControlled ? playerActionBubble : ''));
-      const playerLeftPx = (visualX - playerDimensions.width / 2) * zoom;
-      const playerTopPx = (targetPlayer.y - playerDimensions.height + playerDimensions.footOffset) * zoom;
-      const bubbleTop = ((targetPlayer.y - playerDimensions.height + playerDimensions.footOffset - 8) / stageSize.height) * 100;
-      const dialogTop = (Math.max(20, targetPlayer.y - playerDimensions.height + playerDimensions.footOffset - 34) / stageSize.height) * 100;
-      const nameplateTop = ((targetPlayer.y - playerDimensions.height + playerDimensions.footOffset - 22) / stageSize.height) * 100;
+      const playerLeftPx = (visualX - visualDimensions.width / 2) * zoom;
+      const playerTopPx = (targetPlayer.y - visualDimensions.height + visualDimensions.footOffset) * zoom;
+      const bubbleTop = ((targetPlayer.y - visualDimensions.height + visualDimensions.footOffset - 8) / stageSize.height) * 100;
+      const dialogTop = (Math.max(20, targetPlayer.y - visualDimensions.height + visualDimensions.footOffset - 34) / stageSize.height) * 100;
+      const nameplateTop = ((targetPlayer.y - visualDimensions.height + visualDimensions.footOffset - 22) / stageSize.height) * 100;
       const peerCollisionWidth = Math.max(
         commercialV2PlayerPeerCollision.minWidth,
-        playerDimensions.width * commercialV2PlayerPeerCollision.widthRatio
+        visualDimensions.width * commercialV2PlayerPeerCollision.widthRatio
       );
       const peerCollisionHeight = Math.max(
         commercialV2PlayerPeerCollision.minHeight,
-        playerDimensions.footOffset * commercialV2PlayerPeerCollision.heightRatio
+        visualDimensions.footOffset * commercialV2PlayerPeerCollision.heightRatio
       );
       const peerCollisionBox = {
         x: visualX - peerCollisionWidth / 2,
@@ -4815,8 +5139,8 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
             style={{
               left: 0,
               top: 0,
-              width: `${playerDimensions.width * zoom}px`,
-              height: `${playerDimensions.height * zoom}px`,
+              width: `${visualDimensions.width * zoom}px`,
+              height: `${visualDimensions.height * zoom}px`,
               transform: `translate3d(${playerLeftPx}px, ${playerTopPx}px, 0)`,
               zIndex
             }}
@@ -4842,7 +5166,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
                 zIndex: zIndex + 1000
               }}
             >
-              {actionBubble}
+              {ptxt(actionBubble)}
             </span>
           )}
           {behaviorDialog && (
@@ -4856,12 +5180,12 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
               onPointerDown={(event) => event.stopPropagation()}
             >
               <div className="pixel-world-behavior-dialog-head">
-                <strong>{behaviorDialog.title || '角色'}</strong>
+                <strong>{behaviorDialog.title || tx('Character', '角色')}</strong>
                 <span>{Math.min((behaviorDialog.stepIndex || 0) + 1, behaviorDialog.totalSteps || 1)}/{behaviorDialog.totalSteps || 1}</span>
               </div>
               <p>{behaviorDialog.text}</p>
               {behaviorDialog.type === 'pending' ? (
-                <button type="button" disabled>生成中...</button>
+                <button type="button" disabled>{tx('Generating...', '生成中...')}</button>
               ) : behaviorDialog.type === 'choice' && behaviorDialog.choices?.length ? (
                 <div className="pixel-world-behavior-dialog-choices">
                   {behaviorDialog.choices.map((choice) => (
@@ -4871,7 +5195,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
                       onClick={() => chooseBehaviorDialogChoice(choice)}
                       disabled={behaviorLoading}
                     >
-                            {choice.label}
+                            {ptxt(choice.label)}
                           </button>
                         ))}
                         <button
@@ -4880,12 +5204,12 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
                           onClick={exitBehaviorDialog}
                           disabled={behaviorLoading}
                         >
-                          退出对话
+                          {tx('Exit Dialog', '退出对话')}
                         </button>
                       </div>
               ) : (
                 <button type="button" onClick={continueBehaviorDialog}>
-                  下一句
+                  {tx('Next Line', '下一句')}
                 </button>
               )}
             </div>
@@ -4960,6 +5284,51 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     );
   }
 
+  function renderAssetPanel() {
+    if (!assetPanelOpen) return null;
+
+    return (
+      <aside className="pixel-world-asset-panel">
+        <div className="pixel-world-asset-panel-head">
+          <h3>{tx('Assets', '素材')}</h3>
+          <button
+            type="button"
+            onClick={() => setAssetPanelOpen(false)}
+            title={tx('Collapse asset editing panel', '收起素材编辑面板')}
+          >
+            {tx('Collapse', '收起')}
+          </button>
+        </div>
+        <div className="pixel-world-asset-type-tabs" role="tablist" aria-label={tx('Asset categories', '素材分类')}>
+          {groupedAssets.map(([type, assets]) => (
+            <button
+              key={type}
+              className={activeAssetGroup?.[0] === type ? 'active' : ''}
+              onClick={() => setActiveAssetType(type)}
+              title={`${ptxt(type)} (${assets.length})`}
+            >
+              {ptxt(type)}
+              <span>{assets.length}</span>
+            </button>
+          ))}
+        </div>
+        {activeAssetGroup && (
+          <div className="pixel-world-asset-group" key={activeAssetGroup[0]}>
+            <strong>{ptxt(activeAssetGroup[0])}</strong>
+            <div className="pixel-world-asset-grid">
+              {activeAssetGroup[1].map((asset) => (
+                <button key={asset.id} onClick={() => addAsset(asset)} title={ptxt(asset.name)} disabled={!canEditLayout}>
+                  <img src={commercialV2Asset(asset.path)} alt="" draggable={false} loading="lazy" />
+                  <span>{ptxt(asset.name)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </aside>
+    );
+  }
+
   const layoutJson = useMemo(() => JSON.stringify({
     segment: {
       width: commercialV2SegmentSize.width,
@@ -4986,200 +5355,254 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   return (
     <div className={`pixel-world-editor ${viewMode ? 'view-mode' : ''}`}>
       <div className="pixel-world-editor-toolbar">
-        <button onClick={saveLayout}>保存布局</button>
-        <button onClick={saveCurrentAsDefaultScene}>保存当前场景为默认场景</button>
-        <button onClick={copyLayout}>复制 JSON</button>
-        <button
-          className={viewMode ? 'active' : ''}
-          onClick={toggleViewMode}
-          title={viewMode ? '素材已锁定，关闭后才能移动和编辑' : '开启后锁定素材，避免误拖'}
-        >
-          {viewMode ? '观赏模式' : '编辑模式'}
-        </button>
-        <button onClick={() => setZoom((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))))}>画布缩小</button>
-        <button onClick={() => setZoom((value) => Math.min(1.4, Number((value + 0.1).toFixed(2))))}>画布放大</button>
-        <strong>{Math.round(zoom * 100)}%</strong>
-        <button onClick={prependCanvasSegment} disabled={!canEditLayout}>左边增加 {commercialV2SegmentSize.width}px</button>
-        <button onClick={appendCanvasSegment} disabled={!canEditLayout}>右边增加 {commercialV2SegmentSize.width}px</button>
-        <button onClick={removeCanvasSegment} disabled={!canEditLayout || segmentCount <= commercialV2MinSegmentCount}>收回一段</button>
-        <strong>{segmentCount} 段</strong>
-        <span>首尾相连</span>
-        <span className="pixel-world-player-help">WASD 控制当前人物</span>
-        <label className="pixel-world-player-switch-control">
-          <span>控制角色</span>
-          <select
-            value={controlledPlayerId}
-            onChange={(event) => {
-              switchControlledPlayer(event.target.value);
-              event.currentTarget.blur();
-            }}
-            aria-label="切换控制角色"
+        <div className="pixel-world-toolbar-section pixel-world-toolbar-section--primary">
+          <label className="pixel-world-player-switch-control">
+            <span>{tx('Control Character', '控制角色')}</span>
+            <select
+              value={controlledPlayerId}
+              onChange={(event) => {
+                switchControlledPlayer(event.target.value);
+                event.currentTarget.blur();
+              }}
+              aria-label={tx('Switch controlled character', '切换控制角色')}
+            >
+              {commercialV2PlayerCharacters.map((character) => (
+                <option key={character.id} value={character.id}>{ptxt(character.label)}</option>
+              ))}
+            </select>
+            <strong>{ptxt(controlledPlayerCharacter.label)}</strong>
+          </label>
+          <label className="pixel-world-player-bind-control">
+            <span>{tx('Bind Character', '绑定角色')}</span>
+            <select
+              value={behaviorCharacterId}
+              onChange={(event) => {
+                setBehaviorActorId(controlledPlayerId);
+                setBehaviorCharacterId(event.target.value);
+              }}
+              disabled={!behaviorCharacters.length}
+              aria-label={tx('Choose the actual character bound to the current skin', '选择当前皮套绑定的实际角色')}
+            >
+              {behaviorCharacters.length ? behaviorCharacters.map((item) => (
+                <option key={item.id} value={item.id}>{item.name || item.id}</option>
+              )) : (
+                <option value="">{tx('No characters', '暂无角色')}</option>
+              )}
+            </select>
+            <button
+              type="button"
+              onClick={bindControlledSkinToBehaviorCharacter}
+              disabled={!behaviorCharacters.length || !behaviorCharacterId}
+              title={tx('Bind the currently controlled skin to this actual character', '把当前控制的皮套绑定到这个实际角色')}
+            >
+              {tx('Bind', '绑定')}
+            </button>
+            <strong>{controlledBindingSummary}</strong>
+          </label>
+          <button
+            type="button"
+            className="pixel-world-behavior-generate-button"
+            onClick={generateBaseBehaviorBranches}
+            disabled={behaviorLoading || !activeBehaviorCharacterId}
+            title={tx('Generate the commercial-street behavior tree for the bound character.', '为绑定角色生成商业街行为树')}
           >
-            {commercialV2PlayerCharacters.map((character) => (
-              <option key={character.id} value={character.id}>{character.label}</option>
-            ))}
-          </select>
-          <strong>{controlledPlayerCharacter.label}</strong>
-        </label>
+            {behaviorLoading ? tx('Generating...', '生成中...') : tx('Generate Behavior Tree', '生成行为树')}
+          </button>
+        </div>
+
         <button
           type="button"
-          onClick={addRoleCharacter}
-          title="把角色小人绑定到 char 试用版，并生成在玩家旁边"
+          className={`pixel-world-toolbar-more ${showAdvancedToolbar ? 'active' : ''}`}
+          onClick={() => setShowAdvancedToolbar((value) => !value)}
         >
-          新增角色
+          {showAdvancedToolbar ? tx('Hide Advanced', '收起高级') : tx('Advanced Settings', '高级设置')}
         </button>
-        <label className="pixel-world-player-bind-control">
-          <span>实际角色</span>
-          <select
-            value={behaviorCharacterId}
-            onChange={(event) => {
-              setBehaviorActorId(controlledPlayerId);
-              setBehaviorCharacterId(event.target.value);
-            }}
-            disabled={!behaviorCharacters.length}
-            aria-label="选择当前皮套绑定的实际角色"
-          >
-            {behaviorCharacters.length ? behaviorCharacters.map((item) => (
-              <option key={item.id} value={item.id}>{item.name || item.id}</option>
-            )) : (
-              <option value="">暂无角色</option>
+
+        {showAdvancedToolbar && (
+          <div className="pixel-world-toolbar-advanced pixel-world-toolbar-advanced--commercial">
+            <div className="pixel-world-toolbar-section pixel-world-toolbar-section--maintenance">
+              <button onClick={saveLayout}>{tx('Save Layout', '保存布局')}</button>
+              <button
+                className={viewMode ? 'active' : ''}
+                onClick={toggleViewMode}
+                title={viewMode ? tx('Assets are locked. Turn this off to move and edit.', '素材已锁定，关闭后才能移动和编辑') : tx('Lock assets to avoid accidental dragging.', '开启后锁定素材，避免误拖')}
+              >
+                {viewMode ? tx('View Mode', '观赏模式') : tx('Edit Mode', '编辑模式')}
+              </button>
+              <button onClick={saveCurrentAsDefaultScene}>{tx('Save Current as Default', '保存当前场景为默认场景')}</button>
+              <button onClick={copyLayout}>{tx('Copy JSON', '复制 JSON')}</button>
+              <button
+                type="button"
+                className={assetPanelOpen ? 'active' : ''}
+                onClick={() => {
+                  if (assetPanelOpen) {
+                    setAssetPanelOpen(false);
+                    return;
+                  }
+                  setAssetPanelOpen(true);
+                  setBehaviorPanelCollapsed(true);
+                }}
+              >
+                {assetPanelOpen ? tx('Hide Asset Editor', '收起素材编辑') : tx('Asset Editor', '素材编辑')}
+              </button>
+              <button
+                type="button"
+                className={!behaviorPanelCollapsed ? 'active' : ''}
+                onClick={() => {
+                  if (!behaviorPanelCollapsed) {
+                    setBehaviorPanelCollapsed(true);
+                    return;
+                  }
+                  setBehaviorPanelCollapsed(false);
+                  setAssetPanelOpen(false);
+                }}
+              >
+                {behaviorPanelCollapsed ? tx('Behavior Details', '行为树详情') : tx('Hide Behavior Details', '收起行为树详情')}
+              </button>
+            </div>
+
+            <div className="pixel-world-toolbar-section pixel-world-toolbar-section--status pixel-world-toolbar-section--metrics">
+              <strong>{Math.round(zoom * 100)}%</strong>
+              <strong>{segmentCount} {tx('segments', '段')}</strong>
+              <span>{tx('Looped', '首尾相连')}</span>
+              <span className="pixel-world-player-help">{tx('WASD controls the current character', 'WASD 控制当前人物')}</span>
+            </div>
+
+            <div className="pixel-world-toolbar-section pixel-world-toolbar-section--canvas-tools">
+              <button onClick={() => setZoom((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))))}>{tx('Zoom Out', '画布缩小')}</button>
+              <button onClick={() => setZoom((value) => Math.min(1.4, Number((value + 0.1).toFixed(2))))}>{tx('Zoom In', '画布放大')}</button>
+              <button onClick={() => centerPlayerInView(true)}>{tx('Center Current Character', '居中当前人物')}</button>
+              <button
+                className={showCollisionLines ? 'active' : ''}
+                onClick={toggleCollisionLines}
+                title={tx('Only toggles collision-line visibility. Collision blocking stays active.', '只切换碰撞箱线条显示；碰撞阻挡默认一直生效')}
+              >
+                {showCollisionLines ? tx('Hide Collision', '隐藏碰撞箱线') : tx('Show Collision', '查看碰撞箱线')}
+              </button>
+              <button
+                className={showPlaceAnchors ? 'active' : ''}
+                onClick={togglePlaceAnchors}
+                title={tx('Show anchors used for future auto-travel and interaction.', '查看角色以后自动前往和交互的地点锚点')}
+              >
+                {showPlaceAnchors ? tx('Hide Anchors', '隐藏地点锚点') : tx('Show Anchors', '查看地点锚点')}
+              </button>
+              <button
+                className={showLayerPanel ? 'active' : ''}
+                onClick={() => setShowLayerPanel((value) => !value)}
+                title={tx('Show unified layer numbers and the right-side layer list.', '显示统一图层序号和右侧图层列表')}
+              >
+                {showLayerPanel ? tx('Hide Layers', '隐藏图层') : tx('Show Layers', '查看图层')}
+              </button>
+            </div>
+
+            <div className="pixel-world-toolbar-section pixel-world-toolbar-section--travel">
+              <label className="pixel-world-auto-walk-control">
+                <span>{tx('Auto Travel', '自动循迹')}</span>
+                <select
+                  value={autoTargetId}
+                  onChange={(event) => setAutoTargetId(event.target.value)}
+                  disabled={!travelTargetOptions.length}
+                  aria-label={tx('Auto-travel target', '自动循迹目标')}
+                >
+                  {travelTargetOptions.length ? travelTargetOptions.map((option) => (
+                    <option key={option.id} value={option.id}>{option.label}</option>
+                  )) : (
+                    <option value="">{tx('No places', '暂无地点')}</option>
+                  )}
+                </select>
+                <button type="button" onClick={() => startAutoTravel()} disabled={!travelTargetOptions.length}>{tx('Go', '前往')}</button>
+                <button
+                  type="button"
+                  onClick={() => cancelAutoTravel('自动循迹已停止。')}
+                  disabled={!autoTravelActive && !playerActionBubble}
+                >
+                  {tx('Stop', '停止')}
+                </button>
+              </label>
+            </div>
+
+            <div className="pixel-world-toolbar-section pixel-world-toolbar-section--scale">
+              <label className="pixel-world-player-scale-control">
+                <span>{tx('Character Size', '角色尺寸')}</span>
+                <input
+                  type="range"
+                  min="0.6"
+                  max="3"
+                  step="0.05"
+                  value={playerScale}
+                  onChange={(event) => updatePlayerScale(event.target.value)}
+                />
+                <input
+                  type="number"
+                  min="0.6"
+                  max="3"
+                  step="0.05"
+                  value={playerScale}
+                  onChange={(event) => updatePlayerScale(event.target.value)}
+                  aria-label={tx('Character scale', '角色尺寸倍率')}
+                />
+                <strong>{Math.round(playerScale * 100)}%</strong>
+              </label>
+              <button onClick={() => setPlayerScale(commercialV2DefaultPlayerScale)}>{tx('Default Size', '默认角色尺寸')}</button>
+            </div>
+
+            {canEditLayout ? (
+              <div className="pixel-world-toolbar-section pixel-world-toolbar-section--edit">
+                <button onClick={prependCanvasSegment}>{tx('Add Left', '左边增加')} {commercialV2SegmentSize.width}px</button>
+                <button onClick={appendCanvasSegment}>{tx('Add Right', '右边增加')} {commercialV2SegmentSize.width}px</button>
+                <button onClick={removeCanvasSegment} disabled={segmentCount <= commercialV2MinSegmentCount}>{tx('Remove Segment', '收回一段')}</button>
+                <button
+                  className={groupEditMode ? 'active' : ''}
+                  onClick={() => setGroupEditMode((value) => !value)}
+                  title={tx('Drag, scale, and nudge all assets together.', '开启后拖动、缩放和微调会作用于全部素材')}
+                >
+                  {groupEditMode ? tx('Group Editing', '整体编辑中') : tx('Group Edit', '整体编辑')}
+                </button>
+                <button onClick={restoreResetBackup}>{tx('Restore Previous', '恢复上次布局')}</button>
+                <button onClick={resetLayout}>{tx('Restore Default', '恢复默认')}</button>
+              </div>
+            ) : null}
+
+            {canEditLayout && (groupEditMode || selectedItem) && (
+              <div className="pixel-world-toolbar-section pixel-world-toolbar-section--selection">
+                <button onClick={() => scaleSelected(0.92)} disabled={groupEditMode ? items.length === 0 : !selectedItem}>{groupEditMode ? tx('Shrink All', '整体缩小') : tx('Shrink Asset', '素材缩小')}</button>
+                <button onClick={() => scaleSelected(1.08)} disabled={groupEditMode ? items.length === 0 : !selectedItem}>{groupEditMode ? tx('Grow All', '整体放大') : tx('Grow Asset', '素材放大')}</button>
+                {!groupEditMode && (
+                  <>
+                    <button onClick={() => moveSelectedLayer('up')} disabled={!selectedItem}>{tx('Layer Up', '上移图层')}</button>
+                    <button onClick={() => moveSelectedLayer('down')} disabled={!selectedItem}>{tx('Layer Down', '下移图层')}</button>
+                    <button onClick={bringSelectedToFront} disabled={!selectedItem}>{tx('Bring Front', '置顶')}</button>
+                    <button onClick={sendSelectedToBack} disabled={!selectedItem}>{tx('Send Back', '置底')}</button>
+                    <button onClick={deleteSelected} disabled={!selectedItem}>{tx('Delete', '删除')}</button>
+                  </>
+                )}
+              </div>
             )}
-          </select>
-          <button
-            type="button"
-            onClick={bindControlledSkinToBehaviorCharacter}
-            disabled={!behaviorCharacters.length || !behaviorCharacterId}
-            title="把当前控制的皮套绑定到这个实际角色"
-          >
-            绑定
-          </button>
-          <strong>{controlledBindingSummary}</strong>
-        </label>
-        <label className="pixel-world-auto-walk-control">
-          <span>自动循迹</span>
-          <select
-            value={autoTargetId}
-            onChange={(event) => setAutoTargetId(event.target.value)}
-            disabled={!travelTargetOptions.length}
-            aria-label="自动循迹目标"
-          >
-            {travelTargetOptions.length ? travelTargetOptions.map((option) => (
-              <option key={option.id} value={option.id}>{option.label}</option>
-            )) : (
-              <option value="">暂无地点</option>
-            )}
-          </select>
-          <button type="button" onClick={() => startAutoTravel()} disabled={!travelTargetOptions.length}>前往</button>
-          <button
-            type="button"
-            onClick={() => cancelAutoTravel('自动循迹已停止。')}
-            disabled={!autoTravelActive && !playerActionBubble}
-          >
-            停止
-          </button>
-        </label>
-        <label className="pixel-world-player-scale-control">
-          <span>角色尺寸</span>
-          <input
-            type="range"
-            min="0.6"
-            max="3"
-            step="0.05"
-            value={playerScale}
-            onChange={(event) => updatePlayerScale(event.target.value)}
-          />
-          <input
-            type="number"
-            min="0.6"
-            max="3"
-            step="0.05"
-            value={playerScale}
-            onChange={(event) => updatePlayerScale(event.target.value)}
-            aria-label="角色尺寸倍率"
-          />
-          <strong>{Math.round(playerScale * 100)}%</strong>
-        </label>
-        <button onClick={() => setPlayerScale(commercialV2DefaultPlayerScale)}>默认角色尺寸</button>
-        <button onClick={() => centerPlayerInView(true)}>居中当前人物</button>
-        <button
-          className={showCollisionLines ? 'active' : ''}
-          onClick={toggleCollisionLines}
-          title="只切换碰撞箱线条显示；碰撞阻挡默认一直生效"
-        >
-          {showCollisionLines ? '隐藏碰撞箱线' : '查看碰撞箱线'}
-        </button>
-        <button
-          className={showPlaceAnchors ? 'active' : ''}
-          onClick={togglePlaceAnchors}
-          title="查看角色以后自动前往和交互的地点锚点"
-        >
-          {showPlaceAnchors ? '隐藏地点锚点' : '查看地点锚点'}
-        </button>
-        <button
-          className={showLayerPanel ? 'active' : ''}
-          onClick={() => setShowLayerPanel((value) => !value)}
-          title="显示统一图层序号和右侧图层列表"
-        >
-          {showLayerPanel ? '隐藏图层' : '查看图层'}
-        </button>
-        <button
-          className={canEditLayout && groupEditMode ? 'active' : ''}
-          onClick={() => setGroupEditMode((value) => !value)}
-          disabled={!canEditLayout}
-          title="开启后拖动、缩放和微调会作用于全部素材"
-        >
-          {groupEditMode ? '整体编辑中' : '整体编辑'}
-        </button>
-        <button onClick={() => scaleSelected(0.92)} disabled={!canEditLayout || (groupEditMode ? items.length === 0 : !selectedItem)}>{groupEditMode ? '整体缩小' : '素材缩小'}</button>
-        <button onClick={() => scaleSelected(1.08)} disabled={!canEditLayout || (groupEditMode ? items.length === 0 : !selectedItem)}>{groupEditMode ? '整体放大' : '素材放大'}</button>
-        <button onClick={() => moveSelectedLayer('up')} disabled={!canEditLayout || groupEditMode || !selectedItem}>上移图层</button>
-        <button onClick={() => moveSelectedLayer('down')} disabled={!canEditLayout || groupEditMode || !selectedItem}>下移图层</button>
-        <button onClick={bringSelectedToFront} disabled={!canEditLayout || groupEditMode || !selectedItem}>置顶</button>
-        <button onClick={sendSelectedToBack} disabled={!canEditLayout || groupEditMode || !selectedItem}>置底</button>
-        <button onClick={deleteSelected} disabled={!canEditLayout || groupEditMode || !selectedItem}>删除</button>
-        <button onClick={restoreResetBackup} disabled={!canEditLayout}>恢复上次布局</button>
-        <button onClick={resetLayout} disabled={!canEditLayout}>恢复默认</button>
-        <span>{notice}</span>
+            <div className="pixel-world-toolbar-message-row">
+              {!canEditLayout && (
+                <span className="pixel-world-toolbar-muted">
+                  {tx('Switch to edit mode to reveal layout and selected-asset tools.', '切到编辑模式后才显示画布、图层和选中素材工具。')}
+                </span>
+              )}
+              <span className="pixel-world-toolbar-notice">{ptxt(notice)}</span>
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className={`pixel-world-editor-body ${behaviorPanelCollapsed ? 'behavior-collapsed' : ''}`}>
-        <aside className="pixel-world-asset-panel">
-          <h3>素材</h3>
-          <div className="pixel-world-asset-type-tabs" role="tablist" aria-label="素材分类">
-            {groupedAssets.map(([type, assets]) => (
-              <button
-                key={type}
-                className={activeAssetGroup?.[0] === type ? 'active' : ''}
-                onClick={() => setActiveAssetType(type)}
-                title={`${type} (${assets.length})`}
-              >
-                {type}
-                <span>{assets.length}</span>
-              </button>
-            ))}
-          </div>
-          {activeAssetGroup && (
-            <div className="pixel-world-asset-group" key={activeAssetGroup[0]}>
-              <strong>{activeAssetGroup[0]}</strong>
-              <div className="pixel-world-asset-grid">
-                {activeAssetGroup[1].map((asset) => (
-                  <button key={asset.id} onClick={() => addAsset(asset)} title={asset.name} disabled={!canEditLayout}>
-                    <img src={commercialV2Asset(asset.path)} alt="" draggable={false} loading="lazy" />
-                    <span>{asset.name}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </aside>
+      <div className={`pixel-world-editor-body ${assetPanelOpen ? 'asset-open' : 'asset-collapsed'} ${behaviorPanelCollapsed ? 'behavior-collapsed' : 'behavior-open'}`}>
+        {renderAssetPanel()}
 
         <div
           className="pixel-world-editor-canvas-wrap"
           ref={canvasWrapRef}
           tabIndex={0}
-          onPointerDownCapture={focusCanvasForKeyboard}
+          onPointerDownCapture={(event) => {
+            onLoopScrollPointerDown();
+            focusCanvasForKeyboard(event);
+          }}
           onScroll={onLoopScroll}
-          aria-label="商业街画布，点击后可用 WASD 控制当前人物"
+          aria-label={tx('Commercial street canvas. Click it, then use WASD to control the current character.', '商业街画布，点击后可用 WASD 控制当前人物')}
         >
           <div className="pixel-world-editor-loop-track">
             {renderEditorPanel('loop-before')}
@@ -5187,179 +5610,6 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
             {renderEditorPanel('loop-after')}
           </div>
         </div>
-
-        <aside className="pixel-world-inspector">
-          <h3>选中</h3>
-          {viewMode ? (
-            <p>观赏模式已开启，素材不会被选中或拖动；切到编辑模式后可以移动素材。</p>
-          ) : selectedItem && selectedAsset ? (
-            <>
-              <div className="pixel-world-selected-name">{selectedAsset.name}</div>
-              <div className={`pixel-world-layer-mode-card ${selectedIsGroundLayer ? 'ground' : ''}`}>
-                <div className="pixel-world-layer-mode-head">
-                  <strong>图层属性</strong>
-                  <label className="pixel-world-collision-toggle">
-                    <input
-                      type="checkbox"
-                      checked={selectedIsGroundLayer}
-                      disabled={selectedIsBuiltInGroundLayer}
-                      onChange={(event) => updateSelectedGroundLayer(event.target.checked)}
-                    />
-                    <span>地面层</span>
-                  </label>
-                </div>
-                <small>
-                  {selectedIsBuiltInGroundLayer
-                    ? '这个素材类型固定为背景板，永远在人物下方，碰撞箱不会阻挡人物。'
-                    : selectedIsGroundLayer
-                      ? '当前实例会恒在人物下方；碰撞箱保留但不会阻挡人物。'
-                      : '普通素材会按图层和遮挡判断显示。'}
-                </small>
-              </div>
-              {selectedPlace && (
-                <div className="pixel-world-place-card">
-                  <div className="pixel-world-place-card-head">
-                    <strong>地点联动</strong>
-                    {!showPlaceAnchors && (
-                      <button onClick={togglePlaceAnchors}>查看终点</button>
-                    )}
-                  </div>
-                  <span>{selectedPlace.name}</span>
-                  <small>ID: {selectedPlace.placeId}</small>
-                  <small>后端地点: {selectedPlace.locationIds.join(' / ')}</small>
-                  <small>动作: {selectedPlace.actions.join(' / ')}</small>
-                  {selectedPlaceAnchorLocalPoint && (
-                    <>
-                      <div className="pixel-world-place-fields">
-                        {['x', 'y'].map((key) => (
-                          <label key={`place-anchor-${key}`}>
-                            <span>{key.toUpperCase()}</span>
-                            <input
-                              type="number"
-                              value={selectedPlaceAnchorLocalPoint[key]}
-                              onChange={(event) => updateSelectedPlaceAnchorLocalPoint(key, event.target.value)}
-                            />
-                          </label>
-                        ))}
-                      </div>
-                      <div className="pixel-world-collision-actions">
-                        <button onClick={resetSelectedPlaceAnchor}>默认终点</button>
-                      </div>
-                      <div className="pixel-world-inspector-hint">
-                        显示终点后，拖粉色点就能改自动循迹落点；保存布局会一起保存。
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-              {['x', 'y', 'w', 'h'].map((key) => (
-                <label key={key}>
-                  <span>{key.toUpperCase()}</span>
-                  <input
-                    type="number"
-                    value={Math.round(selectedItem[key])}
-                    onChange={(event) => updateItem(selectedItem.id, { [key]: Number(event.target.value) })}
-                  />
-                </label>
-              ))}
-              <div className="pixel-world-nudge-pad" aria-label="微调位置">
-                <button onClick={() => nudgeSelected(0, -4)}>↑</button>
-                <button onClick={() => nudgeSelected(-4, 0)}>←</button>
-                <button onClick={() => nudgeSelected(4, 0)}>→</button>
-                <button onClick={() => nudgeSelected(0, 4)}>↓</button>
-              </div>
-              <div className="pixel-world-scale-row">
-                <button onClick={() => scaleSelected(0.96)}>{groupEditMode ? '整体小一点' : '小一点'}</button>
-                <button onClick={() => scaleSelected(1.04)}>{groupEditMode ? '整体大一点' : '大一点'}</button>
-              </div>
-              <div className={`pixel-world-collision-editor ${showCollisionLines ? 'active' : ''}`}>
-                <div className="pixel-world-collision-editor-head">
-                  <strong>碰撞体积</strong>
-                  {!showCollisionLines && (
-                    <button onClick={toggleCollisionLines}>查看碰撞箱线</button>
-                  )}
-                  <label className="pixel-world-collision-toggle">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(selectedCollision?.enabled)}
-                      disabled={!isCommercialV2CollisionAsset(selectedAsset) || !selectedCollisionCanTakeEffect}
-                      onChange={(event) => updateSelectedCollisionEnabled(event.target.checked)}
-                    />
-                    <span>启用</span>
-                  </label>
-                </div>
-                {selectedCollisionCanTakeEffect && selectedCollisionLocalBox ? (
-                  <>
-                    <div className="pixel-world-collision-fields">
-                      {['x', 'y', 'w', 'h'].map((key) => (
-                        <label key={`collision-${key}`}>
-                          <span>{key.toUpperCase()}</span>
-                          <input
-                            type="number"
-                            value={selectedCollisionLocalBox[key]}
-                            onChange={(event) => updateSelectedCollisionLocalBox(key, event.target.value)}
-                          />
-                        </label>
-                      ))}
-                    </div>
-                    <div className="pixel-world-collision-actions">
-                      <button onClick={resetSelectedCollision}>默认</button>
-                      <button onClick={fitSelectedCollisionToSprite}>贴合整图</button>
-                    </div>
-                    <div className="pixel-world-inspector-hint">
-                      碰撞默认生效；显示线条后，拖绿色框移动碰撞箱，拖蓝色点调整大小。
-                    </div>
-                  </>
-                ) : (
-                  <div className="pixel-world-inspector-hint">
-                    {selectedIsGroundLayer
-                      ? '地面层规则：这个实例的碰撞箱不会参与人物阻挡或自动循迹绕路。'
-                      : '这个素材还没有可编辑的碰撞箱。'}
-                  </div>
-                )}
-              </div>
-              <div className="pixel-world-inspector-hint">
-                {groupEditMode ? '整体编辑已开启：拖动任意素材会带动当前全部建筑和道具。' : '拖动素材移动；用 W/H 调整大小，显示会保持原图比例。'}
-              </div>
-            </>
-          ) : (
-            <p>点击画布上的素材开始编辑。</p>
-          )}
-          {showLayerPanel && (
-            <section className="pixel-world-layer-panel">
-              <div className="pixel-world-layer-panel-head">
-                <strong>图层</strong>
-                <small>上方后绘制；背景板恒在人物下方且不参与碰撞。</small>
-              </div>
-              {selectedLayerRow && (
-                <div className="pixel-world-layer-current">
-                  当前：{selectedLayerRow.asset?.name || selectedLayerRow.item.assetId}
-                  <span>#{selectedLayerRow.layerIndex + 1}</span>
-                </div>
-              )}
-              <div className="pixel-world-layer-list">
-                {layerRows.slice().reverse().map((row) => (
-                  <button
-                    key={`layer-row-${row.item.id}`}
-                    type="button"
-                    className={`pixel-world-layer-row ${row.item.id === selectedId ? 'active' : ''} ${row.isGround ? 'ground' : 'asset'}`}
-                    onClick={() => setSelectedId(row.item.id)}
-                    title={`${row.asset?.name || row.item.assetId} / z-index ${row.zIndex}`}
-                  >
-                    <span className="pixel-world-layer-index">#{row.layerIndex + 1}</span>
-                    <span className="pixel-world-layer-name">
-                      {row.asset?.name || row.item.assetId}
-                      <small>{row.asset?.type || '未知'} · z {row.zIndex} · {row.playerRule}</small>
-                    </span>
-                    <span className="pixel-world-layer-kind">{row.isGround ? '背景板' : '素材'}</span>
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
-          <h3>布局 JSON</h3>
-          <textarea value={layoutJson} readOnly />
-        </aside>
 
         {renderBehaviorTreePanel()}
       </div>

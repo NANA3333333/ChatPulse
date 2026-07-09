@@ -25,9 +25,10 @@ import {
   WandSparkles,
   X
 } from 'lucide-react';
+import { useLanguage } from '../../LanguageContext';
 import './HousingSocialPanel.css';
 
-const text = {
+const textZh = {
   title: '住房系统',
   sellableHomes: '房源',
   roleBinding: '已有住房',
@@ -128,11 +129,171 @@ const text = {
   rentDue: '催租日',
   nextRentDue: '下次催租',
   missedRent: '拖欠次数',
+  status: '状态',
+  record: '记录',
+  generatedViewingRecord: '已生成看房记录，展开查看完整内容。',
+  dialogueCount: '条对话',
+  viewingRecord: '看房记录',
+  collapse: '收起',
+  expand: '展开',
+  budget: '预算',
+  furnitureShop: '家具商店',
+  scaleProfile: '比例标尺',
+  itemCount: '件',
+  classCount: '类',
+  savedAssets: '已保存素材',
+  spent: '花费',
+  purchased: '购买',
+  roomAssemblyHint: '实验版会直接覆盖当前像素小屋布局，并保存到浏览器本地房间存储。',
+  roomAssemblyCopy: '点生成后，中介 AI 会读取房间网格、完整家具商店、每件家具价格和当前房源预算，自行采购并摆放；保存完成后去“像素小屋”即可看到实际房间已经变成这套布局。',
+  customHomeHint: '这里是少数情况才需要手动改的详细资料。',
   payRent: '交房租',
   saving: '保存中...',
   untriggered: '未触发',
   agencyPlaceholder: '商业街'
 };
+
+const textEn = {
+  title: 'Housing System',
+  sellableHomes: 'Listings',
+  roleBinding: 'Housed Roles',
+  recommendHousing: 'Recommend Housing to Homeless Roles',
+  recommendHome: 'Recommend Home',
+  assignHome: 'Assign Home',
+  recentChains: 'Recent Rental Chains',
+  moveInCost: 'Move-in Cost',
+  currentHome: 'Current Home',
+  selectedHome: 'Selected Home',
+  latestChain: 'Latest Chain',
+  noChain: 'No chain yet',
+  eligibleRole: 'Homeless Role',
+  noHomelessCharacters: 'No homeless roles',
+  noHousedCharacters: 'No housed roles',
+  noAvailableHomes: 'No enabled listings',
+  noHousingActionTarget: 'All roles already have housing. Recommendation and assignment are temporarily closed.',
+  housedActionHint: 'This area only handles homeless roles. Housed roles can be viewed or managed in the Housed Roles section.',
+  viewDialogue: 'Viewing Dialogue',
+  viewSummary: 'Viewing Summary',
+  consideration: 'Consideration',
+  decision: 'Decision',
+  agent: 'Agent',
+  character: 'Character',
+  chainRunning: 'Chain running...',
+  chainResult: 'Chain result',
+  chainFailed: 'Chain failed',
+  agencyAi: 'Agency AI',
+  roomAssembly: 'Showroom Assembly Lab',
+  openRoomAssembly: 'Open Assembly Window',
+  generateRoomAssembly: 'Generate & Save',
+  roomAssemblySaved: 'Generated and saved to the actual room.',
+  loading: 'Loading housing system...',
+  loadFailed: 'Failed to load housing system',
+  requestFailed: 'Request failed ',
+  save: 'Save Config',
+  run: 'Run Manually',
+  retry: 'Regenerate',
+  clearError: 'Clear Error',
+  enable: 'Enable Agency',
+  disable: 'Disable Agency',
+  lastAd: 'Last Ad',
+  nextAd: 'Next Ad',
+  lastFailure: 'Last Failure',
+  noAds: 'No ad records yet.',
+  published: 'Published',
+  manual: 'Manual',
+  auto: 'Auto',
+  agencyFailed: 'Agency AI failed:',
+  officeName: 'Office Name',
+  agentName: 'Agent Name',
+  officeDistrict: 'Office District',
+  businessScope: 'Business Scope',
+  intervalHours: 'Decision Interval (hours)',
+  autoModel: 'Auto-select available API',
+  adStyle: 'Ad Style',
+  prompt: 'Persona prompt, optional',
+  applyStyle: 'Apply Style',
+  catalog: 'Listing Library',
+  custom: 'Custom',
+  addHome: 'Add Home',
+  saveEdit: 'Save Edit',
+  cancel: 'Cancel Edit',
+  edit: 'Edit',
+  remove: 'Delete',
+  removeAd: 'Delete Record',
+  enabledState: 'Enabled',
+  disabledState: 'Disabled',
+  homeName: 'Home Name',
+  weeklyRent: 'Weekly Rent',
+  deposit: 'Deposit',
+  buyout: 'Sale / Buyout Price',
+  comfort: 'Comfort',
+  prestige: 'Prestige',
+  privacy: 'Privacy',
+  sortOrder: 'Display Order',
+  desc: 'Description',
+  id: 'ID',
+  emoji: 'Emoji',
+  applyHome: 'Add to Sellable List',
+  applyExistingHome: 'Already listed, edit it',
+  homeApplied: 'This home has been added to saved listings. The agency AI can now advertise it directly.',
+  homeOpened: 'This home is already listed, so I opened it for editing.',
+  modalCustomHome: 'Custom Home',
+  modalEditHome: 'Edit Home',
+  emptyHomes: 'No sellable homes yet.',
+  roleName: 'Role',
+  wallet: 'Wallet',
+  unknown: 'unknown',
+  idle: 'idle',
+  unboundHousing: 'No Housing Bound',
+  stable: 'Stable Housing',
+  homeless: 'Homeless',
+  temporary: 'Temporary Stay',
+  unstable: 'Unstable Housing',
+  overdue: 'Rent Overdue',
+  note: 'Note',
+  rentDue: 'Rent Due',
+  nextRentDue: 'Next Rent Due',
+  missedRent: 'Missed Rent',
+  status: 'Status',
+  record: 'Record',
+  generatedViewingRecord: 'Viewing record generated. Expand to read the full content.',
+  dialogueCount: 'dialogue lines',
+  viewingRecord: 'Viewing Record',
+  collapse: 'Collapse',
+  expand: 'Expand',
+  budget: 'Budget',
+  furnitureShop: 'Furniture Shop',
+  scaleProfile: 'Scale Profile',
+  itemCount: 'items',
+  classCount: 'types',
+  savedAssets: 'Saved Assets',
+  spent: 'Spent',
+  purchased: 'Purchased',
+  roomAssemblyHint: 'Experimental mode directly overwrites the current pixel room layout and saves it to local room storage.',
+  roomAssemblyCopy: 'After generation, the agency AI reads the room grid, furniture shop, item prices, and listing budget, then buys and places furniture automatically. When saved, open Pixel Cottage to see the actual room updated.',
+  customHomeHint: 'Detailed data for the few cases that need manual edits.',
+  payRent: 'Pay Rent',
+  saving: 'Saving...',
+  untriggered: 'Not triggered',
+  agencyPlaceholder: 'City Street',
+  assignedHome: 'Home assigned',
+  signed: 'Signed',
+  declined: 'Declined',
+  rejectedInsufficientFunds: 'Rejected: insufficient funds',
+  completed: 'Completed',
+  housedCount: 'housed',
+  homeUnit: 'homes',
+  perWeek: 'week',
+  aiGenerating: 'AI generating...'
+};
+
+const text = new Proxy(textZh, {
+  get(target, prop) {
+    const lang = typeof localStorage !== 'undefined' ? localStorage.getItem('chatpulse_lang') : 'zh';
+    const pack = lang === 'en' ? textEn : target;
+    return pack[prop] ?? target[prop] ?? String(prop);
+  }
+});
 
 const homePresets = [
   { key: 'old_apartment_chunheli', title: '老破小', subtitle: '春和里 4栋302', values: { id: 'old_apartment_chunheli_4_302', name: '春和里小区 4栋302', emoji: '🏚️', weekly_rent: 22, deposit: 40, sale_price: 380, comfort: 8, prestige: 2, privacy: 4, description: '一室一厅，老式水泥楼，五楼步梯，屋里采光一般但通风还行。家具旧，墙皮有点起鼓，厨房很小，卫生间是老式布局。优点是便宜、离便利店近、对刚落脚的人压力最小；缺点是压抑、隔音差、夏天闷、体面感很弱。' } },
@@ -143,6 +304,15 @@ const homePresets = [
   { key: 'luxury_loft_jinyu', title: '高档 loft', subtitle: '金域中心 23楼2301', values: { id: 'luxury_loft_jinyu_23_2301', name: '金域中心 23楼2301 loft', emoji: '🌇', weekly_rent: 150, deposit: 360, sale_price: 2880, comfort: 48, prestige: 55, privacy: 38, description: '挑高 loft，两层分区明显，下层会客、上层休息，整体偏深色高端都市风，电梯厅和物业都很讲排面。优点是圈层感强、很适合做身份展示、拍照和待客都上镜；缺点是租金和押金都高，对收入和消费习惯要求也高。' } }
 ];
 
+const homePresetEn = {
+  old_apartment_chunheli: { title: 'Old Walk-up', subtitle: 'Chunheli 4-302' },
+  shared_room_xinyuan: { title: 'Shared Room', subtitle: 'Xinyuan Apt 2-801A' },
+  shared_flat_jingan: { title: 'Standard Share', subtitle: 'Jingan New Village 6-502' },
+  studio_yuecheng: { title: 'Studio Apartment', subtitle: 'Yuecheng Mansion 1107' },
+  riverside_lanwan: { title: 'Riverside Apartment', subtitle: 'Lanwan International 1703' },
+  luxury_loft_jinyu: { title: 'Luxury Loft', subtitle: 'Jinyu Center 2301' }
+};
+
 const promptStyles = [
   { key: 'street', label: '街头招揽', prompt: '你像商业街口发传单的中介一样说话，语气直接、接地气、能快速把价格和房子优点说清楚。' },
   { key: 'warm', label: '温和推荐', prompt: '你像认真替人找房的顾问一样说话，先把房子适合谁讲清楚，再自然带出价格和卖点。' },
@@ -150,6 +320,14 @@ const promptStyles = [
   { key: 'luxury', label: '体面高端', prompt: '你主打体面和高端感，广告里优先强调地段、空间、圈层感和价格。' },
   { key: 'sellfast', label: '急租/急售', prompt: '你像急租急售的中介，广告简短有力，必须先报价格，再说房型和核心卖点。' }
 ];
+
+const promptStyleLabelsEn = {
+  street: 'Street Pitch',
+  warm: 'Warm Recommendation',
+  budget: 'Budget Friendly',
+  luxury: 'Premium & Polished',
+  sellfast: 'Urgent Rent/Sale'
+};
 
 const defaultDistrictOptions = [
   { id: 'street', name: '商业街' },
@@ -164,6 +342,20 @@ const defaultDistrictOptions = [
   { id: 'casino', name: '地下赌场' },
   { id: 'hacker', name: '黑客据点' }
 ];
+
+const defaultDistrictNameEn = {
+  street: 'City Street',
+  home: 'Home',
+  restaurant: 'Restaurant',
+  convenience: 'Convenience Store',
+  park: 'Central Park',
+  mall: 'Mall',
+  school: 'Night School',
+  hospital: 'Hospital',
+  factory: 'Factory',
+  casino: 'Underground Casino',
+  hacker: 'Hacker Hideout'
+};
 
 const shell = {
   page: { display: 'flex', flexDirection: 'column', gap: 18, padding: 24, background: 'var(--housing-page-bg)', minHeight: '100%' },
@@ -183,27 +375,35 @@ const roomEditorLayoutUpdatedEvent = 'pixel-world-room-layout-updated';
 const roomEditorStageSize = { width: 1254, height: 1254 };
 const roomEditorBackdrop = '/assets/pixel-world/generated-rooms/backgrounds/empty-square-room-v1.png';
 const roomAssemblyWallArtVisualBounds = { minY: -48, maxBottomY: 273 };
+const roomAssemblyBedTopBaselineY = 79;
 const roomAssemblyCalibratedSizeProfile = {
-  desk: { w: 430, h: 337, sourceAssetId: 'room_front_mint_desk_v1' },
+  bed: { w: 268, h: 289, sourceAssetId: 'room_front_bed_mint_garden_v1' },
+  nightstand: { w: 96, h: 114, sourceAssetId: 'room_front_ocean_nightstand_v1' },
+  wardrobe: { w: 193, h: 271, sourceAssetId: 'room_front_ocean_wardrobe_v1' },
+  vanity: { w: 213, h: 265, sourceAssetId: 'room_front_ocean_vanity_v1' },
+  desk: { w: 430, h: 337, sourceAssetId: 'room_front_peach_desk_v1' },
   bookshelf: { w: 291, h: 444, sourceAssetId: 'room_front_mint_bookshelf_v1' },
-  sofa: { w: 526, h: 362, sourceAssetId: 'room_front_mint_sofa_v1' }
+  sofa: { w: 526, h: 362, sourceAssetId: 'room_front_mint_sofa_v1' },
+  rug: { w: 310, h: 187, sourceAssetId: 'room_decor_mint_rug_v1' },
+  floorLamp: { w: 145, h: 258, sourceAssetId: 'room_decor_mint_table_lamp_v1' },
+  wallArt: { w: 257, h: 155, sourceAssetId: 'room_decor_mint_wall_art_v1' }
 };
 const roomAssemblyPalettes = {
   budget: {
     label: '蜜桃基础套装',
     bedGroup: 'bed_peach_lemon',
-    nightstandGroup: 'peach_nightstand',
-    wardrobeGroup: 'peach_wardrobe',
-    vanityGroup: 'peach_vanity',
-    vanityW: 273
+    nightstandGroup: 'ocean_nightstand',
+    wardrobeGroup: 'ocean_wardrobe',
+    vanityGroup: 'ocean_vanity',
+    vanityW: 271
   },
   standard: {
     label: '薄荷日常套装',
     bedGroup: 'bed_mint_garden',
-    nightstandGroup: 'mint_nightstand',
-    wardrobeGroup: 'mint_wardrobe',
-    vanityGroup: 'mint_vanity',
-    vanityW: 273
+    nightstandGroup: 'ocean_nightstand',
+    wardrobeGroup: 'ocean_wardrobe',
+    vanityGroup: 'ocean_vanity',
+    vanityW: 271
   },
   ocean: {
     label: '海洋舒适套装',
@@ -255,6 +455,11 @@ const roomAssemblyAllowedDirections = new Set(['front', 'back', 'left', 'right']
 const roomAssemblyDirectionalKinds = new Set(['bed', 'nightstand', 'wardrobe', 'vanity', 'desk', 'bookshelf', 'sofa']);
 const roomAssemblyWallBufferCells = 2;
 const roomAssemblyVisualFloorLineOffsetCells = 0.5;
+const roomAssemblyBedTopBaselineMinGridY = Math.max(0, Math.ceil(
+  roomAssemblyBedTopBaselineY / (roomEditorStageSize.height / roomAssemblyGridSize.rows)
+  + roomAssemblyVisualFloorLineOffsetCells
+  + 1
+));
 const roomAssemblyDefaultScaleByKind = {
   bed: 0.78,
   nightstand: 0.52,
@@ -306,7 +511,6 @@ function makeRoomAssemblyShopItem(assetId, name, kind, style, price, box, option
 
 const roomAssemblyShopItems = [
   makeRoomAssemblyShopItem('room_front_bed_scandinavian_blue_v1', '北欧蓝白床', 'bed', '北欧蓝白', 115, { x: 82, y: 754, w: 343, h: 370 }),
-  makeRoomAssemblyShopItem('room_front_scandinavian_nightstand_v1', '北欧床头柜', 'nightstand', '北欧蓝白', 34, { x: 414, y: 887, w: 185, h: 220 }),
   makeRoomAssemblyShopItem('room_front_scandinavian_wardrobe_v1', '北欧衣柜', 'wardrobe', '北欧蓝白', 85, { x: 88, y: 412, w: 235, h: 330 }),
   makeRoomAssemblyShopItem('room_front_scandinavian_desk_v1', '北欧书桌', 'desk', '北欧蓝白', 80, { x: 438, y: 630, w: 350, h: 275 }),
   makeRoomAssemblyShopItem('room_front_scandinavian_bookshelf_v1', '北欧书柜', 'bookshelf', '北欧蓝白', 75, { x: 840, y: 352, w: 300, h: 390 }),
@@ -316,9 +520,6 @@ const roomAssemblyShopItems = [
   makeRoomAssemblyShopItem('room_decor_scandinavian_wall_art_v1', '北欧雪山挂画', 'wallArt', '北欧蓝白', 30, { x: 500, y: 302, w: 390, h: 235 }, { directional: false, collision: { enabled: false, x: 0, y: 0, w: 1, h: 1 } }),
 
   makeRoomAssemblyShopItem('room_front_bed_peach_lemon_v1', '蜜桃柠檬床', 'bed', '蜜桃柠檬', 70, { x: 82, y: 754, w: 343, h: 370 }),
-  makeRoomAssemblyShopItem('room_front_peach_nightstand_v1', '蜜桃床头柜', 'nightstand', '蜜桃柠檬', 22, { x: 414, y: 887, w: 185, h: 220 }),
-  makeRoomAssemblyShopItem('room_front_peach_wardrobe_v1', '蜜桃衣柜', 'wardrobe', '蜜桃柠檬', 55, { x: 88, y: 412, w: 235, h: 330 }),
-  makeRoomAssemblyShopItem('room_front_peach_vanity_v1', '蜜桃梳妆台', 'vanity', '蜜桃柠檬', 45, { x: 476, y: 506, w: 273, h: 340 }),
   makeRoomAssemblyShopItem('room_front_peach_desk_v1', '蜜桃书桌', 'desk', '蜜桃柠檬', 50, { x: 438, y: 630, w: 350, h: 275 }),
   makeRoomAssemblyShopItem('room_front_peach_bookshelf_v1', '蜜桃书柜', 'bookshelf', '蜜桃柠檬', 45, { x: 840, y: 352, w: 300, h: 390 }),
   makeRoomAssemblyShopItem('room_front_peach_sofa_v1', '蜜桃沙发', 'sofa', '蜜桃柠檬', 65, { x: 660, y: 750, w: 420, h: 290 }),
@@ -327,10 +528,6 @@ const roomAssemblyShopItems = [
   makeRoomAssemblyShopItem('room_decor_peach_wall_art_v1', '蜜桃柠檬挂画', 'wallArt', '蜜桃柠檬', 18, { x: 500, y: 302, w: 390, h: 235 }, { directional: false, collision: { enabled: false, x: 0, y: 0, w: 1, h: 1 } }),
 
   makeRoomAssemblyShopItem('room_front_bed_mint_garden_v1', '薄荷花园床', 'bed', '薄荷花园', 95, { x: 82, y: 754, w: 343, h: 370 }),
-  makeRoomAssemblyShopItem('room_front_mint_nightstand_v1', '薄荷床头柜', 'nightstand', '薄荷花园', 30, { x: 414, y: 887, w: 185, h: 220 }),
-  makeRoomAssemblyShopItem('room_front_mint_wardrobe_v1', '薄荷衣柜', 'wardrobe', '薄荷花园', 75, { x: 88, y: 412, w: 235, h: 330 }),
-  makeRoomAssemblyShopItem('room_front_mint_vanity_v1', '薄荷梳妆台', 'vanity', '薄荷花园', 65, { x: 476, y: 506, w: 273, h: 340 }),
-  makeRoomAssemblyShopItem('room_front_mint_desk_v1', '薄荷书桌', 'desk', '薄荷花园', 75, { x: 438, y: 630, w: 350, h: 275 }),
   makeRoomAssemblyShopItem('room_front_mint_bookshelf_v1', '薄荷书架', 'bookshelf', '薄荷花园', 65, { x: 840, y: 352, w: 300, h: 390 }),
   makeRoomAssemblyShopItem('room_front_mint_sofa_v1', '薄荷沙发', 'sofa', '薄荷花园', 95, { x: 660, y: 750, w: 420, h: 290 }),
   makeRoomAssemblyShopItem('room_decor_mint_rug_v1', '薄荷绗缝地毯', 'rug', '薄荷花园', 32, { x: 420, y: 882, w: 430, h: 260 }, { directional: false, groundLayer: true, collision: { enabled: false, x: 0, y: 0, w: 1, h: 1 } }),
@@ -342,7 +539,6 @@ const roomAssemblyShopItems = [
   makeRoomAssemblyShopItem('room_front_ocean_wardrobe_v1', '贝壳衣柜', 'wardrobe', '海洋贝壳', 100, { x: 88, y: 412, w: 235, h: 330 }),
   makeRoomAssemblyShopItem('room_front_ocean_vanity_v1', '贝壳梳妆台', 'vanity', '海洋贝壳', 95, { x: 476, y: 506, w: 271, h: 340 }),
   makeRoomAssemblyShopItem('room_front_ocean_desk_v1', '贝壳书桌', 'desk', '海洋贝壳', 100, { x: 438, y: 630, w: 350, h: 275 }),
-  makeRoomAssemblyShopItem('room_front_ocean_bookshelf_v1', '贝壳书架', 'bookshelf', '海洋贝壳', 90, { x: 860, y: 383, w: 235, h: 360 }),
   makeRoomAssemblyShopItem('room_front_ocean_sofa_v1', '贝壳沙发', 'sofa', '海洋贝壳', 130, { x: 660, y: 750, w: 420, h: 290 }),
   makeRoomAssemblyShopItem('room_decor_ocean_rug_v1', '贝壳华毯', 'rug', '海洋贝壳', 45, { x: 420, y: 882, w: 430, h: 260 }, { directional: false, groundLayer: true, collision: { enabled: false, x: 0, y: 0, w: 1, h: 1 } }),
   makeRoomAssemblyShopItem('room_decor_ocean_floor_lamp_v1', '贝壳落地灯', 'floorLamp', '海洋贝壳', 45, { x: 906, y: 526, w: 230, h: 410 }, { directional: false, collision: { enabled: true, x: 0.34, y: 0.78, w: 0.32, h: 0.18 } }),
@@ -373,7 +569,15 @@ const roomAssemblyShopItems = [
 const roomAssemblyShopByAssetId = new Map(roomAssemblyShopItems.map((item) => [item.assetId, item]));
 
 function formatMoney(value) { const num = Number(value || 0); return Number.isFinite(num) ? num.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1') : '0'; }
-function formatTime(value) { if (!value) return text.untriggered; try { return new Date(Number(value)).toLocaleString('zh-CN'); } catch { return text.untriggered; } }
+function formatTime(value) {
+  if (!value) return text.untriggered;
+  try {
+    const locale = typeof localStorage !== 'undefined' && localStorage.getItem('chatpulse_lang') === 'en' ? 'en-US' : 'zh-CN';
+    return new Date(Number(value)).toLocaleString(locale);
+  } catch {
+    return text.untriggered;
+  }
+}
 function toNum(value, fallback = 0) { const num = Number(value); return Number.isFinite(num) ? num : fallback; }
 function parseChainPayload(event = {}) {
   if (event.payload && typeof event.payload === 'object') return event.payload;
@@ -476,18 +680,23 @@ function StatCard({ label, value, tone = 'neutral', icon: Icon = null }) {
   );
 }
 const chainStageLabels = {
-  recommended: '推荐',
-  viewing: '看房',
-  viewed: '看完',
-  considering: '考虑',
-  considered: '已考虑',
-  deciding: '决定',
-  ready_to_sign: '待签约',
-  signing: '签约',
-  signed: '已签',
-  completed: '完成'
+  recommended: { zh: '推荐', en: 'Recommended' },
+  viewing: { zh: '看房', en: 'Viewing' },
+  viewed: { zh: '看完', en: 'Viewed' },
+  considering: { zh: '考虑', en: 'Considering' },
+  considered: { zh: '已考虑', en: 'Considered' },
+  deciding: { zh: '决定', en: 'Deciding' },
+  ready_to_sign: { zh: '待签约', en: 'Ready to Sign' },
+  signing: { zh: '签约', en: 'Signing' },
+  signed: { zh: '已签', en: 'Signed' },
+  completed: { zh: '完成', en: 'Completed' }
 };
 const chainStageOrder = ['recommended', 'viewing', 'considering', 'deciding', 'ready_to_sign', 'signing', 'completed'];
+function getChainStageLabel(stage) {
+  const label = chainStageLabels[stage];
+  if (!label) return stage || '';
+  return (typeof localStorage !== 'undefined' && localStorage.getItem('chatpulse_lang') === 'en') ? label.en : label.zh;
+}
 function getChainTone(status) {
   if (status === 'failed') return { bg: '#fff1f2', color: '#be123c', icon: AlertTriangle };
   if (status === 'completed') return { bg: '#dcfce7', color: '#166534', icon: CheckCircle2 };
@@ -526,10 +735,10 @@ function ChainProgress({ stage = '', status = '' }) {
         <div
           key={item}
           className={`housing-chain-step ${index <= currentIndex ? 'is-active' : ''} ${item === normalized ? 'is-current' : ''}`}
-          title={chainStageLabels[item] || item}
+          title={getChainStageLabel(item)}
         >
           <span />
-          <em>{chainStageLabels[item] || item}</em>
+          <em>{getChainStageLabel(item)}</em>
         </div>
       ))}
     </div>
@@ -548,8 +757,8 @@ function RentalChainCard({ chain, events }) {
     consideration,
     decision,
     dialogueLines[0]?.content
-  ].find((item) => String(item || '').trim()) || '已生成看房记录，展开查看完整内容。';
-  const detailCountLabel = dialogueLines.length ? `${dialogueLines.length} 条对话` : '记录';
+  ].find((item) => String(item || '').trim()) || text.generatedViewingRecord;
+  const detailCountLabel = dialogueLines.length ? `${dialogueLines.length} ${text.dialogueCount}` : text.record;
   const renderDetail = () => (
     <>
       {dialogueLines.length ? (
@@ -591,11 +800,11 @@ function RentalChainCard({ chain, events }) {
           <button type="button" className="housing-chain-detail-toggle" aria-expanded={detailExpanded} onClick={() => setDetailExpanded((value) => !value)}>
             <span className="housing-chain-detail-toggle-main">
               <MessageSquareText size={15} />
-              <span>看房记录</span>
+              <span>{text.viewingRecord}</span>
               <em>{detailCountLabel}</em>
             </span>
             <span className="housing-chain-detail-toggle-action">
-              {detailExpanded ? '收起' : '展开'}
+              {detailExpanded ? text.collapse : text.expand}
               {detailExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
             </span>
           </button>
@@ -621,7 +830,7 @@ function HomeSummaryCard({ home, title = text.selectedHome, compact = false, act
           <div className="housing-card-kicker">{title}</div>
           <div className="housing-home-title">{home.emoji || ''} {home.name || home.id}</div>
         </div>
-        <Pill bg="#fff7ed" color="#c2410c" icon={BadgeDollarSign}>{formatMoney(home.weekly_rent)}/周</Pill>
+        <Pill bg="#fff7ed" color="#c2410c" icon={BadgeDollarSign}>{formatMoney(home.weekly_rent)}/{text.perWeek}</Pill>
       </div>
       <div className="housing-home-desc">{home.description || '-'}</div>
       <div className="housing-home-money">
@@ -670,7 +879,7 @@ function CharacterHousingCard({ character, binding, selectedHousing, status, sor
             {sortedHousingTiers.map((item) => <option key={item.id} value={item.id}>{item.emoji || ''} {item.name}</option>)}
           </select>
         </Field>
-        <Field label="状态">
+        <Field label={text.status}>
           <select style={shell.input} value={binding.housing_status || 'stable'} onChange={(e) => updateBinding(character.id, { ...binding, housing_status: e.target.value }).catch((err) => alert(err.message))}>
             <option value="stable">{text.stable}</option>
             <option value="temporary">{text.temporary}</option>
@@ -827,11 +1036,13 @@ function normalizeRoomAssemblySizeProfile(value = {}) {
   }, {});
 }
 function getRoomAssemblyCurrentSizeProfile() {
-  if (typeof window === 'undefined') return {};
+  if (typeof window === 'undefined') return { ...roomAssemblyCalibratedSizeProfile };
   try {
-    const layoutProfile = buildRoomAssemblySizeProfile(JSON.parse(window.localStorage.getItem(roomEditorStorageKey) || '[]'));
+    const storedLayout = JSON.parse(window.localStorage.getItem(roomEditorStorageKey) || '[]');
+    const storedLayoutItems = Array.isArray(storedLayout) ? storedLayout : storedLayout?.items;
+    const layoutProfile = buildRoomAssemblySizeProfile(storedLayoutItems);
     const storedProfile = normalizeRoomAssemblySizeProfile(JSON.parse(window.localStorage.getItem(roomEditorSizeProfileStorageKey) || '{}'));
-    return { ...layoutProfile, ...roomAssemblyCalibratedSizeProfile, ...storedProfile };
+    return { ...roomAssemblyCalibratedSizeProfile, ...layoutProfile, ...storedProfile };
   } catch {
     return { ...roomAssemblyCalibratedSizeProfile };
   }
@@ -953,6 +1164,12 @@ function getRoomAssemblyVisualOffset(kind, box = {}) {
 }
 function clampRoomAssemblyVisualBoxByKind(kind, box = {}) {
   const safeKind = normalizeRoomAssemblyKind(kind);
+  if (safeKind === 'bed') {
+    return {
+      ...box,
+      y: Math.max(roomAssemblyBedTopBaselineY, Math.round(toNum(box.y, roomAssemblyBedTopBaselineY)))
+    };
+  }
   if (safeKind !== 'wallArt') return box;
   const h = Math.max(1, toNum(box.h, 1));
   const minY = roomAssemblyWallArtVisualBounds.minY;
@@ -1002,7 +1219,10 @@ function getRoomAssemblyFurnitureContext(sizeProfile = {}) {
     size_px: {
       w: applyRoomAssemblySizeProfile(item.box, item.kind, sizeProfile).w,
       h: applyRoomAssemblySizeProfile(item.box, item.kind, sizeProfile).h
-    }
+    },
+    ...(item.kind === 'bed'
+      ? { constraints: { top_baseline_y_px: roomAssemblyBedTopBaselineY, min_grid_y: roomAssemblyBedTopBaselineMinGridY } }
+      : {})
   }));
 }
 function getRoomAssemblyDirections(seed, home = {}) {
@@ -1015,7 +1235,14 @@ function getRoomAssemblyDirections(seed, home = {}) {
 }
 function getRoomAssemblyDirectionSummary(home = {}) {
   const directions = getRoomAssemblyDirections(hashText(`${home.id || ''}:${home.name || ''}`), home);
-  return `床 ${roomAssemblyDirectionLabels[directions.bed]} / 床头柜 ${roomAssemblyDirectionLabels[directions.nightstand]} / 衣柜 ${roomAssemblyDirectionLabels[directions.wardrobe]} / 梳妆台 ${roomAssemblyDirectionLabels[directions.vanity]}`;
+  const isEn = typeof localStorage !== 'undefined' && localStorage.getItem('chatpulse_lang') === 'en';
+  const labels = isEn
+    ? { bed: 'Bed', nightstand: 'Nightstand', wardrobe: 'Wardrobe', vanity: 'Vanity' }
+    : { bed: '床', nightstand: '床头柜', wardrobe: '衣柜', vanity: '梳妆台' };
+  const directionLabels = isEn
+    ? { front: 'front', back: 'back', left: 'left', right: 'right' }
+    : roomAssemblyDirectionLabels;
+  return `${labels.bed} ${directionLabels[directions.bed]} / ${labels.nightstand} ${directionLabels[directions.nightstand]} / ${labels.wardrobe} ${directionLabels[directions.wardrobe]} / ${labels.vanity} ${directionLabels[directions.vanity]}`;
 }
 function getRoomAssemblyFallbackShopItem(palette, kind) {
   const style = roomAssemblyShopByAssetId.get(roomAssemblyAssetId(palette.bedGroup, 'front'))?.style || '';
@@ -1191,11 +1418,11 @@ function buildRoomAssemblyItemFromPlacement(palette, placement, index = 0, sizeP
   if (!group) return null;
   return makeRoomAssemblyItem(
     roomAssemblyAssetId(group, direction),
-    {
+    clampRoomAssemblyVisualBoxByKind(kind, {
       ...getRoomAssemblyItemSize(palette, kind, direction, sizeProfile),
       x: Math.round(gridX * cellW),
       y: Math.round(visualGridY * cellH)
-    },
+    }),
     `${kind}-${index}-${direction}`,
     { kind, direction }
   );
@@ -1337,7 +1564,13 @@ function persistAgencyRoomAssemblySnapshot(snapshot) {
       savedAt: snapshot.savedAt
     }
   };
-  localStorage.setItem(roomEditorStorageKey, JSON.stringify(snapshot.items));
+  localStorage.setItem(roomEditorStorageKey, JSON.stringify({
+    selectedId: snapshot.selectedId,
+    savedAt: snapshot.savedAt,
+    source: snapshot.source,
+    sizeProfile: snapshot.sizeProfile || buildRoomAssemblySizeProfile(snapshot.items),
+    items: snapshot.items
+  }));
   localStorage.setItem(roomEditorCanvasStorageKey, JSON.stringify(canvas));
   localStorage.setItem(roomEditorSizeProfileStorageKey, JSON.stringify(snapshot.sizeProfile || buildRoomAssemblySizeProfile(snapshot.items)));
   localStorage.setItem(roomEditorAssemblyStorageKey, JSON.stringify(snapshot));
@@ -1349,6 +1582,8 @@ function saveAgencyRoomAssembly(home = {}, aiAssembly = null, sizeProfile = getR
 }
 
 export default function HousingSocialPanel() {
+  const { lang } = useLanguage();
+  const isEn = lang === 'en';
   const [loading, setLoading] = useState(true);
   const [housingTiers, setHousingTiers] = useState([]);
   const [characters, setCharacters] = useState([]);
@@ -1430,6 +1665,15 @@ export default function HousingSocialPanel() {
   const currentRoomAssemblySizeProfile = useMemo(() => (
     showRoomAssemblyModal ? getRoomAssemblyCurrentSizeProfile() : {}
   ), [showRoomAssemblyModal, roomAssemblySnapshot]);
+  const districtDisplayName = useCallback((item) => (
+    isEn ? (defaultDistrictNameEn[item?.id] || item?.name || item?.id) : (item?.name || item?.id)
+  ), [isEn]);
+  const promptStyleLabel = useCallback((item) => (
+    isEn ? (promptStyleLabelsEn[item?.key] || item?.label) : item?.label
+  ), [isEn]);
+  const homePresetLabel = useCallback((preset, field) => (
+    isEn ? (homePresetEn[preset?.key]?.[field] || preset?.[field]) : preset?.[field]
+  ), [isEn]);
 
   const requestJson = useCallback(async (url, options = {}) => {
     const response = await fetch(url, options);
@@ -1515,12 +1759,12 @@ export default function HousingSocialPanel() {
         ...(data.chain?.id ? { [String(data.chain.id)]: data.chain_events || [] } : {})
       }));
       const label = data.outcome === 'signed'
-        ? '已签约'
+        ? text.signed
         : data.outcome === 'declined'
-          ? '角色拒租'
+          ? text.declined
           : data.outcome === 'rejected_insufficient_funds'
-            ? '余额不足被拒'
-            : data.outcome || '已完成';
+            ? text.rejectedInsufficientFunds
+            : data.outcome || text.completed;
       setHousingChainNotice(`${text.chainResult}: ${label}`);
     } catch (e) {
       await loadAll().catch(() => {});
@@ -1541,7 +1785,7 @@ export default function HousingSocialPanel() {
         body: JSON.stringify({ home_id: selectedRecommendationHome.id })
       });
       setCharacters(data.characters || []);
-      setHousingChainNotice(`${text.chainResult}: 已指派住房`);
+      setHousingChainNotice(`${text.chainResult}: ${text.assignedHome}`);
       await loadAll();
     } catch (e) {
       setHousingChainNotice(`${text.chainFailed}: ${e.message}`);
@@ -1579,7 +1823,7 @@ export default function HousingSocialPanel() {
   const applyAgencyTemplate = (key) => { setAgencyTemplateKey(key); const preset = promptStyles.find((item) => item.key === key); if (preset) setAgencyForm((prev) => ({ ...prev, persona_prompt: preset.prompt })); };
   const runRoomAssembly = async () => {
     if (!selectedRoomAssemblyHome) {
-      setRoomAssemblyNotice('没有可用房源，先新增或加入一套可推销房子。');
+      setRoomAssemblyNotice(isEn ? 'No available listing. Add or save a sellable home first.' : '没有可用房源，先新增或加入一套可推销房子。');
       return;
     }
     const palette = pickRoomAssemblyPalette(selectedRoomAssemblyHome);
@@ -1587,7 +1831,9 @@ export default function HousingSocialPanel() {
     const sizeProfile = getRoomAssemblyCurrentSizeProfile();
     const calibratedKinds = Object.keys(sizeProfile);
     setRoomAssemblySaving(true);
-    setRoomAssemblyNotice(`中介 AI 正在根据房间网格、家具价格、房源预算和当前房间比例生成采购摆放...${calibratedKinds.length ? ` 已读取 ${calibratedKinds.length} 类比例标尺。` : ''}`);
+    setRoomAssemblyNotice(isEn
+      ? `Agency AI is generating purchases and placement from the room grid, furniture prices, listing budget, and current room proportions...${calibratedKinds.length ? ` Loaded ${calibratedKinds.length} size guides.` : ''}`
+      : `中介 AI 正在根据房间网格、家具价格、房源预算和当前房间比例生成采购摆放...${calibratedKinds.length ? ` 已读取 ${calibratedKinds.length} 类比例标尺。` : ''}`);
     try {
       const data = await requestJson('/api/social-housing/agency/room-assembly', {
         method: 'POST',
@@ -1596,17 +1842,28 @@ export default function HousingSocialPanel() {
           home: selectedRoomAssemblyHome,
           palette,
           budget,
-          room: { size: roomAssemblyGridSize },
+          room: {
+            size: roomAssemblyGridSize,
+            stage_px: roomEditorStageSize,
+            constraints: {
+              bed_top_baseline_y_px: roomAssemblyBedTopBaselineY,
+              bed_min_grid_y: roomAssemblyBedTopBaselineMinGridY
+            }
+          },
           furniture: getRoomAssemblyFurnitureContext(sizeProfile)
         })
       });
       const snapshot = saveAgencyRoomAssembly(selectedRoomAssemblyHome, data.assembly || null, sizeProfile);
       setRoomAssemblySnapshot(snapshot);
-      setRoomAssemblyNotice(`AI 已生成并保存到实际房间。${snapshot.home.emoji || ''}${snapshot.home.name || snapshot.home.id || '样板间'} / 预算 ${formatMoney(snapshot.budget)} / 花费 ${formatMoney(snapshot.spent)} / ${snapshot.items.length} 个素材 / ${Object.keys(snapshot.sizeProfile || {}).length} 类比例标尺。${snapshot.ai?.notes ? ` 备注：${snapshot.ai.notes}` : ''}`);
+      setRoomAssemblyNotice(isEn
+        ? `AI generated and saved to the actual room. ${snapshot.home.emoji || ''}${snapshot.home.name || snapshot.home.id || 'showroom'} / budget ${formatMoney(snapshot.budget)} / spent ${formatMoney(snapshot.spent)} / ${snapshot.items.length} assets / ${Object.keys(snapshot.sizeProfile || {}).length} size guides.${snapshot.ai?.notes ? ` Notes: ${snapshot.ai.notes}` : ''}`
+        : `AI 已生成并保存到实际房间。${snapshot.home.emoji || ''}${snapshot.home.name || snapshot.home.id || '样板间'} / 预算 ${formatMoney(snapshot.budget)} / 花费 ${formatMoney(snapshot.spent)} / ${snapshot.items.length} 个素材 / ${Object.keys(snapshot.sizeProfile || {}).length} 类比例标尺。${snapshot.ai?.notes ? ` 备注：${snapshot.ai.notes}` : ''}`);
     } catch (e) {
       const snapshot = saveAgencyRoomAssembly(selectedRoomAssemblyHome, null, sizeProfile);
       setRoomAssemblySnapshot(snapshot);
-      setRoomAssemblyNotice(`AI 生成失败，已先用规则模板保存：${e.message || '未知错误'}。${snapshot.home.emoji || ''}${snapshot.home.name || snapshot.home.id || '样板间'} / 预算 ${formatMoney(snapshot.budget)} / 花费 ${formatMoney(snapshot.spent)} / ${snapshot.items.length} 个素材 / ${Object.keys(snapshot.sizeProfile || {}).length} 类比例标尺。`);
+      setRoomAssemblyNotice(isEn
+        ? `AI generation failed, so a rule-based template was saved first: ${e.message || 'Unknown error'}. ${snapshot.home.emoji || ''}${snapshot.home.name || snapshot.home.id || 'showroom'} / budget ${formatMoney(snapshot.budget)} / spent ${formatMoney(snapshot.spent)} / ${snapshot.items.length} assets / ${Object.keys(snapshot.sizeProfile || {}).length} size guides.`
+        : `AI 生成失败，已先用规则模板保存：${e.message || '未知错误'}。${snapshot.home.emoji || ''}${snapshot.home.name || snapshot.home.id || '样板间'} / 预算 ${formatMoney(snapshot.budget)} / 花费 ${formatMoney(snapshot.spent)} / ${snapshot.items.length} 个素材 / ${Object.keys(snapshot.sizeProfile || {}).length} 类比例标尺。`);
     } finally {
       setRoomAssemblySaving(false);
     }
@@ -1646,7 +1903,7 @@ export default function HousingSocialPanel() {
               <Field label={text.homeName}>
                 <select style={shell.input} value={recommendHousingId} onChange={(e) => setRecommendHousingId(e.target.value)} disabled={housingChainBusy || !selectedRecommendationCharacter || availableHousingTiers.length === 0}>
                   {availableHousingTiers.length
-                    ? availableHousingTiers.map((item) => <option key={item.id} value={item.id}>{item.emoji || ''} {item.name} / {formatMoney(item.weekly_rent)}/周 / {text.deposit} {formatMoney(item.deposit)}</option>)
+                    ? availableHousingTiers.map((item) => <option key={item.id} value={item.id}>{item.emoji || ''} {item.name} / {formatMoney(item.weekly_rent)}/{text.perWeek} / {text.deposit} {formatMoney(item.deposit)}</option>)
                     : <option value="">{text.noAvailableHomes}</option>}
                 </select>
               </Field>
@@ -1700,7 +1957,7 @@ export default function HousingSocialPanel() {
         </div>
       </Section>
 
-      <Section title={text.roleBinding} icon={BedDouble} extra={`${housedCount}/${characters.length} 已有住房`}>
+      <Section title={text.roleBinding} icon={BedDouble} extra={`${housedCount}/${characters.length} ${text.housedCount}`}>
         <div className="housing-character-list">
           {housedCharacters.map((character) => {
             const binding = character.binding || {};
@@ -1724,7 +1981,7 @@ export default function HousingSocialPanel() {
         </div>
       </Section>
 
-      <Section title={text.catalog} icon={Home} extra={`${sortedHousingTiers.length} 套`}>
+      <Section title={text.catalog} icon={Home} extra={`${sortedHousingTiers.length} ${text.homeUnit}`}>
         <div className="housing-card-actions">
           <ActionButton icon={Plus} tone="primary" onClick={() => { setEditingHomeId(''); setHomeForm(emptyHome); setShowCustomHomeEditor(true); }}>{text.custom}</ActionButton>
           <ActionButton icon={WandSparkles} tone="neutral" onClick={() => setShowRoomAssemblyModal(true)}>{text.openRoomAssembly}</ActionButton>
@@ -1748,13 +2005,13 @@ export default function HousingSocialPanel() {
         </div>
       </Section>
 
-      <Section title="房源模板" icon={Sparkles} extra={`${homePresets.length} 套`}>
+      <Section title={isEn ? 'Listing Templates' : '房源模板'} icon={Sparkles} extra={`${homePresets.length} ${text.homeUnit}`}>
         <div className="housing-home-grid">
           {homePresets.map((preset) => (
             <HomeSummaryCard
               key={preset.key}
               home={preset.values}
-              title={preset.subtitle}
+              title={homePresetLabel(preset, 'subtitle')}
               actions={(
                 <ActionButton icon={Plus} tone="primary" onClick={() => applyHomePreset(preset).catch((e) => alert(e.message))}>
                   {savedHomeIds.has(String(preset.values.id)) ? text.applyExistingHome : text.applyHome}
@@ -1771,11 +2028,11 @@ export default function HousingSocialPanel() {
             <div className="housing-agency-form-grid">
               <Field label={text.officeName}><input style={shell.input} value={agencyForm.agency_name || ''} onChange={(e) => setAgencyForm((p) => ({ ...p, agency_name: e.target.value }))} /></Field>
               <Field label={text.agentName}><input style={shell.input} value={agencyForm.agent_name || ''} onChange={(e) => setAgencyForm((p) => ({ ...p, agent_name: e.target.value }))} /></Field>
-              <Field label={text.officeDistrict}><select style={shell.input} value={agencyForm.office_district || 'street'} onChange={(e) => saveAgencyField('office_district', e.target.value).catch((err) => alert(err.message))}>{resolvedDistrictOptions.map((item) => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}</select></Field>
-              <Field label={`${text.autoModel}（${resolvedAgencyModelOptions.length} 个）`}><select style={shell.input} value={agencyForm.model_char_id || 'auto'} onChange={(e) => saveAgencyField('model_char_id', e.target.value).catch((err) => alert(err.message))}>{[{ id: 'auto', name: text.autoModel, model_name: '' }, ...resolvedAgencyModelOptions].map((item) => <option key={item.id} value={item.id}>{item.name}{item.model_name ? ` - ${item.model_name}` : ''}</option>)}</select></Field>
+              <Field label={text.officeDistrict}><select style={shell.input} value={agencyForm.office_district || 'street'} onChange={(e) => saveAgencyField('office_district', e.target.value).catch((err) => alert(err.message))}>{resolvedDistrictOptions.map((item) => <option key={item.id} value={item.id}>{districtDisplayName(item)}</option>)}</select></Field>
+              <Field label={`${text.autoModel} (${resolvedAgencyModelOptions.length})`}><select style={shell.input} value={agencyForm.model_char_id || 'auto'} onChange={(e) => saveAgencyField('model_char_id', e.target.value).catch((err) => alert(err.message))}>{[{ id: 'auto', name: text.autoModel, model_name: '' }, ...resolvedAgencyModelOptions].map((item) => <option key={item.id} value={item.id}>{item.name}{item.model_name ? ` - ${item.model_name}` : ''}</option>)}</select></Field>
               <Field label={text.businessScope}><input style={shell.input} value={agencyForm.business_scope || ''} onChange={(e) => updateAgencyField('business_scope', e.target.value)} /></Field>
               <Field label={text.intervalHours}><input style={shell.input} type="number" min="1" value={agencyForm.decision_interval_hours || 6} onChange={(e) => setAgencyForm((p) => ({ ...p, decision_interval_hours: toNum(e.target.value, 6) }))} /></Field>
-              <Field label={text.adStyle}><div className="housing-ad-style-row"><select style={shell.input} value={agencyTemplateKey} onChange={(e) => setAgencyTemplateKey(e.target.value)}>{promptStyles.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select><ActionButton icon={Sparkles} tone="info" style={{ whiteSpace: 'nowrap' }} onClick={() => applyAgencyTemplate(agencyTemplateKey)}>{text.applyStyle}</ActionButton></div></Field>
+              <Field label={text.adStyle}><div className="housing-ad-style-row"><select style={shell.input} value={agencyTemplateKey} onChange={(e) => setAgencyTemplateKey(e.target.value)}>{promptStyles.map((item) => <option key={item.key} value={item.key}>{promptStyleLabel(item)}</option>)}</select><ActionButton icon={Sparkles} tone="info" style={{ whiteSpace: 'nowrap' }} onClick={() => applyAgencyTemplate(agencyTemplateKey)}>{text.applyStyle}</ActionButton></div></Field>
               <Field label={text.prompt} span><textarea style={{ ...shell.input, minHeight: 96, resize: 'vertical' }} value={agencyForm.persona_prompt || ''} onChange={(e) => updateAgencyField('persona_prompt', e.target.value)} /></Field>
             </div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
@@ -1823,7 +2080,7 @@ export default function HousingSocialPanel() {
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 14 }}>
               <div>
                 <div className="housing-modal-title" style={{ fontSize: 20, fontWeight: 800 }}>{text.roomAssembly}</div>
-                <div className="housing-modal-subtitle" style={{ fontSize: 13, marginTop: 4 }}>实验版会直接覆盖当前像素小屋布局，并保存到浏览器本地房间存储。</div>
+                <div className="housing-modal-subtitle" style={{ fontSize: 13, marginTop: 4 }}>{text.roomAssemblyHint}</div>
               </div>
               <ActionButton icon={X} tone="neutral" onClick={() => setShowRoomAssemblyModal(false)}>{text.cancel}</ActionButton>
             </div>
@@ -1831,7 +2088,7 @@ export default function HousingSocialPanel() {
               <Field label={text.homeName}>
                 <select style={shell.input} value={selectedRoomAssemblyHome?.id || ''} onChange={(e) => setRoomAssemblyHomeId(e.target.value)}>
                   {roomAssemblyHomes.map((item) => (
-                    <option key={item.id} value={item.id}>{item.emoji || ''} {item.name || item.id} / {formatMoney(item.weekly_rent)}/周</option>
+                    <option key={item.id} value={item.id}>{item.emoji || ''} {item.name || item.id} / {formatMoney(item.weekly_rent)}/{text.perWeek}</option>
                   ))}
                 </select>
               </Field>
@@ -1840,27 +2097,27 @@ export default function HousingSocialPanel() {
                   <Pill>{text.comfort} {selectedRoomAssemblyHome.comfort || 0}</Pill>
                   <Pill>{text.prestige} {selectedRoomAssemblyHome.prestige || 0}</Pill>
                   <Pill>{text.privacy} {selectedRoomAssemblyHome.privacy || 0}</Pill>
-                  <Pill bg="#fff0f6" color="#ff4f82">预算 {formatMoney(getRoomAssemblyBudget(selectedRoomAssemblyHome))}</Pill>
-                  <Pill bg="#f5f3ff" color="#6d28d9">家具商店 {roomAssemblyShopItems.length} 件</Pill>
-                  <Pill bg="#ecfdf5" color="#047857">比例标尺 {Object.keys(currentRoomAssemblySizeProfile).length} 类</Pill>
+                  <Pill bg="#fff0f6" color="#ff4f82">{text.budget} {formatMoney(getRoomAssemblyBudget(selectedRoomAssemblyHome))}</Pill>
+                  <Pill bg="#f5f3ff" color="#6d28d9">{text.furnitureShop} {roomAssemblyShopItems.length} {text.itemCount}</Pill>
+                  <Pill bg="#ecfdf5" color="#047857">{text.scaleProfile} {Object.keys(currentRoomAssemblySizeProfile).length} {text.classCount}</Pill>
                 </div>
               ) : null}
               <div className="housing-modal-copy" style={{ fontSize: 13, lineHeight: 1.65 }}>
-                点生成后，中介 AI 会读取房间网格、完整家具商店、每件家具价格和当前房源预算，自行采购并摆放；保存完成后去“像素实装模块 / 居住房间”即可看到实际房间已经变成这套布局。
+                {text.roomAssemblyCopy}
               </div>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                <ActionButton icon={WandSparkles} tone="primary" disabled={roomAssemblySaving} onClick={runRoomAssembly}>{roomAssemblySaving ? 'AI生成中...' : text.generateRoomAssembly}</ActionButton>
+                <ActionButton icon={WandSparkles} tone="primary" disabled={roomAssemblySaving} onClick={runRoomAssembly}>{roomAssemblySaving ? text.aiGenerating : text.generateRoomAssembly}</ActionButton>
                 <ActionButton icon={X} tone="neutral" onClick={() => setShowRoomAssemblyModal(false)}>{text.cancel}</ActionButton>
               </div>
               {roomAssemblyNotice ? <div className="housing-inline-notice" style={{ borderRadius: 8, padding: 12, fontSize: 14, lineHeight: 1.55 }}>{roomAssemblyNotice}</div> : null}
               {roomAssemblySnapshot ? (
                 <div style={{ border: '1px solid #e7edf5', borderRadius: 16, padding: 14, background: '#f8fafc' }}>
-                  <div style={{ fontWeight: 800, color: '#334155', marginBottom: 8 }}>已保存素材</div>
+                  <div style={{ fontWeight: 800, color: '#334155', marginBottom: 8 }}>{text.savedAssets}</div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-                    <Pill bg="#fff0f6" color="#ff4f82">预算 {formatMoney(roomAssemblySnapshot.budget)}</Pill>
-                    <Pill bg="#ecfdf5" color="#047857">花费 {formatMoney(roomAssemblySnapshot.spent)}</Pill>
-                    <Pill>购买 {roomAssemblySnapshot.purchases?.length || 0} 件</Pill>
-                    <Pill>比例标尺 {Object.keys(roomAssemblySnapshot.sizeProfile || {}).length} 类</Pill>
+                    <Pill bg="#fff0f6" color="#ff4f82">{text.budget} {formatMoney(roomAssemblySnapshot.budget)}</Pill>
+                    <Pill bg="#ecfdf5" color="#047857">{text.spent} {formatMoney(roomAssemblySnapshot.spent)}</Pill>
+                    <Pill>{text.purchased} {roomAssemblySnapshot.purchases?.length || 0} {text.itemCount}</Pill>
+                    <Pill>{text.scaleProfile} {Object.keys(roomAssemblySnapshot.sizeProfile || {}).length} {text.classCount}</Pill>
                   </div>
                   <div style={{ display: 'grid', gap: 6 }}>
                     {roomAssemblySnapshot.items.map((item) => (
@@ -1882,7 +2139,7 @@ export default function HousingSocialPanel() {
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 14 }}>
               <div>
                 <div className="housing-modal-title" style={{ fontSize: 20, fontWeight: 800 }}>{editingHomeId ? text.modalEditHome : text.modalCustomHome}</div>
-                <div className="housing-modal-subtitle" style={{ fontSize: 13, marginTop: 4 }}>这里是少数情况才需要手动改的详细资料。</div>
+                <div className="housing-modal-subtitle" style={{ fontSize: 13, marginTop: 4 }}>{text.customHomeHint}</div>
               </div>
               <ActionButton icon={X} tone="neutral" onClick={() => { setShowCustomHomeEditor(false); setEditingHomeId(''); setHomeForm(emptyHome); }}>{text.cancel}</ActionButton>
             </div>

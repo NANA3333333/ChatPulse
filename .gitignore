@@ -2,6 +2,8 @@ node_modules/
 .env
 dist/
 build/
+release/
+release*/
 .DS_Store
 .qdrant-initialized
 
@@ -49,6 +51,8 @@ debug_exports/
 .codex-*
 .logs/
 tmp/
+QQ_*.png
+codex-clipboard-*.png
 design-qa.md
 room-assembly-*.png
 wardrobe-*.png
@@ -66,6 +70,7 @@ client/build_error.txt
 client/dom_output.txt
 client/*debug*.png
 client/playwright-*.png
+client/live2d-wallpaper-preview.html
 
 # Local docs / workflow exports
 agent_workflow.*

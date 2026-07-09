@@ -15,7 +15,7 @@ const TODAY_TASKS_EN = [
   'Rest earlier tonight',
 ];
 
-function PrivateChatJournalPanel({ contact, lang = 'zh', onOpenDiary }) {
+function PrivateChatJournalPanel({ lang = 'zh', onOpenDiary }) {
   const isEn = lang === 'en';
   const tasks = isEn ? TODAY_TASKS_EN : TODAY_TASKS_ZH;
 
@@ -59,7 +59,7 @@ function PrivateChatJournalPanel({ contact, lang = 'zh', onOpenDiary }) {
         <span>{isEn ? 'Remember' : '记一下'}</span>
         <p>
           {isEn
-            ? `The day is still moving. ${contact?.name || 'This chat'} can stay here when you need a slower place.`
+            ? 'Made 170 today. The move is not completely finished, but it is already moving forward.'
             : '今天赚到了一百七。搬家这件事还没完全结束，但已经在往前走了。'}
         </p>
       </section>

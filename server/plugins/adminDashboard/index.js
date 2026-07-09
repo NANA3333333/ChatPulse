@@ -5,6 +5,7 @@ const { clearMemoryCache } = require('../../memory');
 const { userDbCache, markUserDbDeleting, unmarkUserDbDeleting } = require('../../db');
 const { closeSchedulerDb } = require('../scheduler/db');
 const qdrant = require('../../qdrant');
+const { getUserDbPath, getUploadsDir, getTtsDir, getVectorRootDir, getPublicRootDir } = require('../../paths');
 
 const pendingUserDeletionJobs = new Map();
 
@@ -73,7 +74,7 @@ module.exports = function initAdminDashboard(app, context) {
     };
 
     const removeUserVectorArtifacts = async (userId) => {
-        const vectorsRoot = path.join(__dirname, '..', '..', 'data', 'vectors');
+        const vectorsRoot = getVectorRootDir();
         if (!fs.existsSync(vectorsRoot)) return;
         const entries = fs.readdirSync(vectorsRoot, { withFileTypes: true });
         for (const entry of entries) {
@@ -100,14 +101,14 @@ module.exports = function initAdminDashboard(app, context) {
         await removeUserVectorArtifacts(userId);
         clearMemoryCache(userId);
 
-        const dbPath = path.join(__dirname, '..', '..', 'data', `chatpulse_user_${userId}.db`);
+        const dbPath = getUserDbPath(userId);
         await removeFileIfExists(dbPath);
         await removeFileIfExists(`${dbPath}-wal`);
         await removeFileIfExists(`${dbPath}-shm`);
 
-        const userUploadDir = path.join(__dirname, '..', '..', 'public', 'uploads', 'users', String(userId));
+        const userUploadDir = path.join(getUploadsDir(), 'users', String(userId));
         await removeDirectoryIfExists(userUploadDir);
-        const userTtsDir = path.join(__dirname, '..', '..', 'data', 'tts', String(userId));
+        const userTtsDir = path.join(getTtsDir(), String(userId));
         await removeDirectoryIfExists(userTtsDir);
     };
 
@@ -192,7 +193,7 @@ module.exports = function initAdminDashboard(app, context) {
     };
 
     const getUserVectorStorageSize = (userId) => {
-        const vectorsRoot = path.join(__dirname, '..', '..', 'data', 'vectors');
+        const vectorsRoot = getVectorRootDir();
         if (!fs.existsSync(vectorsRoot)) return 0;
         const candidateDirs = new Set();
         candidateDirs.add(path.join(vectorsRoot, String(userId)));
@@ -222,8 +223,8 @@ module.exports = function initAdminDashboard(app, context) {
     };
 
     const getUserStats = (user) => {
-        const dbPath = path.join(__dirname, '..', '..', 'data', `chatpulse_user_${user.id}.db`);
-        const uploadsRoot = path.join(__dirname, '..', '..', 'public');
+        const dbPath = getUserDbPath(user.id);
+        const uploadsRoot = getPublicRootDir();
         const stats = {
             db_size_bytes: 0,
             vector_size_bytes: 0,

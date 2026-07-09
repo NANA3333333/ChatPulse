@@ -2,8 +2,9 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { normalizeServerFetchUrlResolved } = require('./httpGuards');
+const { getTtsDir } = require('./paths');
 
-const DATA_DIR = path.join(__dirname, '..', 'data', 'tts');
+const DATA_DIR = getTtsDir();
 const TTS_INTENT_REGEX = /\[TTS_INTENT:\s*([\s\S]*?)\]/i;
 const TTS_INTENT_GLOBAL_REGEX = /\[TTS_INTENT:\s*[\s\S]*?\]/gi;
 const TENCENT_VOICE_LIST_URL = 'https://cloud.tencent.com/document/product/1073/92668';

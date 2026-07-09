@@ -9,6 +9,7 @@
 
 const { getTokenCount } = require('./utils/tokenizer');
 const { getAdaptiveTailWindowSize } = require('./utils/contextWindow');
+const { getLocalDateTimeFacts } = require('./utils/timeFacts');
 const { getEmotionFeelingGuidance, getPhysicalFeelingGuidance } = require('./emotion');
 const initSocialHousingDb = require('./plugins/socialHousing/db');
 const { buildHousingPromptBlock, getHousingRuntimeContext } = require('./plugins/socialHousing/housingEffects');
@@ -862,8 +863,8 @@ function buildTimeBehaviorGuidance(timeOfDay, isWeekend, character, isGroupConte
 
 function buildCompactEmotionImpact(emotionGuidance) {
     let block = '';
-    block += `[角色当前情绪（你自己，不是用户）]: ${emotionGuidance.emotion.label} ${emotionGuidance.emotion.emoji}\n`;
-    block += compactLine('角色当前情绪感受（你自己）', emotionGuidance.feeling);
+    block += `[角色当前心情名称（你自己，从上一轮 EMOTION_STATE 自动保存）]: ${emotionGuidance.emotion.state}\n`;
+    block += compactLine('角色当前心情对应感受（由当前名称自动生成）', emotionGuidance.feeling);
     block += '[状态使用方式]: 上面这些情绪只描述你自己此刻的身体和注意力感受，不是用户 Nana 的状态；不要把这些数值或状态说成用户身上的情况。\n';
     return block;
 }
@@ -1020,6 +1021,7 @@ async function buildUniversalContext(context, character, recentInput = '', isGro
 
     // 1. Time Context
     const now = new Date();
+    const timeFacts = getLocalDateTimeFacts(now);
     const hour = now.getHours();
     const isWeekend = now.getDay() === 0 || now.getDay() === 6;
     let timeOfDay = '白天';
@@ -1028,7 +1030,9 @@ async function buildUniversalContext(context, character, recentInput = '', isGro
     else if (hour >= 14 && hour < 18) timeOfDay = '下午';
     else if (hour >= 18 && hour < 22) timeOfDay = '晚上';
     else timeOfDay = '深夜';
-    prompt += `当前时间: ${timeOfDay} (${now.toLocaleTimeString()})${isWeekend ? ', 周末' : ', 工作日'}\n`;
+    prompt += `当前日期: ${timeFacts.date}\n`;
+    prompt += `当前星期: ${timeFacts.weekday}\n`;
+    prompt += `当前时间: ${timeOfDay} (${timeFacts.time})${isWeekend ? ', 周末' : ', 工作日'}\n`;
     prompt += buildTimeBehaviorGuidance(timeOfDay, isWeekend, character, isGroupContext);
 
     const physicalCondition = getPhysicalCondition(character);
@@ -1110,9 +1114,6 @@ async function buildUniversalContext(context, character, recentInput = '', isGro
                 block += `[角色睡眠债（你自己）]: ${character.sleep_debt}/100\n`;
                 block += compactLine('睡眠影响', getSleepDebtHint(character.sleep_debt));
             }
-            if (character.mood !== undefined) block += `[角色当前整体心情（你自己）]: ${character.mood}/100\n`;
-            if (character.stress !== undefined) block += `[角色当前现实压力（你自己）]: ${character.stress}/100\n`;
-            if (character.social_need !== undefined) block += `[角色当前社交需求（你自己）]: ${character.social_need}/100\n`;
             if (character.health !== undefined) {
                 block += `[角色身体健康度（你自己）]: ${character.health}/100\n`;
                 block += compactLine('健康影响', getHealthHint(character.health));
@@ -1127,7 +1128,6 @@ async function buildUniversalContext(context, character, recentInput = '', isGro
             }
             block += buildHousingContextBlock(db, character);
             block += buildCompactEmotionImpact(emotionGuidance);
-            block += compactLine('压力影响', getPressureHint(character.pressure_level || 0));
             if (jealousyActive) {
                 block += '[嫉妒状态]: 强烈嫉妒已激活；语气可更尖锐、委屈、试探、索要独占关注。\n';
             }

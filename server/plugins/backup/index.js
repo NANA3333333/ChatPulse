@@ -3,16 +3,17 @@ const path = require('path');
 const multer = require('multer');
 const archiver = require('archiver');
 const unzipper = require('unzipper');
+const { getUploadsDir, getPublicRootDir, getTtsDir } = require('../../paths');
 
 module.exports = function (app, pluginContext) {
     const { getMemory, getUserDb, getEngine, getWsClients, authMiddleware } = pluginContext;
     const { clearMemoryCache } = require('../../memory');
     const { closeSchedulerDb } = require('../scheduler/db');
 
-    // Resolve path to the shared uploads directory (server/public/uploads)
-    const uploadsDir = path.join(__dirname, '..', '..', 'public', 'uploads');
+    // Resolve path to the shared uploads directory.
+    const uploadsDir = getUploadsDir();
     const tempUploadsDir = path.join(uploadsDir, 'temp');
-    const publicRoot = path.resolve(__dirname, '..', '..', 'public');
+    const publicRoot = path.resolve(getPublicRootDir());
     const uploadsRoot = path.resolve(uploadsDir);
 
     const toScopedMediaUploadRelativePath = (value, userId) => {
@@ -218,7 +219,7 @@ module.exports = function (app, pluginContext) {
             removeFileIfExists(`${dbPath}-wal`);
             removeFileIfExists(`${dbPath}-shm`);
             removeDirectoryIfExists(path.join(uploadsDir, 'users', String(userId)));
-            removeDirectoryIfExists(path.join(__dirname, '..', '..', 'data', 'tts', String(userId)));
+            removeDirectoryIfExists(path.join(getTtsDir(), String(userId)));
 
             // Also clear engine cache so stale DB references are purged
             engineCache.delete(userId);

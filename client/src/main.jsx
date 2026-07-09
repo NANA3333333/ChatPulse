@@ -1,11 +1,66 @@
-import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
 import { LanguageProvider } from './LanguageContext.jsx'
 import { AuthProvider } from './AuthContext.jsx'
 
-const CONFIGURED_API_URL = import.meta.env.VITE_API_URL || `${window.location.protocol}//${window.location.hostname}:8000/api`;
+const CONFIGURED_API_URL = import.meta.env.VITE_API_URL || `${window.location.origin}/api`;
+const ASSET_PRELOAD_RECOVERY_KEY = 'chatpulse:asset-preload-recovery:v1';
+const ASSET_PRELOAD_RECOVERY_COOLDOWN_MS = 30000;
+
+function isRecoverableAssetLoadError(error) {
+  const message = String(error?.message || error || '');
+  return /Unable to preload CSS|Failed to fetch dynamically imported module|Importing a module script failed|Failed to load module script|error loading dynamically imported module|Loading chunk \d+ failed/i.test(message);
+}
+
+function getAssetLoadErrorSignature(error) {
+  const message = String(error?.message || error || 'asset-load');
+  const assetUrl = message.match(/https?:\/\/[^\s)]+|\/assets\/[^\s)]+/i)?.[0];
+  return (assetUrl || message.slice(0, 180)).replace(/[^\w:./-]+/g, '_').slice(0, 220);
+}
+
+function scheduleAssetPreloadRecovery(error) {
+  if (typeof window === 'undefined') return false;
+  const signature = `${window.location.origin}${window.location.pathname}:${getAssetLoadErrorSignature(error)}`;
+  try {
+    const previous = JSON.parse(window.sessionStorage.getItem(ASSET_PRELOAD_RECOVERY_KEY) || 'null');
+    if (
+      previous?.signature === signature
+      && Date.now() - Number(previous.at || 0) < ASSET_PRELOAD_RECOVERY_COOLDOWN_MS
+    ) {
+      return false;
+    }
+    window.sessionStorage.setItem(ASSET_PRELOAD_RECOVERY_KEY, JSON.stringify({ signature, at: Date.now() }));
+  } catch {
+    return false;
+  }
+
+  console.warn('[asset-preload] Asset preload failed; suppressing the error and keeping the current view.', error);
+  return true;
+}
+
+window.addEventListener('vite:preloadError', (event) => {
+  const error = event?.payload || event?.detail || event?.reason || event?.error;
+  if (!isRecoverableAssetLoadError(error)) return;
+  event.preventDefault?.();
+  scheduleAssetPreloadRecovery(error);
+});
+
+window.addEventListener('error', (event) => {
+  const target = event?.target;
+  if (target && target !== window) {
+    const tagName = String(target.tagName || '').toUpperCase();
+    const rel = String(target.rel || '');
+    const href = target.href || target.src || '';
+    if ((tagName === 'LINK' || tagName === 'SCRIPT') && (/stylesheet|modulepreload/i.test(rel) || /\/assets\//i.test(href))) {
+      scheduleAssetPreloadRecovery(new Error(`Asset failed to load: ${href}`));
+    }
+    return;
+  }
+  if (isRecoverableAssetLoadError(event?.error || event?.message)) {
+    scheduleAssetPreloadRecovery(event.error || event.message);
+  }
+}, true);
 
 function getFetchUrl(resource) {
   const rawUrl = typeof resource === 'string' ? resource : (resource?.url || '');
@@ -68,11 +123,9 @@ window.fetch = async (...args) => {
 };
 
 createRoot(document.getElementById('root')).render(
-  <StrictMode>
-    <AuthProvider>
-      <LanguageProvider>
-        <App />
-      </LanguageProvider>
-    </AuthProvider>
-  </StrictMode>,
+  <AuthProvider>
+    <LanguageProvider>
+      <App />
+    </LanguageProvider>
+  </AuthProvider>,
 )

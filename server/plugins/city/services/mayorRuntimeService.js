@@ -1,5 +1,13 @@
 const { normalizeCityConfigValue } = require('../utils/inputGuards');
 
+const WEATHER_PRESET_DIRECTIVE = `== 天气事件预设约束 ==
+当你生成 type 为 "weather" 的城市事件时，必须在 effect 中写入以下两个字段：
+- "weather_preset": 只能是 "sunny"、"cloudy"、"rainy"、"windy"、"foggy"、"stormy" 之一
+- "weather_intensity": 只能是 "light"、"comfortable"、"heavy" 之一
+示例：
+{"type":"weather","title":"柔云慢行","emoji":"☁️","description":"天空被柔和云层覆盖。","effect":{"weather_preset":"cloudy","weather_intensity":"comfortable","district":"street"},"duration_hours":12}
+不要创造其他天气字段名或图片名。`;
+
 function hasMayorConfigValue(value) {
     return value !== undefined && value !== null && String(value).trim() !== '';
 }
@@ -107,7 +115,7 @@ ${activeQuests.length > 0 ? activeQuests.map(q => `  - ${q.emoji} ${q.title} (${
             }
             console.log(`[Mayor AI] 使用 ${aiChar.name} 的模型 (${aiChar.model_name})`);
 
-            const fullPrompt = `${mayorPrompt}\n\n${buildMayorContext(db)}`;
+            const fullPrompt = `${mayorPrompt}\n\n${WEATHER_PRESET_DIRECTIVE}\n\n${buildMayorContext(db)}`;
 
             console.log('[Mayor AI] 🏛️ 市长正在做决策...');
             const messages = [{ role: 'user', content: fullPrompt }];

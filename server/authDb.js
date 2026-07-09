@@ -1,8 +1,7 @@
 const Database = require('better-sqlite3');
-const path = require('path');
-const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+const { getDataDir, getMasterDbPath } = require('./paths');
 
 const INVITE_DEFAULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const SESSION_DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -10,13 +9,9 @@ const PASSWORD_MIN_LENGTH = 8;
 const MAX_FAILED_LOGINS = Math.max(1, Number(process.env.CP_MAX_FAILED_LOGINS || 8) || 8);
 const LOGIN_LOCK_MS = Math.max(60 * 1000, Number(process.env.CP_LOGIN_LOCK_MS || 15 * 60 * 1000) || 15 * 60 * 1000);
 
-const dataDir = path.join(__dirname, '..', 'data');
-if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-}
-
 // master.db is intended strictly for authentication and tracking which user maps to which personal db file
-const dbPath = path.join(dataDir, 'master.db');
+getDataDir();
+const dbPath = getMasterDbPath();
 const db = new Database(dbPath);
 
 db.pragma('journal_mode = WAL');
@@ -383,6 +378,12 @@ function getUserById(id) {
     return db.prepare('SELECT id, username, created_at, role, status, token_version, last_active_at FROM users WHERE id = ?').get(id);
 }
 
+function getUserByUsername(username) {
+    const lookup = String(username || '').trim().toLowerCase();
+    if (!lookup) return null;
+    return db.prepare('SELECT id, username, created_at, role, status, token_version, last_active_at FROM users WHERE username_norm = ? OR lower(username) = ?').get(lookup, lookup);
+}
+
 function generateInviteCode(options = {}) {
     // Use crypto for unpredictable invite codes (12 chars)
     const code = crypto.randomBytes(9).toString('base64url').substring(0, 12).toUpperCase();
@@ -675,6 +676,7 @@ module.exports = {
     verifyUser,
     updateOwnAccount,
     getUserById,
+    getUserByUsername,
     generateInviteCode,
     renewInviteCode,
     getInviteCodes,

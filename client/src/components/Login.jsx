@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAuth } from '../AuthContext';
+import { useLanguage } from '../LanguageContext';
 
 const PIXEL_ASSET_BASE = '/assets/ui/login-pixel';
 const WORDMARK_SLICES = [
@@ -47,12 +48,53 @@ function ChatPulseMark() {
 
 function Login({ apiUrl }) {
     const { login } = useAuth();
+    const { lang } = useLanguage();
+    const isEn = lang === 'en';
     const [isRegistering, setIsRegistering] = useState(false);
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [inviteCode, setInviteCode] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        const hash = String(window.location.hash || '').replace(/^#/, '');
+        const params = new URLSearchParams(hash);
+        const desktopToken = params.get('cp_desktop_token');
+        if (!desktopToken) return;
+
+        const nextUrl = `${window.location.pathname}${window.location.search}`;
+        window.history.replaceState(null, '', nextUrl || '/');
+
+        let cancelled = false;
+        const bootstrapDesktopSession = async () => {
+            setLoading(true);
+            setError('');
+            try {
+                const cleanApiUrl = apiUrl.replace(/\/api\/?$/, '');
+                const res = await fetch(`${cleanApiUrl}/api/desktop/session`, {
+                    method: 'POST',
+                    headers: { 'x-chatpulse-desktop-token': desktopToken }
+                });
+                const data = await res.json();
+                if (cancelled) return;
+                if (data.success) {
+                    login(data.token, data.user);
+                } else {
+                    setError(data.error || 'Desktop session failed');
+                }
+            } catch {
+                if (!cancelled) setError('Desktop session failed. Please restart ChatPulse.');
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        };
+
+        bootstrapDesktopSession();
+        return () => {
+            cancelled = true;
+        };
+    }, [apiUrl, login]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -94,7 +136,7 @@ function Login({ apiUrl }) {
 
                 <section className={`login-card ${isRegistering ? 'is-registering' : ''}`}>
                     <div className="login-card-inner">
-                        <div className="login-mode-switch" role="tablist" aria-label="Authentication mode">
+                        <div className="login-mode-switch" role="tablist" aria-label={isEn ? 'Authentication mode' : '登录方式'}>
                             <button
                                 type="button"
                                 role="tab"
@@ -102,7 +144,7 @@ function Login({ apiUrl }) {
                                 className={!isRegistering ? 'active' : ''}
                                 onClick={() => { setIsRegistering(false); setError(''); }}
                             >
-                                <span className="login-tab-text">登录</span>
+                                <span className="login-tab-text">{isEn ? 'Sign In' : '登录'}</span>
                             </button>
                             <button
                                 type="button"
@@ -111,14 +153,14 @@ function Login({ apiUrl }) {
                                 className={isRegistering ? 'active' : ''}
                                 onClick={() => { setIsRegistering(true); setError(''); }}
                             >
-                                <span className="login-tab-text">注册</span>
+                                <span className="login-tab-text">{isEn ? 'Sign Up' : '注册'}</span>
                             </button>
                         </div>
 
                         <form className="login-form" onSubmit={handleSubmit}>
                             <div className="input-group">
                                 <label htmlFor="login-username">
-                                    <span className="login-label-text">账号</span>
+                                    <span className="login-label-text">{isEn ? 'Account' : '账号'}</span>
                                 </label>
                                 <div className="login-input-shell is-account">
                                     <input
@@ -128,16 +170,16 @@ function Login({ apiUrl }) {
                                         autoComplete="username"
                                         value={username}
                                         onChange={(e) => setUsername(e.target.value.trim())}
-                                        placeholder="输入你的账号"
+                                        placeholder={isEn ? 'Enter your account' : '输入你的账号'}
                                     />
                                     <span className="login-placeholder-img" aria-hidden="true">
-                                        输入你的账号
+                                        {isEn ? 'Enter your account' : '输入你的账号'}
                                     </span>
                                 </div>
                             </div>
                             <div className="input-group">
                                 <label htmlFor="login-password">
-                                    <span className="login-label-text">密码</span>
+                                    <span className="login-label-text">{isEn ? 'Password' : '密码'}</span>
                                 </label>
                                 <div className="login-input-shell is-password">
                                     <input
@@ -147,10 +189,10 @@ function Login({ apiUrl }) {
                                         autoComplete={isRegistering ? 'new-password' : 'current-password'}
                                         value={password}
                                         onChange={(e) => setPassword(e.target.value)}
-                                        placeholder="输入密码"
+                                        placeholder={isEn ? 'Enter password' : '输入密码'}
                                     />
                                     <span className="login-placeholder-img" aria-hidden="true">
-                                        输入密码
+                                        {isEn ? 'Enter password' : '输入密码'}
                                     </span>
                                 </div>
                             </div>
@@ -158,8 +200,8 @@ function Login({ apiUrl }) {
                             {isRegistering && (
                                 <div className="input-group">
                                     <label htmlFor="login-invite">
-                                        <span className="login-label-text">邀请码</span>
-                                        <span className="login-hint-text">注册时必填</span>
+                                        <span className="login-label-text">{isEn ? 'Invite Code' : '邀请码'}</span>
+                                        <span className="login-hint-text">{isEn ? 'Required for sign-up' : '注册时必填'}</span>
                                     </label>
                                     <div className="login-input-shell is-invite">
                                         <input
@@ -167,11 +209,11 @@ function Login({ apiUrl }) {
                                             type="text"
                                             value={inviteCode}
                                             onChange={(e) => setInviteCode(e.target.value.trim())}
-                                            placeholder="输入邀请码"
+                                            placeholder={isEn ? 'Enter invite code' : '输入邀请码'}
                                             required
                                         />
                                         <span className="login-placeholder-img" aria-hidden="true">
-                                            输入邀请码
+                                            {isEn ? 'Enter invite code' : '输入邀请码'}
                                         </span>
                                     </div>
                                 </div>
@@ -181,7 +223,7 @@ function Login({ apiUrl }) {
 
                             <button type="submit" className="login-submit-btn" disabled={loading} aria-busy={loading}>
                                 {loading ? (
-                                    <span className="login-loading-pips" aria-label="加载中">
+                                    <span className="login-loading-pips" aria-label={isEn ? 'Loading' : '加载中'}>
                                         <i></i>
                                         <i></i>
                                         <i></i>
@@ -189,7 +231,7 @@ function Login({ apiUrl }) {
                                 ) : (
                                     <>
                                         <span className="login-submit-text">
-                                            {isRegistering ? '注册' : '登录'}
+                                            {isRegistering ? (isEn ? 'Sign Up' : '注册') : (isEn ? 'Sign In' : '登录')}
                                         </span>
                                         <span className="login-submit-pips" aria-hidden="true">
                                             <i></i>

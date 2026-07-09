@@ -6,6 +6,7 @@ const { callLLM } = require('./llm');
 const { getUserDb } = require('./db');
 const { buildUniversalContext } = require('./contextBuilder');
 const qdrant = require('./qdrant');
+const { getVectorIndexDir: buildVectorIndexDir } = require('./paths');
 const { getExpiredForgettingMemoryRows } = require('./memoryMaintenanceService');
 
 const LOCAL_EMBEDDING_MODEL = process.env.LOCAL_EMBEDDING_MODEL || 'Xenova/bge-m3';
@@ -253,15 +254,15 @@ async function getVectorIndex(userId, characterId) {
 }
 
 function getVectorIndexDir(userId, characterId) {
-    return path.join(__dirname, '..', 'data', 'vectors', LOCAL_EMBEDDING_INDEX_TAG, String(userId), String(characterId));
+    return buildVectorIndexDir(LOCAL_EMBEDDING_INDEX_TAG, userId, characterId);
 }
 
 function getLegacyVectorIndexDir(userId, characterId) {
-    return path.join(__dirname, '..', 'data', 'vectors', String(userId), String(characterId));
+    return buildVectorIndexDir(userId, characterId);
 }
 
 function getLegacyDefaultVectorIndexDir(characterId) {
-    return path.join(__dirname, '..', 'data', 'vectors', 'default', String(characterId));
+    return buildVectorIndexDir('default', characterId);
 }
 
 function getVectorIndexFile(dir) {
@@ -2950,62 +2951,6 @@ Output exactly in this JSON format (and nothing else):
         return null;
     }
 
-    async function extractHiddenState(character, recentMessages) {
-        const memoryConfig = resolveMemoryModelConfig(character);
-        if (!memoryConfig.endpoint || !memoryConfig.key || !memoryConfig.model) {
-            return null;
-        }
-
-        const contextText = recentMessages.map(m => `${m.role === 'user' ? 'User' : character.name}: ${m.content}`).join('\n');
-
-        const extractionPrompt = `
-You are analyzing a private chat between User and ${character.name}.
-Based ONLY on these recent messages, summarize what ${character.name}'s current hidden mood, secret thought, or unspoken attitude towards User is right now.
-Keep it under 30 words, and write it in the FIRST PERSON perspective of ${character.name}.
-Example: "I am secretly happy that User remembered my preference, but I want to pretend I don't care."
-
-Private Chat:
----
-${contextText}
----
-
-Output only the summary sentence, without quotes or extra explanation.
-`;
-
-        try {
-            const { content: responseText, usage } = await callLLM({
-                endpoint: memoryConfig.endpoint,
-                key: memoryConfig.key,
-                model: memoryConfig.model,
-                messages: [
-                    { role: 'system', content: 'You are an internal mood analyzer. You output ONLY the summarized first-person mindset.' },
-                    { role: 'user', content: extractionPrompt }
-                ],
-                maxTokens: MEMORY_SMALL_MODEL_MAX_TOKENS,
-                temperature: 0.3,
-                enableCache: true,
-                cacheDb: getDb(),
-                cacheType: 'memory_hidden_state',
-                cacheTtlMs: 7 * 24 * 60 * 60 * 1000,
-                cacheScope: `character:${character.id}`,
-                cacheCharacterId: character.id,
-                returnUsage: true
-            });
-            recordMemoryTokenUsage(character.id, 'memory_hidden_state', usage);
-
-            const hiddenState = responseText.trim();
-            if (hiddenState && hiddenState.length > 0 && hiddenState.length < 200) {
-                const db = getDb();
-                db.updateCharacterHiddenState(character.id, hiddenState);
-                console.log(`[Memory] Extracted hidden state for ${character.name}: ${hiddenState}`);
-                return hiddenState;
-            }
-        } catch (e) {
-            console.error(`[Memory] Hidden state extraction failed for ${character.id}:`, e.message);
-        }
-        return null;
-    }
-
     async function updateConversationDigest(character, options = {}) {
         const memoryConfig = resolveMemoryModelConfig(character);
         if (!memoryConfig.endpoint || !memoryConfig.key || !memoryConfig.model) {
@@ -4179,7 +4124,6 @@ Output exactly in this JSON format (and nothing else):
         refreshMemoryIndexEntries,
         searchMemories,
         extractMemoryFromContext,
-        extractHiddenState,
         formatConversationDigestForPrompt,
         formatGroupConversationDigestForPrompt,
         updateConversationDigest,

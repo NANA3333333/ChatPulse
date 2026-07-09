@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react';
 
-const CONFIGURED_API_URL = import.meta.env.VITE_API_URL || `${window.location.protocol}//${window.location.hostname}:8000/api`;
+const CONFIGURED_API_URL = import.meta.env.VITE_API_URL || `${window.location.origin}/api`;
+const authenticatedImageObjectUrls = new Map();
+const authenticatedImageRequests = new Map();
+let cleanupRegistered = false;
 
 function getConfiguredApiUrl() {
     return new URL(CONFIGURED_API_URL, window.location.origin);
@@ -27,6 +30,43 @@ function needsAuthenticatedFetch(src) {
     }
 }
 
+function registerObjectUrlCleanup() {
+    if (cleanupRegistered || typeof window === 'undefined') return;
+    cleanupRegistered = true;
+    window.addEventListener('beforeunload', () => {
+        authenticatedImageObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+        authenticatedImageObjectUrls.clear();
+        authenticatedImageRequests.clear();
+    });
+}
+
+function loadAuthenticatedImage(imageSrc, token) {
+    if (authenticatedImageObjectUrls.has(imageSrc)) {
+        return Promise.resolve(authenticatedImageObjectUrls.get(imageSrc));
+    }
+    if (authenticatedImageRequests.has(imageSrc)) {
+        return authenticatedImageRequests.get(imageSrc);
+    }
+
+    registerObjectUrlCleanup();
+    const request = fetch(imageSrc, { headers: { Authorization: `Bearer ${token}` } })
+        .then((response) => {
+            if (!response.ok) throw new Error(`Image request failed with ${response.status}`);
+            return response.blob();
+        })
+        .then((blob) => {
+            const objectUrl = URL.createObjectURL(blob);
+            authenticatedImageObjectUrls.set(imageSrc, objectUrl);
+            return objectUrl;
+        })
+        .finally(() => {
+            authenticatedImageRequests.delete(imageSrc);
+        });
+
+    authenticatedImageRequests.set(imageSrc, request);
+    return request;
+}
+
 function AuthenticatedImage({ src, fallbackSrc = '', onError, ...props }) {
     const imageSrc = String(src || '').trim();
     const [objectUrl, setObjectUrl] = useState('');
@@ -38,21 +78,15 @@ function AuthenticatedImage({ src, fallbackSrc = '', onError, ...props }) {
         if (!needsAuthenticatedFetch(imageSrc)) return undefined;
 
         let cancelled = false;
-        let nextObjectUrl = '';
         const token = localStorage.getItem('cp_token') || '';
         if (!token) {
             setFailed(true);
             return undefined;
         }
 
-        fetch(imageSrc, { headers: { Authorization: `Bearer ${token}` } })
-            .then((response) => {
-                if (!response.ok) throw new Error(`Image request failed with ${response.status}`);
-                return response.blob();
-            })
-            .then((blob) => {
+        loadAuthenticatedImage(imageSrc, token)
+            .then((nextObjectUrl) => {
                 if (cancelled) return;
-                nextObjectUrl = URL.createObjectURL(blob);
                 setObjectUrl(nextObjectUrl);
             })
             .catch(() => {
@@ -61,7 +95,6 @@ function AuthenticatedImage({ src, fallbackSrc = '', onError, ...props }) {
 
         return () => {
             cancelled = true;
-            if (nextObjectUrl) URL.revokeObjectURL(nextObjectUrl);
         };
     }, [imageSrc]);
 

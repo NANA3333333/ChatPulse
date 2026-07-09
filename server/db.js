@@ -1,6 +1,7 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+const { getDataDir, getUserDbPath } = require('./paths');
 
 const userDbCache = new Map();
 const deletingUserDbIds = new Set();
@@ -29,11 +30,8 @@ function getUserDb(userId) {
     }
     if (userDbCache.has(userId)) return userDbCache.get(userId);
 
-    const dataDir = path.join(__dirname, '..', 'data');
-    if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir, { recursive: true });
-    }
-    const dbPath = path.join(dataDir, `chatpulse_user_${userId}.db`);
+    getDataDir();
+    const dbPath = getUserDbPath(userId);
     const startupVacuumMarkerPath = `${dbPath}${DB_STARTUP_VACUUM_MARKER_SUFFIX}`;
     const db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
@@ -1922,6 +1920,7 @@ function getUserDb(userId) {
             return {
                 first_message_at: 0,
                 last_message_at: 0,
+                last_user_message_at: 0,
                 private_message_count: 0,
                 user_message_count: 0,
                 character_message_count: 0
@@ -1941,6 +1940,7 @@ function getUserDb(userId) {
                     THEN timestamp
                 END) AS first_valid_message_at,
                 MAX(CASE WHEN role IN ('user', 'character', 'assistant') AND timestamp > 0 THEN timestamp END) AS last_message_at,
+                MAX(CASE WHEN role = 'user' AND timestamp > 0 THEN timestamp END) AS last_user_message_at,
                 COUNT(CASE WHEN role IN ('user', 'character', 'assistant') THEN 1 END) AS private_message_count,
                 COUNT(CASE WHEN role = 'user' THEN 1 END) AS user_message_count,
                 COUNT(CASE WHEN role IN ('character', 'assistant') THEN 1 END) AS character_message_count
@@ -1951,6 +1951,7 @@ function getUserDb(userId) {
         return {
             first_message_at: Number(row.first_valid_message_at || row.first_message_at || 0),
             last_message_at: Number(row.last_message_at || 0),
+            last_user_message_at: Number(row.last_user_message_at || 0),
             private_message_count: Number(row.private_message_count || 0),
             user_message_count: Number(row.user_message_count || 0),
             character_message_count: Number(row.character_message_count || 0)

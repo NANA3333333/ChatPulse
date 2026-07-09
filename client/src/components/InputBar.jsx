@@ -68,7 +68,7 @@ function InputBar({ onSend, onTransfer }) {
     return (
         <div className="input-area">
             <div className="input-toolbar" style={{ position: 'relative' }}>
-                <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} title="Emoji">
+                <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} title={lang === 'en' ? 'Emoji' : '表情'}>
                     <Smile size={20} />
                 </button>
 

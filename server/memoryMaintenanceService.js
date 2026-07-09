@@ -112,8 +112,6 @@ const MEMORY_TEMPORAL_SIGNAL_TERMS = [
     '胃痛', '头痛', '失眠', '困', '疲惫', '焦虑', '崩溃', '心情', '压力',
     'today', 'yesterday', 'tomorrow', 'tonight', 'recent', 'now', 'temporary'
 ];
-const MEMORY_TIMELINE_CONFIDENCE_THRESHOLD = 0.5;
-const MEMORY_TIMELINE_FILTERS = new Set(['strong_time_bound', 'temporal_signal', 'all']);
 
 function clampNumber(value, fallback, min, max) {
     const parsed = Number(value);
@@ -2010,66 +2008,6 @@ function getMemoryTemporalSignalParams() {
     return MEMORY_TEMPORAL_SIGNAL_TERMS.map(term => `%${term}%`);
 }
 
-function normalizeMemoryTimelineFilter(value = 'strong_time_bound') {
-    const normalized = String(value || 'strong_time_bound').trim();
-    return MEMORY_TIMELINE_FILTERS.has(normalized) ? normalized : 'strong_time_bound';
-}
-
-function getMemoryStrongTimelineSql() {
-    const labels = Array.from(MEMORY_TEMPORAL_BINDING_LABELS);
-    return `(
-        COALESCE(NULLIF(temporal_label, ''), '') IN (${labels.map(() => '?').join(', ')})
-        AND COALESCE(temporal_confidence, 0) >= ?
-    )`;
-}
-
-function getMemoryStrongTimelineParams() {
-    return [...Array.from(MEMORY_TEMPORAL_BINDING_LABELS), MEMORY_TIMELINE_CONFIDENCE_THRESHOLD];
-}
-
-function getMemoryTimelineFilterClause(filter = 'strong_time_bound') {
-    const normalized = normalizeMemoryTimelineFilter(filter);
-    if (normalized === 'all') {
-        return {
-            filter: normalized,
-            where: '1 = 1',
-            params: [],
-            description: '调试模式：展示所有有时间位置的记忆，不代表正式时间线。'
-        };
-    }
-    if (normalized === 'temporal_signal') {
-        return {
-            filter: normalized,
-            where: getMemoryTemporalSignalSql(),
-            params: getMemoryTemporalSignalParams(),
-            description: '预筛模式：按关键词找疑似时间相关记忆，供二轮小模型标注使用。'
-        };
-    }
-    return {
-        filter: normalized,
-        where: getMemoryStrongTimelineSql(),
-        params: getMemoryStrongTimelineParams(),
-        description: `正式时间线：仅展示已被小模型标为时间强绑定、且置信度 >= ${MEMORY_TIMELINE_CONFIDENCE_THRESHOLD} 的记忆。`
-    };
-}
-
-function getFormalMemoryGroupSql() {
-    return "COALESCE(character_id, '') || '::' || COALESCE(NULLIF(consolidation_key, ''), '') || '::' || LOWER(TRIM(COALESCE(consolidation_summary, '')))";
-}
-
-function countFormalMemoryGroups(rawDb, where, params = []) {
-    const formalGroupExpr = getFormalMemoryGroupSql();
-    return Number(rawDb.prepare(`
-        SELECT COUNT(*) AS c
-        FROM (
-            SELECT 1
-            FROM memories
-            WHERE ${where.join(' AND ')}
-            GROUP BY ${formalGroupExpr}
-        ) formal_groups
-    `).get(...params)?.c || 0);
-}
-
 function normalizeMemoryTemporalBindingSource(value = 'new') {
     const normalized = String(value || 'new').trim().toLowerCase();
     if (normalized === 'temporal_signal' || normalized === 'new_temporal_signal') return 'new_temporal_signal';
@@ -2287,7 +2225,6 @@ function buildMemoryLibraryItem(row, charById, now = Date.now()) {
         temporal_anchor: row.temporal_anchor || '',
         temporal_confidence: Number(row.temporal_confidence || 0),
         temporal_reason: row.temporal_reason || '',
-        timeline_at: Number(row.formal_sort_at || row.source_ended_at || row.source_started_at || row.created_at || 0),
         is_archived: Number(row.is_archived || 0),
         maintenance_status: row.maintenance_status || 'pending',
         retention_score: retention.retention_score,
@@ -2561,13 +2498,8 @@ function getMemoryMaintenanceLibrary(rawDb, options = {}) {
     const showAll = parseBooleanFlag(options.all);
     const limitPerGroup = showAll ? null : clampMemoryLibraryLimit(options.limit_per_group, 28, 120);
     const forgettingLimit = showAll ? null : clampMemoryLibraryLimit(options.forgetting_limit, 70, 160);
-    const timelineShowAll = showAll || parseBooleanFlag(options.timeline_all);
-    const timelineLimit = timelineShowAll
-        ? null
-        : clampMemoryLibraryLimit(options.timeline_limit, Math.max(limitPerGroup || 36, 720), 3000);
     const characterId = String(options.character_id || '').trim();
     const temporalFilter = String(options.temporal_filter || 'all').trim();
-    const timelineFilter = normalizeMemoryTimelineFilter(options.timeline_filter || 'strong_time_bound');
     const sourceMode = String(options.source || 'new').trim() === 'legacy' ? 'legacy' : 'new';
     const characters = rawDb.prepare('SELECT id, name, avatar FROM characters ORDER BY name COLLATE NOCASE ASC').all();
     const charById = new Map(characters.map(c => [String(c.id), c]));
@@ -2632,50 +2564,6 @@ function getMemoryMaintenanceLibrary(rawDb, options = {}) {
         };
     }).filter(group => group.count > 0 || knownKeys.has(group.key));
 
-    const timelineBaseWhere = [
-        'COALESCE(is_archived, 0) = 0',
-        "COALESCE(NULLIF(consolidation_summary, ''), '') <> ''"
-    ];
-    const timelineBaseParams = [];
-    if (characterId) {
-        timelineBaseWhere.push('character_id = ?');
-        timelineBaseParams.push(characterId);
-    }
-    const timelineClause = getMemoryTimelineFilterClause(timelineFilter);
-    const timelineWhere = [...timelineBaseWhere, timelineClause.where];
-    const timelineParams = [...timelineBaseParams, ...timelineClause.params];
-    const formalGroupExpr = getFormalMemoryGroupSql();
-    const timelineCount = countFormalMemoryGroups(rawDb, timelineWhere, timelineParams);
-    const timelineSourceCount = Number(rawDb.prepare(`SELECT COUNT(*) AS c FROM memories WHERE ${timelineWhere.join(' AND ')}`).get(...timelineParams)?.c || 0);
-    const timelineSignalCount = countFormalMemoryGroups(rawDb, [...timelineBaseWhere, getMemoryTemporalSignalSql()], [...timelineBaseParams, ...getMemoryTemporalSignalParams()]);
-    const timelineStrongCount = timelineFilter === 'strong_time_bound'
-        ? timelineCount
-        : countFormalMemoryGroups(rawDb, [...timelineBaseWhere, getMemoryStrongTimelineSql()], [...timelineBaseParams, ...getMemoryStrongTimelineParams()]);
-    const timelineRows = rawDb.prepare(`
-        WITH eligible AS (
-            SELECT ${rowSelect},
-                   ${formalGroupExpr} AS formal_group_key,
-                   COALESCE(NULLIF(source_ended_at, 0), NULLIF(source_started_at, 0), NULLIF(created_at, 0), id) AS row_sort_at
-            FROM memories
-            WHERE ${timelineWhere.join(' AND ')}
-        ),
-        ranked AS (
-            SELECT eligible.*,
-                   MAX(row_sort_at) OVER (PARTITION BY formal_group_key) AS formal_sort_at,
-                   COUNT(*) OVER (PARTITION BY formal_group_key) AS source_count,
-                   GROUP_CONCAT(id) OVER (PARTITION BY formal_group_key) AS source_ids,
-                   SUM(COALESCE(retrieval_count, 0)) OVER (PARTITION BY formal_group_key) AS source_retrieval_count,
-                   MAX(COALESCE(importance, 0)) OVER (PARTITION BY formal_group_key) AS source_importance,
-                   ROW_NUMBER() OVER (PARTITION BY formal_group_key ORDER BY row_sort_at DESC, id DESC) AS formal_rank
-            FROM eligible
-        )
-        SELECT *
-        FROM ranked
-        WHERE formal_rank = 1
-        ORDER BY formal_sort_at DESC, id DESC
-        ${timelineShowAll ? '' : 'LIMIT ?'}
-    `).all(...timelineParams, ...(timelineShowAll ? [] : [timelineLimit]));
-
     const newLibrary = buildNewMemorySummaryLibrary(rawDb, charById, definitions, baseWhere, baseParams, {
         now,
         showAll,
@@ -2698,22 +2586,9 @@ function getMemoryMaintenanceLibrary(rawDb, options = {}) {
         all: showAll,
         source: sourceMode,
         temporal_filter: temporalFilter,
-        timeline_filter: timelineFilter,
         limit_per_group: limitPerGroup,
         forgetting_limit: forgettingLimit,
         categories,
-        timeline: {
-            filter: timelineClause.filter,
-            criteria: timelineClause.description,
-            count: timelineCount,
-            strong_time_bound_count: timelineStrongCount,
-            temporal_signal_count: timelineSignalCount,
-            source_count: timelineSourceCount,
-            confidence_threshold: MEMORY_TIMELINE_CONFIDENCE_THRESHOLD,
-            limit: timelineShowAll ? timelineCount : timelineLimit,
-            items: timelineRows.map(row => buildMemoryLibraryItem(row, charById, now)),
-            has_more: !timelineShowAll && timelineCount > timelineRows.length
-        },
         new_library: newLibrary,
         forgetting_groups: sourceMode === 'new' ? (newLibrary.forgetting_groups || []) : legacyForgettingGroups
     };

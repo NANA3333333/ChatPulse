@@ -1,6 +1,7 @@
 import React from 'react';
 import AvatarWithFrame from './AvatarWithFrame';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
+import { useLanguage } from '../LanguageContext';
 
 function hasPrimaryModelConfig(contact = {}) {
     return !!(
@@ -11,6 +12,9 @@ function hasPrimaryModelConfig(contact = {}) {
 }
 
 function ContactList({ apiUrl, contacts, activeId, onSelect, engineState = {} }) {
+    const { lang } = useLanguage();
+    const isEn = lang === 'en';
+
     return (
         <>
             {contacts.map((contact) => {
@@ -19,7 +23,7 @@ function ContactList({ apiUrl, contacts, activeId, onSelect, engineState = {} })
                 const isOnline = hasPrimaryModelConfig(contact);
                 const isWorking = isOnline && !!(state?.isThinking || state?.webSearchActive);
                 const statusText = countdown ? `${countdown}s` : contact.time;
-                const modelStatusText = isOnline ? '在线' : '离线';
+                const modelStatusText = isOnline ? (isEn ? 'Online' : '在线') : (isEn ? 'Offline' : '离线');
 
                 return (
                     <div
@@ -65,8 +69,8 @@ function ContactList({ apiUrl, contacts, activeId, onSelect, engineState = {} })
                                 {contact.lastMessage}
                                 {contact.unread > 0 && <span className="unread-badge">{contact.unread}</span>}
                                 {state?.isBlocked === 1 && (
-                                    <span style={{ marginLeft: 5, color: 'var(--danger)', fontSize: '11px' }} title="Blocked">
-                                        已拉黑
+                                    <span style={{ marginLeft: 5, color: 'var(--danger)', fontSize: '11px' }} title={isEn ? 'Blocked' : '已拉黑'}>
+                                        {isEn ? 'Blocked' : '已拉黑'}
                                     </span>
                                 )}
                             </div>

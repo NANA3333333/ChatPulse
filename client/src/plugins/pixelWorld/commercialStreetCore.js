@@ -22,13 +22,6 @@ const commercialV2PlayerApproachGap = 86;
 const commercialV2PlayerInitial = { x: 3500, y: 640, direction: 'front', frame: 0, moving: false, stepTime: 0 };
 const commercialV2PlayerCharacters = [
   {
-    id: 'char',
-    label: '角色',
-    spriteBase: '/assets/pixel-world/characters/char/frames-64x80',
-    assetVersion: 'char-v18-lightgray-suit-white-tie-ai-20260624',
-    initial: { x: 3760, y: 640, direction: 'front' }
-  },
-  {
     id: 'casual-boy-v1',
     label: '男孩',
     spriteBase: '/assets/pixel-world/characters/casual-boy-v1/frames-64x80',
@@ -41,10 +34,18 @@ const commercialV2PlayerCharacters = [
     spriteBase: '/assets/pixel-world/characters/pink-cardigan-girl-v1/frames-64x80',
     assetVersion: 'pink-cardigan-girl-v1-20260524',
     initial: { x: 3508, y: 640, direction: 'front' }
+  },
+  {
+    id: 'droplet-halo-mage-v1',
+    label: '水滴光环法师',
+    spriteBase: '/assets/pixel-world/characters/droplet-halo-mage-v1/frames-256x320',
+    assetVersion: 'droplet-halo-mage-v1-hidpi-256-side-coat-balanced-20260709',
+    visualScale: 1.25,
+    initial: { x: 3620, y: 640, direction: 'front' }
   }
 ];
 const commercialV2DefaultControlledPlayerId = 'pink-cardigan-girl-v1';
-const commercialV2RoleActorId = 'char';
+const commercialV2RoleActorId = 'casual-boy-v1';
 const commercialV2UserActorId = 'pink-cardigan-girl-v1';
 const commercialV2PlayerCharacterById = new Map(commercialV2PlayerCharacters.map((character) => [character.id, character]));
 const createCommercialV2PlayerState = (character) => ({
@@ -74,6 +75,8 @@ const commercialV2LayerStepZIndex = 20;
 const commercialV2PlayerLayerGap = 10;
 const commercialV2PlayerOccludedZReserve = 8;
 const commercialV2DepthZIndexScale = 10;
+const commercialV2SkyLayerZIndex = commercialV2LayerBaseZIndex - 3000;
+const commercialV2BackgroundSceneryLayerZIndex = commercialV2LayerBaseZIndex - 2500;
 const commercialV2GroundLayerZIndex = commercialV2LayerBaseZIndex - 2000;
 const commercialV2PathCellSize = 24;
 const commercialV2PathWaypointReach = 10;
@@ -1605,7 +1608,8 @@ function readStoredCommercialLayout() {
             ? normalizeCommercialV2Collision(migrateCommercialV2Collision(item.collision, asset), asset)
             : undefined,
           placeAnchor: normalizeCommercialV2PlaceAnchor(item.placeAnchor) || undefined,
-          groundLayer: item.groundLayer === true ? true : undefined
+          groundLayer: item.groundLayer === true ? true : undefined,
+          foregroundLayer: item.foregroundLayer === true ? true : undefined
         }, asset), stageSize);
       });
     if (!cleaned.length) {
@@ -1620,6 +1624,7 @@ function readStoredCommercialLayout() {
         .map((item) => clampBox(item, stageSize));
       cleaned = missingDefaultLifeProps.length ? [...cleaned, ...missingDefaultLifeProps] : cleaned;
     }
+    cleaned = normalizeCommercialV2ItemLayerOrder(cleaned, assetMap);
     const requiredSegmentCount = getRequiredSegmentCount(cleaned);
     if (requiredSegmentCount > segmentCount) {
       segmentCount = requiredSegmentCount;
@@ -1672,10 +1677,12 @@ function normalizeCommercialV2LayoutState(rawItems, segmentCountValue = commerci
           ? normalizeCommercialV2Collision(migrateCommercialV2Collision(item.collision, asset), asset)
           : undefined,
         placeAnchor: normalizeCommercialV2PlaceAnchor(item.placeAnchor) || undefined,
-        groundLayer: item.groundLayer === true ? true : undefined
+        groundLayer: item.groundLayer === true ? true : undefined,
+        foregroundLayer: item.foregroundLayer === true ? true : undefined
       }, asset), stageSize);
     });
   if (!cleaned.length) return null;
+  cleaned = normalizeCommercialV2ItemLayerOrder(cleaned, assetMap);
   const requiredSegmentCount = getRequiredSegmentCount(cleaned);
   if (requiredSegmentCount > segmentCount) {
     segmentCount = requiredSegmentCount;
@@ -1733,7 +1740,7 @@ function getBuiltInDefaultCommercialItems() {
   const assetMap = new Map(commercialV2AssetCatalog.map((asset) => [asset.id, asset]));
   const segmentCount = getRequiredSegmentCount(_commercialV2LegacyDefaultLayout);
   const stageSize = { width: getCommercialV2StageSize(segmentCount).width, height: 1024 };
-  return _commercialV2LegacyDefaultLayout.map((item) => {
+  const items = _commercialV2LegacyDefaultLayout.map((item) => {
     const asset = assetMap.get(item.assetId);
     return clampBox(normalizeCommercialV2ItemAspect({
       ...item,
@@ -1742,6 +1749,7 @@ function getBuiltInDefaultCommercialItems() {
         : undefined
     }, asset), stageSize);
   });
+  return normalizeCommercialV2ItemLayerOrder(items, assetMap);
 }
 
 function getDefaultCommercialLayoutState() {
@@ -1841,12 +1849,51 @@ function isCommercialV2StreetCruiseRoadAsset(assetId) {
     || id === 'road_cracked_asphalt_patch';
 }
 
+function isCommercialV2SkyLayerAsset(asset) {
+  return asset?.type === '天空';
+}
+
+function isCommercialV2RoadGroundLayerAsset(asset) {
+  return asset?.type === '道路';
+}
+
+function isCommercialV2BackgroundSceneryAsset(asset) {
+  return String(asset?.id || '').startsWith('greenery_');
+}
+
+function isCommercialV2BackgroundSceneryItem(item, asset) {
+  if (!item || !asset || item.foregroundLayer === true) return false;
+  return item.groundLayer === true || isCommercialV2BackgroundSceneryAsset(asset);
+}
+
 function isCommercialV2GroundLayerAsset(asset) {
-  return asset?.type === '天空' || asset?.type === '道路';
+  return isCommercialV2SkyLayerAsset(asset) || isCommercialV2RoadGroundLayerAsset(asset);
 }
 
 function isCommercialV2GroundLayerItem(item, asset) {
-  return Boolean(item?.groundLayer) || isCommercialV2GroundLayerAsset(asset);
+  return Boolean(asset && (
+    isCommercialV2GroundLayerAsset(asset)
+    || isCommercialV2BackgroundSceneryItem(item, asset)
+  ));
+}
+
+function getCommercialV2ItemLayerRank(item, asset) {
+  if (isCommercialV2SkyLayerAsset(asset)) return 0;
+  if (isCommercialV2BackgroundSceneryItem(item, asset)) return 1;
+  if (isCommercialV2RoadGroundLayerAsset(asset)) return 2;
+  return 3;
+}
+
+function normalizeCommercialV2ItemLayerOrder(items, assetById = null) {
+  const assetMap = assetById || new Map(commercialV2AssetCatalog.map((asset) => [asset.id, asset]));
+  return items
+    .map((item, index) => ({
+      item,
+      index,
+      rank: getCommercialV2ItemLayerRank(item, assetMap.get(item.assetId))
+    }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map(({ item }) => item);
 }
 
 function isCommercialV2DynamicOcclusionItem(item, asset) {
@@ -2207,9 +2254,9 @@ function getCommercialV2SortY(item, asset) {
 }
 
 function getCommercialV2ItemRenderZIndex(layerIndex, item, asset) {
-  if (asset && isCommercialV2GroundLayerItem(item, asset)) {
-    return commercialV2GroundLayerZIndex + layerIndex;
-  }
+  if (isCommercialV2SkyLayerAsset(asset)) return commercialV2SkyLayerZIndex + layerIndex;
+  if (isCommercialV2BackgroundSceneryItem(item, asset)) return commercialV2BackgroundSceneryLayerZIndex + layerIndex;
+  if (isCommercialV2RoadGroundLayerAsset(asset)) return commercialV2GroundLayerZIndex + layerIndex;
   return getCommercialV2ItemZIndex(layerIndex);
 }
 
@@ -2316,6 +2363,9 @@ function serializeCommercialV2Item(item, asset) {
   if (item.groundLayer === true) {
     next.groundLayer = true;
   }
+  if (item.foregroundLayer === true) {
+    next.foregroundLayer = true;
+  }
   const collision = normalizeCommercialV2Collision(item.collision, asset);
   const hasManualCollision = item.collision && typeof item.collision === 'object';
   if (collision.enabled || hasManualCollision || (asset && !isCommercialV2GroundLayerAsset(asset))) {
@@ -2421,6 +2471,8 @@ export {
   commercialV2PlayerLayerGap,
   commercialV2PlayerOccludedZReserve,
   commercialV2DepthZIndexScale,
+  commercialV2SkyLayerZIndex,
+  commercialV2BackgroundSceneryLayerZIndex,
   commercialV2GroundLayerZIndex,
   commercialV2PathCellSize,
   commercialV2PathWaypointReach,
@@ -2492,8 +2544,12 @@ export {
   isCommercialV2WalkableAsset,
   isCommercialV2MainRoadAsset,
   isCommercialV2StreetCruiseRoadAsset,
+  isCommercialV2BackgroundSceneryAsset,
+  isCommercialV2BackgroundSceneryItem,
   isCommercialV2GroundLayerAsset,
   isCommercialV2GroundLayerItem,
+  getCommercialV2ItemLayerRank,
+  normalizeCommercialV2ItemLayerOrder,
   isCommercialV2DynamicOcclusionItem,
   canCommercialV2ItemCollisionTakeEffect,
   getCommercialV2PlaceLink,

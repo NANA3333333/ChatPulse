@@ -97,6 +97,8 @@ function MemoryRecallDisclosure({ memories = [], expanded = false }) {
 }
 
 function BlockedSystemMessage({ name }) {
+    const { lang } = useLanguage();
+    const isEn = lang === 'en';
     return (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', margin: '20px 0', gap: '8px' }}>
             <div style={{
@@ -105,10 +107,10 @@ function BlockedSystemMessage({ name }) {
                 borderRadius: '10px', padding: '10px 18px',
                 color: '#c0392b', fontSize: '13px', fontWeight: '500'
             }}>
-                🚫 {name} 已将你拉黑。消息已发出，但对方不会收到。
+                🚫 {isEn ? `${name} has blocked you. The message was sent, but they will not receive it.` : `${name} 已将你拉黑。消息已发出，但对方不会收到。`}
             </div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                尝试转账来解锁对话。
+                {isEn ? 'Try sending a transfer to unlock the conversation.' : '尝试转账来解锁对话。'}
             </div>
         </div>
     );
@@ -161,11 +163,11 @@ function getCityOutreachLogId(message) {
     return Number.isInteger(id) && id > 0 ? id : 0;
 }
 
-async function resolveCollapsedCityLogId({ apiUrl, message, content }) {
+async function resolveCollapsedCityLogId({ apiUrl, message, content, lang }) {
     const response = await fetch(`${apiUrl}/city/logs?limit=all`, { headers: buildAuthHeaders() });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.success) {
-        throw new Error(data.error || '无法读取商业街日志');
+        throw new Error(data.error || (lang === 'en' ? 'Unable to load city logs' : '无法读取商业街日志'));
     }
     const exactContent = String(content || '').trim();
     const rows = Array.isArray(data.logs) ? data.logs : [];
@@ -194,8 +196,8 @@ function CollapsedCityOutreachBubble({ message, content, apiUrl }) {
         setRetrying(true);
         setError('');
         try {
-            const resolvedLogId = logId || await resolveCollapsedCityLogId({ apiUrl, message, content });
-            if (!resolvedLogId) throw new Error('找不到对应的商业街活动记录');
+            const resolvedLogId = logId || await resolveCollapsedCityLogId({ apiUrl, message, content, lang });
+            if (!resolvedLogId) throw new Error(lang === 'en' ? 'No matching city activity record found' : '找不到对应的商业街活动记录');
             const response = await fetch(`${apiUrl}/city/logs/${resolvedLogId}/reroll`, {
                 method: 'POST',
                 headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
@@ -203,7 +205,7 @@ function CollapsedCityOutreachBubble({ message, content, apiUrl }) {
             });
             const data = await response.json().catch(() => ({}));
             if (!response.ok || !data.success) {
-                throw new Error(data.error || '商业街活动重试失败');
+                throw new Error(data.error || (lang === 'en' ? 'Failed to retry city activity' : '商业街活动重试失败'));
             }
             window.dispatchEvent(new CustomEvent('city_update', {
                 detail: { characterId: message.character_id }
@@ -680,13 +682,13 @@ function MessageBubble({ message, avatar, avatarFrame, characterName, apiUrl, on
                     )}
                 </div>
                 {message.isBlocked && (
-                    <div className="message-blocked-icon" title="消息已发出，但被对方拒收了。">
+                    <div className="message-blocked-icon" title={lang === 'en' ? 'The message was sent, but the recipient rejected it.' : '消息已发出，但被对方拒收了。'}>
                         <AlertCircle size={20} color="var(--danger)" />
                     </div>
                 )}
             </div>
             {message.isBlocked && isUser && (
-                <BlockedSystemMessage name={characterName || '对方'} />
+                <BlockedSystemMessage name={characterName || (lang === 'en' ? 'the other person' : '对方')} />
             )}
         </>
     );
