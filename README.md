@@ -2,7 +2,7 @@
 
 ## English
 
-ChatPulse is a local-first AI social simulation desktop app. The main branch is the product trunk: deploying the current repository should give you the current ChatPulse desktop experience, without Nana's local runtime data.
+ChatPulse is a local-first AI social simulation desktop app. The main branch is the product trunk: deploying the current repository should give you the current ChatPulse desktop experience, without any machine-local runtime data.
 
 The app is not a simple chat demo. It combines private chat, group chat, long-term memory, secret journals, character state, relationships, economy, a commercial street, pixel rooms, housing, a Windows-like desktop shell, notifications, quick settings, and experimental MCP tools into one local world.
 
@@ -44,7 +44,7 @@ Requirements:
 Install:
 
 ```bash
-git clone https://github.com/NANA3333333/ChatPulse.git
+git clone <repository-url>
 cd ChatPulse
 npm run setup
 ```
@@ -61,12 +61,7 @@ Default local URLs:
 - Vite dev client: [http://127.0.0.1:5173](http://127.0.0.1:5173)
 - Qdrant: [http://127.0.0.1:6333](http://127.0.0.1:6333)
 
-Default first local root account for a fresh data directory:
-
-```text
-Username: Nana
-Password: 12345
-```
+Fresh installs create a local root account during first boot. Set `ADMIN_PASSWORD` in `server/.env` before first initialization if you want a fixed first-run password; otherwise the server generates one and prints it once in the startup log.
 
 Windows helpers:
 
@@ -217,7 +212,7 @@ Current important guarantees:
 
 ChatPulse uses **CC BY-NC-ND 4.0**.
 
-You may share it with attribution to `NANA3333333 / Nana` and the original repository link. Commercial use and modified redistribution are not allowed.
+You may share it with attribution to the original repository link. Commercial use and modified redistribution are not allowed.
 
 See [LICENSE](./LICENSE) and the [Creative Commons license page](https://creativecommons.org/licenses/by-nc-nd/4.0/).
 
@@ -225,7 +220,7 @@ See [LICENSE](./LICENSE) and the [Creative Commons license page](https://creativ
 
 ## 中文
 
-ChatPulse 是一个本地优先的 AI 社交模拟桌面应用。主分支就是产品主干：部署当前仓库，出来的就应该是当前 ChatPulse 桌面版，但不会包含 Nana 本机的运行数据。
+ChatPulse 是一个本地优先的 AI 社交模拟桌面应用。主分支就是产品主干：部署当前仓库，出来的就应该是当前 ChatPulse 桌面版，但不会包含任何本机运行数据。
 
 它不是一个普通聊天 demo。它把私聊、群聊、长期记忆、秘密日记、角色状态、关系、经济、商业街、像素小屋、住房系统、类 Windows 桌面壳、通知中心、快捷设置和 MCP 实验工具放进同一个本地世界。
 
@@ -267,7 +262,7 @@ ChatPulse 是一个本地优先的 AI 社交模拟桌面应用。主分支就是
 安装：
 
 ```bash
-git clone https://github.com/NANA3333333/ChatPulse.git
+git clone <repository-url>
 cd ChatPulse
 npm run setup
 ```
@@ -284,12 +279,7 @@ npm run dev
 - Vite 开发前端：[http://127.0.0.1:5173](http://127.0.0.1:5173)
 - Qdrant：[http://127.0.0.1:6333](http://127.0.0.1:6333)
 
-全新本地数据目录首次启动时的默认 root 账号：
-
-```text
-账号：Nana
-密码：12345
-```
+全新本地数据目录首次启动时会创建本地 root 账号。如果希望首次运行密码固定，请在初始化前设置 `server/.env` 里的 `ADMIN_PASSWORD`；否则服务器会生成一次性初始密码，并只在启动日志里打印一次。
 
 Windows 辅助脚本：
 
@@ -440,6 +430,6 @@ npm run doctor
 
 ChatPulse 使用 **CC BY-NC-ND 4.0**。
 
-可以转载和分享，但必须注明 `NANA3333333 / Nana` 和原始仓库链接。禁止商用，禁止修改后再发布。
+可以转载和分享，但必须注明原始仓库链接。禁止商用，禁止修改后再发布。
 
 完整许可见 [LICENSE](./LICENSE) 和 [Creative Commons 官方页面](https://creativecommons.org/licenses/by-nc-nd/4.0/)。
