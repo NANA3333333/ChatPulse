@@ -2,7 +2,7 @@
 
 ## English
 
-ChatPulse is a local-first AI social simulation desktop app. The main branch is the product trunk: deploying the current repository should give you the current ChatPulse desktop experience, without any machine-local runtime data.
+ChatPulse is a local-first AI social simulation desktop app.
 
 The app is not a simple chat demo. It combines private chat, group chat, long-term memory, secret journals, character state, relationships, economy, a commercial street, pixel rooms, housing, a Windows-like desktop shell, notifications, quick settings, and experimental MCP tools into one local world.
 
@@ -18,20 +18,6 @@ The app is not a simple chat demo. It combines private chat, group chat, long-te
 - Pixel world tools for commercial street layout, room assets, furniture, character movement, and behavior tree debugging.
 - Housing system with listings, recommendations, viewings, signing, rent, and private chat feedback.
 - Local admin, backups, restore, MCP Lab, media upload, and safety boundaries.
-
-### Main Branch Policy
-
-There is one product trunk. We do not maintain separate release branches as separate product states. Pushes to the main trunk should represent the current intended app experience.
-
-Local runtime data is not part of the deployed product:
-
-- user databases
-- uploaded private files
-- local logs
-- generated runtime secrets
-- local Qdrant data
-
-Those are created or attached at runtime on each machine.
 
 ### Quick Start
 
@@ -220,7 +206,7 @@ See [LICENSE](./LICENSE) and the [Creative Commons license page](https://creativ
 
 ## 中文
 
-ChatPulse 是一个本地优先的 AI 社交模拟桌面应用。主分支就是产品主干：部署当前仓库，出来的就应该是当前 ChatPulse 桌面版，但不会包含任何本机运行数据。
+ChatPulse 是一个本地优先的 AI 社交模拟桌面应用。
 
 它不是一个普通聊天 demo。它把私聊、群聊、长期记忆、秘密日记、角色状态、关系、经济、商业街、像素小屋、住房系统、类 Windows 桌面壳、通知中心、快捷设置和 MCP 实验工具放进同一个本地世界。
 
@@ -236,20 +222,6 @@ ChatPulse 是一个本地优先的 AI 社交模拟桌面应用。主分支就是
 - 像素世界工具支持商业街布局、房间素材、家具、角色移动和行为树调试。
 - 住房系统支持房源、推荐、看房、签约、租金和私聊反馈。
 - 本地管理、备份恢复、MCP Lab、媒体上传和安全边界仍然保留。
-
-### 主干策略
-
-项目只有一个产品主干。我们不把很多分支当成不同产品版本长期维护。推到主干的内容，就应该代表当前想要部署和启动的样子。
-
-本地运行数据不属于部署产物：
-
-- 用户数据库
-- 私有上传文件
-- 本地日志
-- 运行时生成的密钥
-- 本地 Qdrant 数据
-
-这些会在每台机器运行时创建或挂载，不进仓库。
 
 ### 快速开始
 
