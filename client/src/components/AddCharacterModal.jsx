@@ -3,32 +3,34 @@ import { Check, Dices, Laptop, RefreshCw, Sparkles, UserRound, Wand2, X } from '
 import { useLanguage } from '../LanguageContext';
 import { LOCAL_OLLAMA_MODEL_PRESET, withLocalModelOption } from '../utils/localModelPreset';
 
-const PACK_ROOT = '/assets/pixel-world/characters/rpg-hair-clothing-action-pack-v1';
-
-const HAIRS = [
-    { id: '01_soft_bob', label: 'Soft Bob' },
-    { id: '02_long_layered', label: 'Long Layered' },
-    { id: '03_high_ponytail', label: 'High Ponytail' },
-    { id: '04_low_twin_tails', label: 'Low Twin Tails' },
-    { id: '05_low_side_ponytail', label: 'Side Ponytail' },
-    { id: '06_tousled_short', label: 'Tousled Short' },
-    { id: '07_fluffy_short', label: 'Fluffy Short' }
+const CHARACTER_PRESETS = [
+    {
+        id: 'pink-cardigan-girl-v1',
+        label: 'Pink Cardigan',
+        spriteBase: '/assets/pixel-world/characters/pink-cardigan-girl-v1/frames-64x80',
+        assetVersion: 'pink-cardigan-girl-v1-20260524'
+    },
+    {
+        id: 'casual-boy-v1',
+        label: 'Casual Boy',
+        spriteBase: '/assets/pixel-world/characters/casual-boy-v1/frames-64x80',
+        assetVersion: 'casual-boy-v1-20260524'
+    }
 ];
 
-const OUTFITS = [
-    { id: '01_alchemist_workwear', label: 'Alchemist' },
-    { id: '02_sailor_adventurer', label: 'Sailor' },
-    { id: '03_royal_page', label: 'Royal Page' },
-    { id: '04_winter_jacket', label: 'Winter' },
-    { id: '05_bard_scout', label: 'Bard Scout' }
+const LOOKS = [
+    { id: 'default', label: 'Default' }
 ];
 
-const ACTIONS = ['walk', 'run', 'shy', 'cry', 'crouch', 'combat'];
+const ACTIONS = ['walk'];
 const DIRECTIONS = ['front', 'left', 'right', 'back'];
-const FRAMES = ['pose_01', 'pose_02', 'pose_03', 'pose_04'];
+const FRAMES = ['idle', 'step_a', 'passing', 'step_b'];
 
-function getFrameSrc(hairId, outfitId, action = 'walk', direction = 'front', frame = 'pose_01') {
-    return `${PACK_ROOT}/hairstyles/${hairId}/outfits/${outfitId}/frames/${action}/${direction}/${direction}_${action}_${frame}.png`;
+function getFrameSrc(characterId, _lookId, action = 'walk', direction = 'front', frame = 'idle') {
+    const preset = CHARACTER_PRESETS.find(item => item.id === characterId) || CHARACTER_PRESETS[0];
+    const resolvedDirection = DIRECTIONS.includes(direction) ? direction : 'front';
+    const resolvedFrame = FRAMES.includes(frame) ? frame : 'idle';
+    return `${preset.spriteBase}/${resolvedDirection}_walk_${resolvedFrame}.png?v=${preset.assetVersion}`;
 }
 
 function getRandomItem(items) {
@@ -37,11 +39,11 @@ function getRandomItem(items) {
 
 function AddCharacterModal({ isOpen, onClose, onAdd, apiUrl }) {
     const { t, lang } = useLanguage();
-    const [selectedHair, setSelectedHair] = useState(HAIRS[0].id);
-    const [selectedOutfit, setSelectedOutfit] = useState(OUTFITS[0].id);
+    const [selectedCharacter, setSelectedCharacter] = useState(CHARACTER_PRESETS[0].id);
+    const [selectedLook, setSelectedLook] = useState(LOOKS[0].id);
     const [previewAction, setPreviewAction] = useState('walk');
     const [previewDirection, setPreviewDirection] = useState('front');
-    const defaultSpriteSrc = getFrameSrc(HAIRS[0].id, OUTFITS[0].id);
+    const defaultSpriteSrc = getFrameSrc(CHARACTER_PRESETS[0].id, LOOKS[0].id);
     const [avatarIsCustom, setAvatarIsCustom] = useState(false);
     const [formData, setFormData] = useState({
         id: '',
@@ -71,39 +73,39 @@ function AddCharacterModal({ isOpen, onClose, onAdd, apiUrl }) {
     const modelOptions = React.useMemo(() => withLocalModelOption(modelList), [modelList]);
 
     const selectedSpriteSrc = useMemo(
-        () => getFrameSrc(selectedHair, selectedOutfit, 'walk', 'front', 'pose_01'),
-        [selectedHair, selectedOutfit]
+        () => getFrameSrc(selectedCharacter, selectedLook, 'walk', 'front', 'idle'),
+        [selectedCharacter, selectedLook]
     );
 
-    const selectedHairLabel = HAIRS.find(item => item.id === selectedHair)?.label || selectedHair;
-    const selectedOutfitLabel = OUTFITS.find(item => item.id === selectedOutfit)?.label || selectedOutfit;
+    const selectedCharacterLabel = CHARACTER_PRESETS.find(item => item.id === selectedCharacter)?.label || selectedCharacter;
+    const selectedLookLabel = LOOKS.find(item => item.id === selectedLook)?.label || selectedLook;
 
     if (!isOpen) return null;
 
-    const updateAvatarFromDressup = (hairId, outfitId) => {
+    const updateAvatarFromDressup = (characterId, lookId) => {
         if (avatarIsCustom) return;
         setFormData(prev => ({
             ...prev,
-            avatar: getFrameSrc(hairId, outfitId, 'walk', 'front', 'pose_01')
+            avatar: getFrameSrc(characterId, lookId, 'walk', 'front', 'idle')
         }));
     };
 
-    const selectHair = (hairId) => {
-        setSelectedHair(hairId);
-        updateAvatarFromDressup(hairId, selectedOutfit);
+    const selectCharacter = (characterId) => {
+        setSelectedCharacter(characterId);
+        updateAvatarFromDressup(characterId, selectedLook);
     };
 
-    const selectOutfit = (outfitId) => {
-        setSelectedOutfit(outfitId);
-        updateAvatarFromDressup(selectedHair, outfitId);
+    const selectLook = (lookId) => {
+        setSelectedLook(lookId);
+        updateAvatarFromDressup(selectedCharacter, lookId);
     };
 
     const randomizeDressup = () => {
-        const nextHair = getRandomItem(HAIRS).id;
-        const nextOutfit = getRandomItem(OUTFITS).id;
-        setSelectedHair(nextHair);
-        setSelectedOutfit(nextOutfit);
-        updateAvatarFromDressup(nextHair, nextOutfit);
+        const nextCharacter = getRandomItem(CHARACTER_PRESETS).id;
+        const nextLook = getRandomItem(LOOKS).id;
+        setSelectedCharacter(nextCharacter);
+        setSelectedLook(nextLook);
+        updateAvatarFromDressup(nextCharacter, nextLook);
     };
 
     const useSelectedSpriteAsAvatar = () => {
@@ -240,14 +242,14 @@ function AddCharacterModal({ isOpen, onClose, onAdd, apiUrl }) {
                     <section className="dressup-wardrobe-panel" aria-label={lang === 'en' ? 'Wardrobe' : '换装'}>
                         <div className="dressup-stage">
                             <div className="dressup-stage-toolbar">
-                                <span>{selectedHairLabel} / {selectedOutfitLabel}</span>
+                                <span>{selectedCharacterLabel} / {selectedLookLabel}</span>
                                 <button type="button" className="dressup-mini-button" onClick={randomizeDressup}>
                                     <Dices size={15} />
                                     {lang === 'en' ? 'Random' : '随机'}
                                 </button>
                             </div>
                             <div className="dressup-sprite-stage">
-                                <img src={getFrameSrc(selectedHair, selectedOutfit, previewAction, previewDirection, 'pose_01')} alt="" />
+                                <img src={getFrameSrc(selectedCharacter, selectedLook, previewAction, previewDirection, 'idle')} alt="" />
                             </div>
                             <div className="dressup-preview-controls">
                                 {ACTIONS.map(action => (
@@ -273,14 +275,14 @@ function AddCharacterModal({ isOpen, onClose, onAdd, apiUrl }) {
                         <div className="dressup-picker-group">
                             <div className="dressup-picker-heading">
                                 <UserRound size={16} />
-                                <span>{lang === 'en' ? 'Hair' : '发型'}</span>
+                                <span>{lang === 'en' ? 'Character' : '角色'}</span>
                             </div>
                             <div className="dressup-tile-grid hair-grid">
-                                {HAIRS.map(hair => (
-                                    <button key={hair.id} type="button" className={selectedHair === hair.id ? 'selected' : ''} onClick={() => selectHair(hair.id)} title={hair.label}>
-                                        <img src={getFrameSrc(hair.id, selectedOutfit)} alt="" />
-                                        <span>{hair.label}</span>
-                                        {selectedHair === hair.id && <Check size={14} />}
+                                {CHARACTER_PRESETS.map(character => (
+                                    <button key={character.id} type="button" className={selectedCharacter === character.id ? 'selected' : ''} onClick={() => selectCharacter(character.id)} title={character.label}>
+                                        <img src={getFrameSrc(character.id, selectedLook)} alt="" />
+                                        <span>{character.label}</span>
+                                        {selectedCharacter === character.id && <Check size={14} />}
                                     </button>
                                 ))}
                             </div>
@@ -289,14 +291,14 @@ function AddCharacterModal({ isOpen, onClose, onAdd, apiUrl }) {
                         <div className="dressup-picker-group">
                             <div className="dressup-picker-heading">
                                 <Sparkles size={16} />
-                                <span>{lang === 'en' ? 'Outfit' : '服装'}</span>
+                                <span>{lang === 'en' ? 'Style' : '款式'}</span>
                             </div>
                             <div className="dressup-tile-grid outfit-grid">
-                                {OUTFITS.map(outfit => (
-                                    <button key={outfit.id} type="button" className={selectedOutfit === outfit.id ? 'selected' : ''} onClick={() => selectOutfit(outfit.id)} title={outfit.label}>
-                                        <img src={getFrameSrc(selectedHair, outfit.id)} alt="" />
-                                        <span>{outfit.label}</span>
-                                        {selectedOutfit === outfit.id && <Check size={14} />}
+                                {LOOKS.map(look => (
+                                    <button key={look.id} type="button" className={selectedLook === look.id ? 'selected' : ''} onClick={() => selectLook(look.id)} title={look.label}>
+                                        <img src={getFrameSrc(selectedCharacter, look.id)} alt="" />
+                                        <span>{look.label}</span>
+                                        {selectedLook === look.id && <Check size={14} />}
                                     </button>
                                 ))}
                             </div>
