@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>大图红线裁剪</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="side-panel">
+        <header class="panel-head">
+          <h1>大图红线裁剪</h1>
+          <span id="imageMeta">读取中</span>
+        </header>
+
+        <section class="control-section">
+          <div class="section-label">图片</div>
+          <div id="sourceList" class="source-list"></div>
+          <div class="button-pair">
+            <button id="prevImageButton" class="wide-button" type="button">上一张图</button>
+            <button id="nextImageButton" class="wide-button" type="button">下一张图</button>
+          </div>
+          <label class="file-row">
+            <span>本地</span>
+            <input id="fileInput" type="file" accept="image/png,image/webp,image/jpeg" />
+          </label>
+          <output id="sourceName" class="source-name"></output>
+        </section>
+
+        <section class="control-section">
+          <div class="section-label">分块</div>
+          <label class="input-row">
+            <span>列数</span>
+            <input id="colsInput" type="number" min="1" max="12" step="1" value="4" />
+          </label>
+          <label class="input-row">
+            <span>行数</span>
+            <input id="rowsInput" type="number" min="1" max="12" step="1" value="5" />
+          </label>
+          <label class="input-row">
+            <span>缩放</span>
+            <input id="zoomInput" type="range" min="0.35" max="1.3" step="0.05" value="0.72" />
+          </label>
+          <label class="input-row">
+            <span>底色</span>
+            <select id="backgroundSelect">
+              <option value="checker">棋盘</option>
+              <option value="green">绿幕</option>
+              <option value="black">黑色</option>
+              <option value="white">白色</option>
+              <option value="raw">原图</option>
+            </select>
+          </label>
+          <button id="equalButton" class="wide-button" type="button">重新等分红线</button>
+          <button id="resetButton" class="wide-button" type="button">恢复本图保存值</button>
+        </section>
+
+        <section class="control-section">
+          <div class="section-label">抠图</div>
+          <label class="toggle-row">
+            <input id="keyToggle" type="checkbox" checked />
+            <span>保守抠纯绿</span>
+          </label>
+          <label class="input-row">
+            <span>G 最低</span>
+            <input id="greenMinInput" type="number" min="0" max="255" step="1" value="120" />
+          </label>
+          <label class="input-row">
+            <span>RB 最高</span>
+            <input id="redBlueMaxInput" type="number" min="0" max="255" step="1" value="180" />
+          </label>
+          <label class="input-row">
+            <span>色差</span>
+            <input id="greenGapInput" type="number" min="0" max="255" step="1" value="45" />
+          </label>
+          <label class="input-row">
+            <span>清边</span>
+            <input id="spillPassesInput" type="number" min="0" max="8" step="1" value="5" />
+          </label>
+          <label class="input-row">
+            <span>边差</span>
+            <input id="spillGapInput" type="number" min="0" max="80" step="1" value="6" />
+          </label>
+        </section>
+
+        <section class="control-section">
+          <div class="section-label">当前块</div>
+          <canvas id="focusCanvas" width="314" height="314"></canvas>
+          <output id="focusMeta" class="focus-meta"></output>
+          <button id="downloadCellButton" class="wide-button" type="button">下载当前块 PNG</button>
+        </section>
+
+        <section class="control-section">
+          <div class="section-label">坐标</div>
+          <div id="xEdgeGrid" class="edge-grid"></div>
+          <div id="yEdgeGrid" class="edge-grid"></div>
+        </section>
+
+        <section class="control-section">
+          <div class="section-label">保存</div>
+          <button id="saveButton" class="wide-button primary-button" type="button">保存红线</button>
+          <button id="copyJsonButton" class="wide-button" type="button">复制 JSON</button>
+          <output id="saveState" class="save-state"></output>
+          <textarea id="jsonOutput" spellcheck="false"></textarea>
+        </section>
+      </aside>
+
+      <section class="workbench">
+        <div class="canvas-toolbar">
+          <button id="prevCellButton" type="button">上一块</button>
+          <button id="nextCellButton" type="button">下一块</button>
+          <strong id="activeCellTitle">row 01 / col 01</strong>
+          <span>拖动红线裁，点击格子选中。</span>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="imageCanvas" width="1254" height="1254"></canvas>
+        </div>
+        <div id="previewGrid" class="preview-grid"></div>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

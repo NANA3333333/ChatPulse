@@ -4,6 +4,8 @@ import { pixelTx, translatePixelAction, translatePixelText } from './pixelWorldI
 import {
   commercialV2BehaviorConfigStorageKey,
   commercialV2BehaviorTreeStorageKey,
+  commercialV2BehaviorTreeUpdatedEvent,
+  commercialV2BehaviorServerSceneKey,
   commercialV2BehaviorInteractionDistance,
   commercialV2BehaviorInteractionSessionIdleMs,
   commercialV2BehaviorAutonomousInitialDelayMs,
@@ -52,10 +54,12 @@ import {
   readStoredCommercialBehaviorTreeState,
   readStoredRoomBehaviorTreeState,
   normalizeCommercialBehaviorNodeId,
-  commercialBehaviorBranchMatchesOwner,
+  preferCommercialBehaviorBranchesForOwner,
   createCommercialBehaviorPatchFromBranch,
   mergeCommercialBehaviorTreePatchForRuntime,
   mergeCommercialBehaviorTreePatchesForRuntime,
+  summarizeMountedGeneratedBehaviorBranches,
+  buildBehaviorTreeStorageSyncSignature,
   createCommercialBehaviorBranchFromNode,
   sortCommercialBehaviorBranchesByLiveliness,
   normalizeCommercialBehaviorIterationStep,
@@ -279,11 +283,14 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   const behaviorChoicePendingRef = useRef(false);
   const behaviorInteractionSessionRef = useRef({ active: false, expiresAt: 0 });
   const behaviorTreeStateRef = useRef(null);
+  const behaviorTreeSyncSourceRef = useRef(`street-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const behaviorTreeServerSignatureRef = useRef('');
   const behaviorActorIdRef = useRef(commercialV2RoleActorId);
   const behaviorActorSyncRef = useRef('');
   const autonomousBehaviorCooldownRef = useRef(Date.now() + commercialV2BehaviorAutonomousInitialDelayMs);
   const autonomousBehaviorCursorRef = useRef(0);
   const autonomousBehaviorRecentRef = useRef([]);
+  const behaviorStatusHoldRef = useRef({ text: '', until: 0 });
   const pickAutonomousBehaviorBranchRef = useRef(() => null);
   const activateBehaviorBranchRef = useRef(() => {});
   const advanceBehaviorRuntimeRef = useRef(() => {});
@@ -347,6 +354,14 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   const behaviorContextStats = useMemo(
     () => buildCommercialBehaviorContextStats(behaviorTreeState, behaviorConfig),
     [behaviorTreeState, behaviorConfig.context_q_limit, behaviorConfig.context_summary_threshold]
+  );
+  const mountedGeneratedBehavior = useMemo(
+    () => summarizeMountedGeneratedBehaviorBranches(behaviorTreeState),
+    [behaviorTreeState]
+  );
+  const behaviorRuntimeSummary = tx(
+    `Version ${behaviorTreeState.version} · patch ${behaviorTreeState.patch_history?.length || 0} · AI daily ${mountedGeneratedBehavior.base_count} · interaction ${mountedGeneratedBehavior.interaction_count}`,
+    `版本 ${behaviorTreeState.version} · patch ${behaviorTreeState.patch_history?.length || 0} · AI 日常 ${mountedGeneratedBehavior.base_count} · 互动 ${mountedGeneratedBehavior.interaction_count}`
   );
   const stageSize = useMemo(() => getCommercialV2StageSize(segmentCount, items), [items, segmentCount]);
   const assetById = useMemo(() => new Map(commercialV2AssetCatalog.map((asset) => [asset.id, asset])), []);
@@ -678,16 +693,161 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
   }, [behaviorConfig.api_endpoint, behaviorConfig.model_name, behaviorConfig.context_q_limit, behaviorConfig.context_summary_threshold]);
 
   useEffect(() => {
+    if (behaviorTreeStateRef.current && behaviorTreeStateRef.current !== behaviorTreeState) return;
     behaviorTreeStateRef.current = behaviorTreeState;
   }, [behaviorTreeState]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(commercialV2BehaviorTreeStorageKey, JSON.stringify(behaviorTreeState));
+      const treeToStore = behaviorTreeStateRef.current || behaviorTreeState;
+      localStorage.setItem(commercialV2BehaviorTreeStorageKey, JSON.stringify(treeToStore));
     } catch {
       // The tree can still live in memory if browser storage is full or unavailable.
     }
   }, [behaviorTreeState]);
+
+  function commitBehaviorTreeState(nextTreeOrUpdater, options = {}) {
+    const currentTree = behaviorTreeStateRef.current || behaviorTreeState || createCommercialV2BehaviorTreeState();
+    const nextTree = typeof nextTreeOrUpdater === 'function'
+      ? nextTreeOrUpdater(currentTree)
+      : nextTreeOrUpdater;
+    if (!nextTree || typeof nextTree !== 'object') return currentTree;
+    behaviorTreeStateRef.current = nextTree;
+    try {
+      localStorage.setItem(commercialV2BehaviorTreeStorageKey, JSON.stringify(nextTree));
+    } catch {
+      // The tree can still live in memory if browser storage is full or unavailable.
+    }
+    if (!options.skipBroadcast && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(commercialV2BehaviorTreeUpdatedEvent, {
+        detail: {
+          storageKey: commercialV2BehaviorTreeStorageKey,
+          sourceId: behaviorTreeSyncSourceRef.current,
+          tree: nextTree
+        }
+      }));
+    }
+    setBehaviorTreeState(nextTree);
+    return nextTree;
+  }
+
+  async function persistBehaviorTreeStateToServer(nextTree, reason = 'update') {
+    if (!nextTree || typeof nextTree !== 'object') return;
+    const signature = buildBehaviorTreeStorageSyncSignature(nextTree);
+    if (signature && signature === behaviorTreeServerSignatureRef.current) return;
+    try {
+      const token = localStorage.getItem('cp_token') || '';
+      if (!token) return;
+      const response = await fetch(`${apiUrl}/city/behavior-tree-state/${encodeURIComponent(commercialV2BehaviorServerSceneKey)}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          tree: nextTree,
+          meta: {
+            scene: 'commercial_street',
+            reason,
+            character_id: activeBehaviorCharacterId || '',
+            character_name: behaviorCharacter?.name || ''
+          }
+        })
+      });
+      if (response.ok) {
+        behaviorTreeServerSignatureRef.current = signature;
+      }
+    } catch (error) {
+      console.warn('Failed to persist commercial behavior tree:', error);
+    }
+  }
+
+  useEffect(() => {
+    if (!behaviorOrderedPlaces.length) return undefined;
+    let cancelled = false;
+    async function syncBehaviorTreeStateFromServer() {
+      if (behaviorLoading) return;
+      try {
+        const token = localStorage.getItem('cp_token') || '';
+        if (!token) return;
+        const response = await fetch(`${apiUrl}/city/behavior-tree-state/${encodeURIComponent(commercialV2BehaviorServerSceneKey)}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || cancelled) return;
+        const currentTree = behaviorTreeStateRef.current || behaviorTreeState;
+        const currentGenerated = summarizeMountedGeneratedBehaviorBranches(currentTree).generated_node_count;
+        if (!data?.tree) {
+          if (currentGenerated > 0) persistBehaviorTreeStateToServer(currentTree, 'bootstrap-local-cache');
+          return;
+        }
+        const nextTree = data.tree;
+        const nextSignature = buildBehaviorTreeStorageSyncSignature(nextTree);
+        const nextGenerated = summarizeMountedGeneratedBehaviorBranches(nextTree).generated_node_count;
+        if (nextGenerated <= 0 && currentGenerated > 0) {
+          persistBehaviorTreeStateToServer(currentTree, 'prefer-local-generated-cache');
+          return;
+        }
+        behaviorTreeServerSignatureRef.current = nextSignature;
+        if (nextSignature === buildBehaviorTreeStorageSyncSignature(currentTree)) return;
+        behaviorTreeStateRef.current = nextTree;
+        try {
+          localStorage.setItem(commercialV2BehaviorTreeStorageKey, JSON.stringify(nextTree));
+        } catch {
+          // The tree can still live in memory if browser storage is full or unavailable.
+        }
+        setBehaviorTreeState(nextTree);
+        clearBehaviorRuntime('');
+        autonomousBehaviorCursorRef.current = 0;
+        autonomousBehaviorRecentRef.current = [];
+        setBehaviorStatusPinned('已加载服务器保存的商业街行为树。', 12000);
+      } catch (error) {
+        console.warn('Failed to load commercial behavior tree:', error);
+      }
+    }
+    syncBehaviorTreeStateFromServer();
+    const intervalId = window.setInterval(syncBehaviorTreeStateFromServer, 8000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [apiUrl, behaviorLoading, behaviorOrderedPlaces, behaviorTreeState]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const applySyncedBehaviorTree = (nextTree, sourceLabel = 'other page') => {
+      if (!nextTree || typeof nextTree !== 'object') return;
+      const currentTree = behaviorTreeStateRef.current || behaviorTreeState;
+      if (buildBehaviorTreeStorageSyncSignature(nextTree) === buildBehaviorTreeStorageSyncSignature(currentTree)) return;
+      behaviorTreeStateRef.current = nextTree;
+      setBehaviorTreeState(nextTree);
+      clearBehaviorRuntime('');
+      autonomousBehaviorCursorRef.current = 0;
+      autonomousBehaviorRecentRef.current = [];
+      setBehaviorStatusPinned(
+        sourceLabel === 'storage'
+          ? '已同步其他标签页生成的商业街行为树。'
+          : '已同步页面内最新生成的商业街行为树。',
+        30000
+      );
+    };
+    const onBehaviorTreeUpdated = (event) => {
+      const detail = event?.detail || {};
+      if (detail.storageKey !== commercialV2BehaviorTreeStorageKey) return;
+      if (detail.sourceId === behaviorTreeSyncSourceRef.current) return;
+      applySyncedBehaviorTree(detail.tree || readStoredCommercialBehaviorTreeState(), 'event');
+    };
+    const onBehaviorTreeStorage = (event) => {
+      if (event.key !== commercialV2BehaviorTreeStorageKey) return;
+      applySyncedBehaviorTree(readStoredCommercialBehaviorTreeState(), 'storage');
+    };
+    window.addEventListener(commercialV2BehaviorTreeUpdatedEvent, onBehaviorTreeUpdated);
+    window.addEventListener('storage', onBehaviorTreeStorage);
+    return () => {
+      window.removeEventListener(commercialV2BehaviorTreeUpdatedEvent, onBehaviorTreeUpdated);
+      window.removeEventListener('storage', onBehaviorTreeStorage);
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -752,6 +912,28 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     return true;
   }
 
+  function clearBehaviorStatusHold() {
+    behaviorStatusHoldRef.current = { text: '', until: 0 };
+  }
+
+  function setBehaviorStatusPinned(message, holdMs = 30000) {
+    const text = String(message || '');
+    behaviorStatusHoldRef.current = {
+      text,
+      until: Date.now() + Math.max(0, Number(holdMs) || 0)
+    };
+    setBehaviorStatus(text);
+  }
+
+  function setBehaviorRuntimeStatus(message) {
+    const hold = behaviorStatusHoldRef.current || {};
+    if (hold.text && Date.now() < Number(hold.until || 0)) {
+      setBehaviorStatus(hold.text);
+      return;
+    }
+    setBehaviorStatus(message);
+  }
+
   useEffect(() => {
     const intervalId = window.setInterval(() => {
       if (!activeBehaviorCharacterId || !behaviorOrderedPlaces.length) return;
@@ -765,7 +947,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
         ? commercialV2BehaviorNearbyCooldownMs
         : commercialV2BehaviorAutonomousCooldownMs);
       activateBehaviorBranchRef.current(branch, 'base');
-      setBehaviorStatus(`日常行为自动执行：${branch.title}`);
+      setBehaviorRuntimeStatus(`日常行为自动执行：${branch.title}`);
     }, 700);
     return () => window.clearInterval(intervalId);
   }, [
@@ -1108,7 +1290,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || `读取失败 ${response.status}`);
       setBehaviorInput(data.input || null);
-      setBehaviorTreeState((currentTree) => mergeCommercialBehaviorIterationStateFromInput(currentTree, data.input));
+      commitBehaviorTreeState((currentTree) => mergeCommercialBehaviorIterationStateFromInput(currentTree, data.input));
       setBehaviorOutput(null);
       const message = '已读取 AI 上文；私聊和商业街活动只作背景，不会触发小人行动。';
       setBehaviorStatus(message);
@@ -1160,8 +1342,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       if (!response.ok) throw new Error(data?.error || `生成失败 ${response.status}`);
       setBehaviorInput(data.input || null);
       const source = 'ai';
-      const patchResult = mergeBehaviorTreePatch(data.tree_patch || data.patch, data.branch, source);
-      setBehaviorTreeState((currentTree) => mergeCommercialBehaviorIterationStateFromInput(currentTree, data.input));
+      const patchResult = mergeBehaviorTreePatch(data.tree_patch || data.patch, data.branch, source, data.input);
       setBehaviorOutput({
         branch: data.branch || null,
         tree_patch: patchResult?.patch || data.tree_patch || data.patch || null,
@@ -1203,6 +1384,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     }
     const pendingMessage = '正在生成行为枝丫池...基础枝丫和互动开场会一起生成，可能需要 1-2 分钟。';
     setBehaviorLoading(true);
+    clearBehaviorStatusHold();
     setBehaviorStatus(pendingMessage);
     setNotice(pendingMessage);
     setBehaviorFoldOpen((current) => ({ ...current, runtime: true, debug: true }));
@@ -1234,30 +1416,80 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
         ...(data.base_patches || []).map((patch) => ({ ...(patch || {}), source: patch?.source || 'ai-base' })),
         ...(data.interaction_patches || []).map((patch) => ({ ...(patch || {}), source: patch?.source || 'ai-interaction-starter' }))
       ];
-      const patchResult = mergeBehaviorTreePatches(combinedPatches, 'ai-tree', rebuildTree);
-      setBehaviorTreeState((currentTree) => mergeCommercialBehaviorIterationStateFromInput(currentTree, data.input));
+      const previousBehaviorTree = behaviorTreeStateRef.current || behaviorTreeState;
+      const patchResult = mergeBehaviorTreePatches(combinedPatches, 'ai-tree', rebuildTree, data.input);
       const baseBranchCount = data.base_branches?.length || 0;
       const interactionBranchCount = data.interaction_branches?.length || 0;
+      const mountedGenerated = patchResult?.tree
+        ? summarizeMountedGeneratedBehaviorBranches(patchResult.tree)
+        : { base_count: 0, interaction_count: 0, generated_node_count: 0 };
+      if (!patchResult?.tree || !patchResult?.patches?.length) {
+        const message = 'AI 返回了枝丫，但没有可合并 patch；运行树未替换。';
+        const statusMessage = `日常行为生成失败：${message}`;
+        setBehaviorOutput({
+          base_branches: data.base_branches || [],
+          base_patches: data.base_patches || [],
+          interaction_branches: data.interaction_branches || [],
+          interaction_patches: data.interaction_patches || [],
+          merged_patches: [],
+          mounted_generated: mountedGenerated,
+          tree_version: behaviorTreeState.version,
+          fallback: false,
+          error: message,
+          raw_output: data.raw_output || '',
+          json_retry_used: !!data.json_retry_used
+        });
+        setBehaviorStatusPinned(statusMessage, 60000);
+        setNotice(statusMessage);
+        return;
+      }
+      if (baseBranchCount > 0 && mountedGenerated.base_count <= 0) {
+        const message = 'AI 返回了基础枝丫，但没有挂进基础行为池；运行树已回滚。';
+        const statusMessage = `日常行为生成失败：${message}`;
+        commitBehaviorTreeState(previousBehaviorTree);
+        setBehaviorOutput({
+          base_branches: data.base_branches || [],
+          base_patches: data.base_patches || [],
+          interaction_branches: data.interaction_branches || [],
+          interaction_patches: data.interaction_patches || [],
+          merged_patches: patchResult?.patches || [],
+          mounted_generated: mountedGenerated,
+          tree_version: behaviorTreeState.version,
+          fallback: false,
+          error: message,
+          raw_output: data.raw_output || '',
+          json_retry_used: !!data.json_retry_used
+        });
+        setBehaviorStatusPinned(statusMessage, 60000);
+        setNotice(statusMessage);
+        return;
+      }
       setBehaviorOutput({
         base_branches: data.base_branches || [],
         base_patches: data.base_patches || [],
         interaction_branches: data.interaction_branches || [],
         interaction_patches: data.interaction_patches || [],
         merged_patches: patchResult?.patches || [],
+        mounted_generated: mountedGenerated,
         tree_version: patchResult?.tree?.version || behaviorTreeState.version,
         fallback: false,
         error: data.error || '',
-        raw_output: data.raw_output || ''
+        raw_output: data.raw_output || '',
+        json_retry_used: !!data.json_retry_used
       });
       autonomousBehaviorCursorRef.current = 0;
       autonomousBehaviorRecentRef.current = [];
-      const message = `AI 行为枝丫已加入：日常 ${baseBranchCount} 条，互动开场 ${interactionBranchCount} 条。`;
-      setBehaviorStatus(message);
+      if (patchResult?.tree) {
+        clearBehaviorRuntime('');
+        autonomousBehaviorCooldownRef.current = Date.now() + 800;
+      }
+      const message = `AI 行为树已全量替换：日常 ${mountedGenerated.base_count}/${baseBranchCount} 条，互动开场 ${mountedGenerated.interaction_count}/${interactionBranchCount} 条${data.json_retry_used ? '（JSON 重试后成功）' : ''}。`;
+      setBehaviorStatusPinned(message, 45000);
       setNotice(message);
     } catch (error) {
       const message = formatBehaviorRequestError(error, '日常行为生成失败，请重试。');
       const statusMessage = `日常行为生成失败：${message}`;
-      setBehaviorStatus(statusMessage);
+      setBehaviorStatusPinned(statusMessage, 60000);
       setNotice(statusMessage);
       setBehaviorOutput({
         base_branches: [],
@@ -1274,9 +1506,9 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     }
   }
 
-  function mergeBehaviorTreePatch(rawPatch, fallbackBranch = null, source = 'manual') {
+  function mergeBehaviorTreePatch(rawPatch, fallbackBranch = null, source = 'manual', inputPackage = null) {
     const result = mergeCommercialBehaviorTreePatchForRuntime(
-      behaviorTreeState,
+      behaviorTreeStateRef.current || behaviorTreeState,
       rawPatch,
       fallbackBranch,
       source,
@@ -1284,17 +1516,21 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       behaviorCharacter
     );
     if (!result.patch) return null;
-    setBehaviorTreeState(result.tree);
+    const nextTree = inputPackage
+      ? mergeCommercialBehaviorIterationStateFromInput(result.tree, inputPackage)
+      : result.tree;
+    commitBehaviorTreeState(nextTree);
+    persistBehaviorTreeStateToServer(nextTree, source);
     setBehaviorPatchOutput({
       patch: result.patch,
-      active_node_id: result.tree.active_node_id,
-      tree_version: result.tree.version,
-      patch_history: result.tree.patch_history.slice(0, 6)
+      active_node_id: nextTree.active_node_id,
+      tree_version: nextTree.version,
+      patch_history: nextTree.patch_history.slice(0, 6)
     });
-    return result;
+    return { ...result, tree: nextTree };
   }
 
-  function mergeBehaviorTreePatches(rawPatches = [], source = 'manual', baseTree = behaviorTreeState) {
+  function mergeBehaviorTreePatches(rawPatches = [], source = 'manual', baseTree = behaviorTreeState, inputPackage = null) {
     const result = mergeCommercialBehaviorTreePatchesForRuntime(
       baseTree,
       rawPatches,
@@ -1303,9 +1539,12 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       behaviorCharacter
     );
     if (!result?.patches?.length) return null;
-    const nextTree = result.tree;
+    const nextTree = inputPackage
+      ? mergeCommercialBehaviorIterationStateFromInput(result.tree, inputPackage)
+      : result.tree;
     const patches = result.patches;
-    setBehaviorTreeState(nextTree);
+    commitBehaviorTreeState(nextTree);
+    persistBehaviorTreeStateToServer(nextTree, source);
     setBehaviorPatchOutput({
       patches,
       count: patches.length,
@@ -1323,35 +1562,41 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     const dynamicBaseNodeIds = commercialV2BehaviorBaseNodeIds
       .flatMap((nodeId) => Array.isArray(nodes[nodeId]?.children_ids) ? nodes[nodeId].children_ids : [])
       .filter(Boolean);
-    const generatedBaseNodeIds = dynamicBaseNodeIds.filter((nodeId) => {
+    const aiBaseNodeIds = dynamicBaseNodeIds.filter((nodeId) => {
       const node = nodes[nodeId] || {};
-      return String(node.source || '').startsWith('ai') || !commercialV2BehaviorDefaultBaseActionNodeIds.includes(nodeId);
+      return String(node.source || '').startsWith('ai');
     });
-    const sourceNodeIds = generatedBaseNodeIds.length
-      ? Array.from(new Set(generatedBaseNodeIds))
+    const localDynamicBaseNodeIds = dynamicBaseNodeIds.filter((nodeId) => (
+      !commercialV2BehaviorDefaultBaseActionNodeIds.includes(nodeId)
+    ));
+    const fallbackNodeIds = localDynamicBaseNodeIds.length
+      ? localDynamicBaseNodeIds
       : (options.nearby
         ? Array.from(new Set([...commercialV2BehaviorNearbyAutonomousNodeIds, ...commercialV2BehaviorAutonomousNodeIds]))
         : Array.from(new Set(commercialV2BehaviorAutonomousNodeIds)));
+    const sourceNodeIds = aiBaseNodeIds.length
+      ? Array.from(new Set(aiBaseNodeIds))
+      : Array.from(new Set(fallbackNodeIds));
     const candidates = sourceNodeIds
       .map((nodeId) => createCommercialBehaviorBranchFromNode(nodes[nodeId]))
       .filter((branch) => branch
-        && commercialBehaviorBranchMatchesOwner(branch, activeBehaviorCharacterId)
         && !commercialBehaviorBranchIsTravelRecovery(branch)
         && Array.isArray(branch.steps)
         && behaviorBranchReferencesOnlyPlaces(branch, allowedPlaceIds));
-    if (!candidates.length) return null;
+    const playableOwnerCandidates = preferCommercialBehaviorBranchesForOwner(candidates, activeBehaviorCharacterId);
+    if (!playableOwnerCandidates.length) return null;
     const recentIds = autonomousBehaviorRecentRef.current || [];
-    const freshCandidates = candidates.length > 3
-      ? candidates.filter((branch) => !recentIds.includes(branch.branch_id))
-      : candidates;
-    const playableCandidates = sortCommercialBehaviorBranchesByLiveliness(freshCandidates.length ? freshCandidates : candidates);
+    const freshCandidates = playableOwnerCandidates.length > 3
+      ? playableOwnerCandidates.filter((branch) => !recentIds.includes(branch.branch_id))
+      : playableOwnerCandidates;
+    const playableCandidates = sortCommercialBehaviorBranchesByLiveliness(freshCandidates.length ? freshCandidates : playableOwnerCandidates);
     const cursor = autonomousBehaviorCursorRef.current % playableCandidates.length;
     autonomousBehaviorCursorRef.current += 1;
     const selected = playableCandidates[cursor];
     autonomousBehaviorRecentRef.current = [
       selected.branch_id,
       ...recentIds.filter((id) => id !== selected.branch_id)
-    ].slice(0, Math.min(4, Math.max(1, candidates.length - 1)));
+    ].slice(0, Math.min(4, Math.max(1, playableOwnerCandidates.length - 1)));
     return selected;
   }
 
@@ -1987,7 +2232,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
           (
             <div className="pixel-world-behavior-context-grid">
               <label className="pixel-world-behavior-field">
-                <span>q {tx('Raw Window', '原文窗口')}</span>
+                <span>{tx('q Raw Window', 'q 原文窗口')}</span>
                 <div className="pixel-world-behavior-slider-row">
                   <input
                     type="range"
@@ -2002,7 +2247,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
                 <small>{tx('Live input reads at most q raw branches.', '实时输入最多读取 q 条枝丫原文。')}</small>
               </label>
               <label className="pixel-world-behavior-field">
-                <span>p {tx('Summary Threshold', '摘要阈值')}</span>
+                <span>{tx('p Summary Threshold', 'p 摘要阈值')}</span>
                 <div className="pixel-world-behavior-slider-row">
                   <input
                     type="range"
@@ -2020,7 +2265,11 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
                 {tx('Summary backlog:', '摘要积攒：')}
                 <strong>{behaviorContextStats.pending_summary_count} / {behaviorContextStats.p_summary_threshold}</strong>
                 {tx(' items pending summary, currently reading ', '条待总结，当前读取 ')}{behaviorContextStats.active_summary_count}{tx(' summary rounds.', ' 轮摘要。')}
-                <span>{tx('Raw', '原文')} {behaviorContextStats.raw_readable_count} / {behaviorContextStats.q_raw_limit}</span>
+                <span>
+                  {lang === 'en'
+                    ? <>Raw {behaviorContextStats.raw_readable_count} / {behaviorContextStats.q_raw_limit} items</>
+                    : <>原文 {behaviorContextStats.raw_readable_count} / {behaviorContextStats.q_raw_limit} 条</>}
+                </span>
               </div>
             </div>
           )
@@ -2169,7 +2418,9 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
             type="button"
             onClick={() => {
               const resetTree = createCommercialV2BehaviorTreeState();
-              setBehaviorTreeState(resetTree);
+              commitBehaviorTreeState(resetTree);
+              persistBehaviorTreeStateToServer(resetTree, 'reset');
+              clearBehaviorRuntime('');
               setBehaviorPatchOutput(null);
               setBehaviorStatus('完整行为树已重置。');
             }}
@@ -2186,7 +2437,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
         {renderBehaviorFold(
           'runtime',
           tx('Runtime', '运行状态'),
-          activeBehaviorBranch ? ptxt(activeBehaviorBranch.title) : tx(`Version ${behaviorTreeState.version} · patch ${behaviorTreeState.patch_history?.length || 0}`, `版本 ${behaviorTreeState.version} · patch ${behaviorTreeState.patch_history?.length || 0}`),
+          activeBehaviorBranch ? ptxt(activeBehaviorBranch.title) : behaviorRuntimeSummary,
           (
             <>
               <div className="pixel-world-behavior-status">{behaviorLoading ? tx('Processing...', '处理中...') : ptxt(behaviorStatus)}</div>
@@ -3398,7 +3649,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
     if (!isBaseBranch) keepBehaviorInteractionSessionActive();
     const branchKindLabel = isBaseBranch ? '日常行为' : '互动回应';
     const activeNodeId = branch.branch_id || branch.id || runtime.id;
-    setBehaviorTreeState((currentTree) => ({
+    commitBehaviorTreeState((currentTree) => ({
       ...currentTree,
       active_node_id: activeNodeId,
       memory: {
@@ -3444,7 +3695,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       activeBehaviorCharacterId
     );
     if (!recoveryBranch) return false;
-    setBehaviorTreeState((currentTree) => ({
+    commitBehaviorTreeState((currentTree) => ({
       ...currentTree,
       memory: {
         ...(currentTree.memory || {}),
@@ -3574,7 +3825,7 @@ function CommercialStreetEditor({ apiUrl = '/api', userProfile = null }) {
       if (isBaseBranch) {
         const text = String(step.text || (action === 'say' ? '……' : '停顿了一下')).trim();
         setWorldPlayerBubble(getCurrentBehaviorActorId(), text);
-        setBehaviorStatus(action === 'say' ? `日常行为气泡：${text}` : `日常行为动作：${text}`);
+        setBehaviorRuntimeStatus(action === 'say' ? `日常行为气泡：${text}` : `日常行为动作：${text}`);
         const requestedDuration = Number(step.duration_ms || step.durationMs);
         const readableDuration = Math.min(5200, 1600 + text.length * 85);
         runtime.waitingUntil = now + Math.max(1200, Math.min(Number.isFinite(requestedDuration) ? requestedDuration : readableDuration, 5200));

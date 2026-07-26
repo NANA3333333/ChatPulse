@@ -1,7 +1,6 @@
 const MAX_CITY_GOLD_GRANT = 1000000;
 const MAX_CITY_CALORIES_GRANT = 4000;
 const MAX_CITY_ITEM_QUANTITY = 100;
-const MAX_CITY_TIME_SKIP_MINUTES = 1440;
 const MAX_CITY_QUEST_REWARD_GOLD = 1000000;
 const MAX_CITY_QUEST_REWARD_CALORIES = 4000;
 const MAX_CITY_QUEST_COMPLETION_TARGET = 10;
@@ -22,7 +21,6 @@ const MAX_CITY_DISTRICT_CAPACITY = 10000;
 const MAX_CITY_DISTRICT_SORT_ORDER = 10000;
 const MAX_CITY_CONFIG_LOG_LIMIT = 20;
 const MAX_CITY_CONFIG_INTERVAL_HOURS = 168;
-const MAX_CITY_CONFIG_TIME_OFFSET_DAYS = 3650;
 const MAX_CITY_CONFIG_MULTIPLIER = 100;
 const MAX_CITY_LOG_QUERY_LIMIT = 10000;
 const MAX_CITY_ANNOUNCEMENT_QUERY_LIMIT = 200;
@@ -36,6 +34,13 @@ const BOOLEAN_CONFIG_KEYS = new Set([
     'mayor_enabled'
 ]);
 
+const REMOVED_CONFIG_KEYS = new Set([
+    'city_time_offset_days',
+    'city_time_offset_hours',
+    'tick_label',
+    'tick_interval_minutes'
+]);
+
 const INTEGER_CONFIG_RANGES = {
     metabolism_rate: [0, MAX_CITY_CALORIES_GRANT],
     city_self_log_limit: [0, MAX_CITY_CONFIG_LOG_LIMIT],
@@ -45,16 +50,14 @@ const INTEGER_CONFIG_RANGES = {
     city_stranger_meet_prob: [0, 100],
     city_chat_probability: [0, 100],
     city_diary_probability: [0, 100],
-    mayor_interval_hours: [1, MAX_CITY_CONFIG_INTERVAL_HOURS],
-    city_time_offset_days: [-MAX_CITY_CONFIG_TIME_OFFSET_DAYS, MAX_CITY_CONFIG_TIME_OFFSET_DAYS]
+    mayor_interval_hours: [1, MAX_CITY_CONFIG_INTERVAL_HOURS]
 };
 
 const NUMBER_CONFIG_RANGES = {
     inflation: [0, MAX_CITY_CONFIG_MULTIPLIER],
     work_bonus: [0, MAX_CITY_CONFIG_MULTIPLIER],
     gambling_win_rate: [0, 1],
-    gambling_payout: [0, MAX_CITY_CONFIG_MULTIPLIER],
-    city_time_offset_hours: [0, 24]
+    gambling_payout: [0, MAX_CITY_CONFIG_MULTIPLIER]
 };
 
 function hasProvidedValue(value) {
@@ -149,22 +152,6 @@ function normalizeCityCalories(value) {
 
 function normalizeCityItemQuantity(value) {
     return normalizeBoundedInteger(value, 1, MAX_CITY_ITEM_QUANTITY);
-}
-
-function normalizeCityTimeSkipMinutes(value) {
-    return normalizeBoundedInteger(value, 1, MAX_CITY_TIME_SKIP_MINUTES);
-}
-
-function normalizeStoredCityOffsetDays(value) {
-    const parsed = Number(value);
-    if (!Number.isSafeInteger(parsed) || parsed < -MAX_CITY_CONFIG_TIME_OFFSET_DAYS || parsed > MAX_CITY_CONFIG_TIME_OFFSET_DAYS) return 0;
-    return parsed;
-}
-
-function normalizeStoredCityOffsetHours(value) {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed) || parsed < 0 || parsed >= 24) return 0;
-    return parsed;
 }
 
 function normalizeCityQuestGoldReward(value, fallback = 50) {
@@ -331,6 +318,7 @@ function normalizeBooleanConfigValue(value) {
 function normalizeCityConfigValue(key, value) {
     const cleanKey = String(key || '').trim();
     if (!cleanKey) return null;
+    if (REMOVED_CONFIG_KEYS.has(cleanKey)) return null;
     if (BOOLEAN_CONFIG_KEYS.has(cleanKey)) return normalizeBooleanConfigValue(value);
     if (Object.prototype.hasOwnProperty.call(INTEGER_CONFIG_RANGES, cleanKey)) {
         const [min, max] = INTEGER_CONFIG_RANGES[cleanKey];
@@ -341,7 +329,6 @@ function normalizeCityConfigValue(key, value) {
         const [min, max] = NUMBER_CONFIG_RANGES[cleanKey];
         const parsed = Number(value);
         if (!Number.isFinite(parsed) || parsed < min || parsed > max) return null;
-        if (cleanKey === 'city_time_offset_hours' && parsed >= 24) return null;
         return String(parsed);
     }
     if (cleanKey === 'mayor_last_run_at') {
@@ -355,7 +342,6 @@ module.exports = {
     MAX_CITY_GOLD_GRANT,
     MAX_CITY_CALORIES_GRANT,
     MAX_CITY_ITEM_QUANTITY,
-    MAX_CITY_TIME_SKIP_MINUTES,
     MAX_CITY_QUEST_REWARD_GOLD,
     MAX_CITY_QUEST_REWARD_CALORIES,
     MAX_CITY_QUEST_COMPLETION_TARGET,
@@ -376,7 +362,6 @@ module.exports = {
     MAX_CITY_DISTRICT_SORT_ORDER,
     MAX_CITY_CONFIG_LOG_LIMIT,
     MAX_CITY_CONFIG_INTERVAL_HOURS,
-    MAX_CITY_CONFIG_TIME_OFFSET_DAYS,
     MAX_CITY_CONFIG_MULTIPLIER,
     MAX_CITY_LOG_QUERY_LIMIT,
     MAX_CITY_ANNOUNCEMENT_QUERY_LIMIT,
@@ -385,9 +370,6 @@ module.exports = {
     normalizeCityGoldAmount,
     normalizeCityCalories,
     normalizeCityItemQuantity,
-    normalizeCityTimeSkipMinutes,
-    normalizeStoredCityOffsetDays,
-    normalizeStoredCityOffsetHours,
     normalizeCityQuestGoldReward,
     normalizeCityQuestCaloriesReward,
     normalizeCityQuestCompletionTarget,

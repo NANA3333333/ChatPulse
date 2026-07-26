@@ -557,7 +557,7 @@ async function generateAgencyAd({ callLLM, db, config, snapshot, aiChar }) {
     return { title, content, home_id: selectedHomeExists ? selectedHomeId : '' };
 }
 
-const ROOM_ASSEMBLY_ALLOWED_ITEMS = new Set(['bed', 'nightstand', 'wardrobe', 'vanity', 'desk', 'bookshelf', 'sofa', 'rug', 'floorLamp', 'wallArt']);
+const ROOM_ASSEMBLY_ALLOWED_ITEMS = new Set(['bed', 'nightstand', 'wardrobe', 'vanity', 'bookshelf', 'sofa', 'rug', 'floorLamp', 'wallArt']);
 const ROOM_ASSEMBLY_ALLOWED_DIRECTIONS = new Set(['front', 'back', 'left', 'right']);
 const ROOM_ASSEMBLY_ITEM_ALIASES = {
     bed: 'bed',
@@ -571,9 +571,6 @@ const ROOM_ASSEMBLY_ITEM_ALIASES = {
     vanity: 'vanity',
     dresser: 'vanity',
     '梳妆台': 'vanity',
-    desk: 'desk',
-    table: 'desk',
-    '书桌': 'desk',
     bookshelf: 'bookshelf',
     bookcase: 'bookshelf',
     shelf: 'bookshelf',
@@ -711,7 +708,7 @@ function normalizeAgencyRoomAssemblyOutput(parsed, furnitureList = [], budget = 
         .map(normalizeRoomAssemblyShopItem)
         .filter(Boolean);
     const resolvedShopItems = shopItems.length > 0 ? shopItems : [
-        { assetId: 'room_front_bed_peach_lemon_v1', item: 'bed', label: '床', style: '基础', price: 70, maxQuantity: 99, cells: { front: '5x5' }, preferred_dir: 'front', directional: true },
+        { assetId: 'room_front_bed_scandinavian_blue_v1', item: 'bed', label: '床', style: '基础', price: 115, maxQuantity: 99, cells: { front: '5x5' }, preferred_dir: 'front', directional: true },
         { assetId: 'room_front_ocean_nightstand_v1', item: 'nightstand', label: '床头柜', style: '基础', price: 40, maxQuantity: 99, cells: { front: '3x3' }, preferred_dir: 'front', directional: true },
         { assetId: 'room_front_ocean_wardrobe_v1', item: 'wardrobe', label: '衣柜', style: '基础', price: 100, maxQuantity: 99, cells: { front: '3x5' }, preferred_dir: 'front', directional: true },
         { assetId: 'room_front_ocean_vanity_v1', item: 'vanity', label: '梳妆台', style: '基础', price: 95, maxQuantity: 99, cells: { front: '4x5' }, preferred_dir: 'front', directional: true }
@@ -838,7 +835,7 @@ async function generateAgencyRoomAssembly({ callLLM, db, config, home = {}, pale
         .map(normalizeRoomAssemblyShopItem)
         .filter(Boolean);
     const furnitureList = safeFurniture.length > 0 ? safeFurniture : [
-        { assetId: 'room_front_bed_peach_lemon_v1', item: 'bed', label: '床', style: '基础', price: 70, maxQuantity: 99, cells: { front: '5x5' }, preferred_dir: 'front', directional: true },
+        { assetId: 'room_front_bed_scandinavian_blue_v1', item: 'bed', label: '床', style: '基础', price: 115, maxQuantity: 99, cells: { front: '5x5' }, preferred_dir: 'front', directional: true },
         { assetId: 'room_front_ocean_nightstand_v1', item: 'nightstand', label: '床头柜', style: '基础', price: 40, maxQuantity: 99, cells: { front: '3x3' }, preferred_dir: 'front', directional: true },
         { assetId: 'room_front_ocean_wardrobe_v1', item: 'wardrobe', label: '衣柜', style: '基础', price: 100, maxQuantity: 99, cells: { front: '3x5' }, preferred_dir: 'front', directional: true },
         { assetId: 'room_front_ocean_vanity_v1', item: 'vanity', label: '梳妆台', style: '基础', price: 95, maxQuantity: 99, cells: { front: '4x5' }, preferred_dir: 'front', directional: true }
@@ -895,21 +892,21 @@ async function generateAgencyRoomAssembly({ callLLM, db, config, home = {}, pale
         '2. purchases 的总价不能超过装修预算，price 以家具商店为准；预算是装修上限，不是存款目标。',
         '3. 用快速贪心：先覆盖更多家具种类，再用剩余预算补装饰或重复件；不要计算最优组合。',
         '4. 在不超预算、普通家具占地不重叠、不压墙的前提下，尽可能多买家具和装饰，尽量把花费推近预算上限。',
-        '5. 如果还有预算和合法空位，不要停在基础四件套；继续加入书桌、书架、沙发、地毯、灯、挂画，直到空间或预算接近上限。',
+        '5. 如果还有预算和合法空位，不要停在基础四件套；继续加入书架、沙发、地毯、灯、挂画，直到空间或预算接近上限。',
         '6. 家具商店包含功能家具和装饰品；装饰品包括 rug、floorLamp、wallArt，它们是房屋档次的一部分，不是可忽略杂物。',
-        '7. 必需品优先级：床、床头柜、衣柜、梳妆台；然后按房源档次加入书桌、书架、沙发、地毯、灯、挂画。',
-        '8. 普通家具 bed/nightstand/wardrobe/vanity/desk/bookshelf/sofa/floorLamp 只放在 [d] 地面范围内；床、书架、衣柜、书桌、梳妆台、沙发等大件推荐靠后墙或侧墙，但不能为了靠墙压住 [w]/[m] 或墙地过渡线。',
+        '7. 必需品优先级：床、床头柜、衣柜、梳妆台；然后按房源档次加入书架、沙发、地毯、灯、挂画。',
+        '8. 普通家具 bed/nightstand/wardrobe/vanity/bookshelf/sofa/floorLamp 只放在 [d] 地面范围内；床、书架、衣柜、梳妆台、沙发等大件推荐靠后墙或侧墙，但不能为了靠墙压住 [w]/[m] 或墙地过渡线。',
         `8a. 床的最高点不得高过当前床顶边基线：渲染后的床顶 y 必须 >= ${bedTopBaselineY}px；换算到输出网格时，bed 的 placements.y 必须 >= ${bedMinGridY}，宁可把床往下放，不要让床越过这条基线。`,
         '9. rug 最多 1 张，必须放在地面/地毯区域，不要挂到墙面；wallArt 最好只放 1 张，必须放在墙面区域，不要贴地、不要落到地板。',
         '10. rug 和 wallArt 都是置底图层，可以被其他家具部分遮盖；但最好仍露出主要图案，不要被床、沙发、衣柜等大件完全盖住。',
+        '10a. wallArt/挂画的主体图案要尽量完整露出；摆床、衣柜、书柜/书架、沙发等大件时，不要把它们放到挂画正前方，也不要遮住画面主体。',
         '11. 除 rug/wallArt 外，所有家具必须用 cells 占地面积做碰撞检查，任意两个普通家具的占地矩形不能重叠；可以紧凑摆放，留出一条可读走道即可。',
-        '12. 大件家具靠墙/沿墙只是布局建议，不是硬约束；优先保证合法占格、不重叠、走道可读，然后再考虑靠墙。',
         '13. 尽量使用 dir=front，让家具正面朝镜头；只有布局明显更自然时，才使用 left、right 或 back。',
         '14. 衣柜正面、梳妆台镜面、床正面、床头柜正面尽量可见。',
         '15. 床头柜必须靠近床，梳妆台和衣柜前方至少留出 1 格地面。',
         '16. 即使预算 < 950，只要有空位也应加入装饰；预算 >= 950 时优先加入至少 2 类装饰；预算 >= 1450 或 prestige >= 32 时优先加入地毯、灯、挂画三类装饰。',
-        '17. 高档房源不要只摆功能家具；如果空间允许，用同风格装饰品、沙发、书桌、书架拉开居住档次。',
-        '18. 优先覆盖更多家具种类，再考虑重复同类；书柜、书桌、沙发这类大件优先于第二个梳妆台、第二个床头柜或第二盏灯。',
+        '17. 高档房源不要只摆功能家具；如果空间允许，用同风格装饰品、沙发、书架拉开居住档次。',
+        '18. 优先覆盖更多家具种类，再考虑重复同类；书柜、沙发这类大件优先于第二个梳妆台、第二个床头柜或第二盏灯。',
         '19. 除 rug 和 wallArt 最多 1 张外，不限制购买和摆放数量；可以增加不同家具和装饰，但不要无意义重复堆同一件素材。',
         '20. 输出必须是紧凑 JSON；不要复述家具商店、预算、规则、ASCII 或推理过程。',
         '21. purchases 只写 assetId 和 quantity；placements 只写 assetId、item、x、y、dir；notes 简短。',
@@ -985,6 +982,7 @@ async function generateAgencyRoomAssembly({ callLLM, db, config, home = {}, pale
 
 module.exports = function initSocialHousingPlugin(app, context) {
     const { authMiddleware, authDb, getUserDb, getWsClients, getEngine, getMemory, callLLM } = context;
+    const rentSettlementLocks = new Set();
 
     function ensureSocialHousingDb(db) {
         if (!db.socialHousing) {
@@ -1015,6 +1013,11 @@ module.exports = function initSocialHousingPlugin(app, context) {
         recordAgencyDebug,
         redactSocialHousingCharacterSecrets
     });
+
+    function getRentSettlementLockKey(db, characterId) {
+        const dbPath = typeof db.getDbPath === 'function' ? db.getDbPath() : '';
+        return `${dbPath || 'unknown-db'}:${String(characterId || '')}`;
+    }
 
     async function publishAgencyAdForDb(db, triggerType = 'manual') {
         const socialHousingDb = ensureSocialHousingDb(db);
@@ -1182,6 +1185,24 @@ module.exports = function initSocialHousingPlugin(app, context) {
     }
 
     async function settleCharacterRent(db, characterId, options = {}) {
+        const lockKey = getRentSettlementLockKey(db, characterId);
+        if (rentSettlementLocks.has(lockKey)) {
+            return {
+                success: false,
+                reason: 'rent_settlement_in_progress',
+                character_id: characterId,
+                in_progress: true
+            };
+        }
+        rentSettlementLocks.add(lockKey);
+        try {
+            return await settleCharacterRentUnlocked(db, characterId, options);
+        } finally {
+            rentSettlementLocks.delete(lockKey);
+        }
+    }
+
+    async function settleCharacterRentUnlocked(db, characterId, options = {}) {
         const socialHousingDb = ensureSocialHousingDb(db);
         const cityDb = ensureCityDb(db);
         const character = db.getCharacter(characterId);

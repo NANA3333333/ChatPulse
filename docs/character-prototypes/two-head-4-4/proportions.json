@@ -1,0 +1,36 @@
+{
+  "unit": "1.0 = head height, excluding extra hair volume",
+  "overall_ratio": "2-head chibi",
+  "height": {
+    "feet_bottom_z": 0.0,
+    "chin_z": 0.97,
+    "head_top_z": 1.97,
+    "hair_top_z": 2.09
+  },
+  "body": {
+    "shoulder_width": 0.64,
+    "torso_width": 0.58,
+    "arm_length": 0.42,
+    "leg_length": 0.45
+  },
+  "head": {
+    "width": 0.94,
+    "depth": 0.78,
+    "height": 1.0,
+    "eye_line_z": 1.49
+  },
+  "hair_reference": {
+    "source": "C:\\Users\\Nana\\Desktop\\b45b18e7-25f7-41e5-836a-4400087166ce.png",
+    "assumption": "top row, 4th cell of the provided 4x2 sprite sheet",
+    "features": [
+      "taupe-brown bob cap",
+      "side-swept bangs",
+      "short twin tails tied near the ears"
+    ]
+  },
+  "intended_use": [
+    "proportion anchor for image generation",
+    "rough Blender import blockout",
+    "front/side silhouette review before detailed modeling"
+  ]
+}

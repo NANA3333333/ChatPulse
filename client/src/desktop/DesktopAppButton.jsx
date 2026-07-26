@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Folder } from 'lucide-react';
 import { DESKTOP_APP_ICONS } from './desktopUtils';
 
@@ -27,7 +28,7 @@ function DesktopAppButton({
   const Icon = app.icon || Folder;
   const label = app.label;
   const iconImage = pinned ? (app.taskbarIconImage || app.iconImage) : app.iconImage;
-  const folderPreviewApp = app.kind === 'folder' ? app.folderPreviewApp : null;
+  const folderPreviewApp = app.folderPreviewApp || (app.kind === 'folder' ? app.folderPreviewApp : null);
   const FolderPreviewIcon = folderPreviewApp?.icon || Folder;
   const folderPreviewIconImage = folderPreviewApp?.taskbarIconImage || folderPreviewApp?.iconImage;
   const usesFolderPreviewStack = Boolean(folderPreviewApp && !pinned);

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, Users, Smile, Paperclip, X, Settings, Trash2, UserMinus, ArrowRightLeft, Gift, ChevronLeft, Trash, UserPlus, Edit3 } from 'lucide-react';
+import { Send, Users, Smile, Paperclip, X, Settings, Trash2, UserMinus, ArrowRightLeft, Gift, ChevronLeft, Trash, UserPlus, Edit3, Search } from 'lucide-react';
 import AvatarWithFrame from './AvatarWithFrame';
+import ConversationSearchPanel from './ConversationSearchPanel';
 import { useLanguage } from '../LanguageContext';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 
@@ -608,7 +609,11 @@ function GroupChatWindow({
     onGroupUpdated,
     isManageOpen,
     onToggleManage,
-    onCloseManage
+    onCloseManage,
+    isForegroundLayoutLifted = false,
+    jumpTarget,
+    onSearchResultSelect,
+    onJumpHandled
 }) {
     const { lang } = useLanguage();
     const [messages, setMessages] = useState([]);
@@ -616,6 +621,11 @@ function GroupChatWindow({
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const [showRedPacketModal, setShowRedPacketModal] = useState(false);
     const [showManageDrawer, setShowManageDrawer] = useState(false);
+    const [showConversationSearch, setShowConversationSearch] = useState(false);
+    const [highlightedMessageId, setHighlightedMessageId] = useState(null);
+    const [isSearchContextWindow, setIsSearchContextWindow] = useState(false);
+    const [hasNewer, setHasNewer] = useState(false);
+    const [loadingNewer, setLoadingNewer] = useState(false);
     const isManageControlled = typeof isManageOpen === 'boolean';
     const manageDrawerOpen = isManageControlled ? isManageOpen : showManageDrawer;
     const toggleManageDrawer = () => {
@@ -633,12 +643,74 @@ function GroupChatWindow({
         setShowManageDrawer(false);
     };
     const messagesEndRef = useRef(null);
+    const messageElementsRef = useRef(new Map());
+    const pendingJumpMessageIdRef = useRef(null);
+    const searchHighlightTimerRef = useRef(null);
+    const isConversationPinnedToBottomRef = useRef(true);
+    const onJumpHandledRef = useRef(onJumpHandled);
     const fileInputRef = useRef(null);
     const textareaRef = useRef(null);
     const processedIncomingGroupMessageIdsRef = useRef(new Set());
     const deletedGroupMessageIdsRef = useRef(new Set());
     const [selectMode, setSelectMode] = useState(false);
     const [selectedIds, setSelectedIds] = useState(new Set());
+    const jumpToken = String(jumpTarget?.token || '');
+    const jumpMessageId = (() => {
+        const targetMessageId = Number(jumpTarget?.messageId || jumpTarget?.message_id || 0);
+        const targetGroupId = String(jumpTarget?.groupId || jumpTarget?.group_id || '').trim();
+        if (!Number.isSafeInteger(targetMessageId) || targetMessageId <= 0) return 0;
+        if (String(jumpTarget?.scope || '') !== 'group') return 0;
+        if (!group?.id || targetGroupId !== String(group.id)) return 0;
+        return targetMessageId;
+    })();
+    const jumpMessageIdRef = useRef(jumpMessageId);
+    useEffect(() => { jumpMessageIdRef.current = jumpMessageId; }, [jumpMessageId]);
+    useEffect(() => { onJumpHandledRef.current = onJumpHandled; }, [onJumpHandled]);
+
+    const getConversationScroller = useCallback(() => {
+        return messagesEndRef.current?.closest?.('.chat-history') || null;
+    }, []);
+
+    const updateConversationPinnedState = useCallback(() => {
+        const scroller = getConversationScroller();
+        if (!scroller) return;
+        const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+        isConversationPinnedToBottomRef.current = distanceFromBottom <= 120;
+    }, [getConversationScroller]);
+
+    const setMessageElement = useCallback((messageId, node) => {
+        const key = String(messageId || '');
+        if (!key) return;
+        if (node) {
+            messageElementsRef.current.set(key, node);
+        } else {
+            messageElementsRef.current.delete(key);
+        }
+    }, []);
+
+    const scrollToMessage = useCallback((messageId) => {
+        const key = String(messageId || '');
+        if (!key) return false;
+        const node = messageElementsRef.current.get(key);
+        if (!node) return false;
+        const shouldReduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+        node.scrollIntoView({ behavior: shouldReduceMotion ? 'auto' : 'smooth', block: 'center' });
+        isConversationPinnedToBottomRef.current = false;
+        setHighlightedMessageId(key);
+        if (searchHighlightTimerRef.current) window.clearTimeout(searchHighlightTimerRef.current);
+        searchHighlightTimerRef.current = window.setTimeout(() => {
+            setHighlightedMessageId((current) => (current === key ? null : current));
+            searchHighlightTimerRef.current = null;
+        }, 2600);
+        return true;
+    }, []);
+
+    const getMessageAnchorClass = useCallback((messageId, baseClass = '') => {
+        const className = `${baseClass ? `${baseClass} ` : ''}conversation-message-anchor`;
+        return String(highlightedMessageId || '') === String(messageId)
+            ? `${className} is-search-target`
+            : className;
+    }, [highlightedMessageId]);
 
     // Mentions logic
     const [showMentionMenu, setShowMentionMenu] = useState(false);
@@ -647,9 +719,52 @@ function GroupChatWindow({
 
     useEffect(() => {
         if (!group?.id) return;
-        setMessages([]); setShowManageDrawer(false);
+        setMessages([]); setShowManageDrawer(false); setShowConversationSearch(false);
+        setIsSearchContextWindow(false);
+        setHasNewer(false);
+        isConversationPinnedToBottomRef.current = true;
+        if (jumpMessageIdRef.current) return;
         fetch(`${apiUrl}/groups/${group.id}/messages`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } }).then(r => r.json()).then(data => setMessages(normalizeGroupMessages(data))).catch(console.error);
     }, [group?.id, apiUrl]);
+
+    useEffect(() => () => {
+        if (searchHighlightTimerRef.current) window.clearTimeout(searchHighlightTimerRef.current);
+    }, []);
+
+    useEffect(() => {
+        if (!jumpMessageId || !group?.id || !jumpToken) return undefined;
+        let cancelled = false;
+        const handledTarget = {
+            scope: 'group',
+            messageId: jumpMessageId,
+            groupId: group.id,
+            token: jumpToken
+        };
+        pendingJumpMessageIdRef.current = jumpMessageId;
+        isConversationPinnedToBottomRef.current = false;
+        setShowConversationSearch(false);
+        setIsSearchContextWindow(true);
+        setHasNewer(false);
+        fetch(`${apiUrl}/groups/${group.id}/messages?limit=100&around=${jumpMessageId}`, {
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` }
+        })
+            .then(r => r.json())
+            .then(data => {
+                if (cancelled) return;
+                const list = Array.isArray(data) ? data : [];
+                setMessages(normalizeGroupMessages(list));
+                setHasNewer(list.length > 0);
+            })
+            .catch(err => {
+                if (!cancelled) console.error('Failed to jump to searched group message:', err);
+            })
+            .finally(() => {
+                if (!cancelled) onJumpHandledRef.current?.(handledTarget);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [apiUrl, group?.id, jumpMessageId, jumpToken]);
 
     useEffect(() => {
         if (incomingGroupMessageQueue && incomingGroupMessageQueue.length > 0 && group?.id) {
@@ -670,14 +785,96 @@ function GroupChatWindow({
     }, [incomingGroupMessageQueue, group?.id]);
 
     useEffect(() => {
+        if (pendingJumpMessageIdRef.current) return;
+        if (!isConversationPinnedToBottomRef.current) return;
         if (messagesEndRef.current) {
             messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
         }
     }, [messages]);
 
+    useEffect(() => {
+        const targetMessageId = pendingJumpMessageIdRef.current;
+        if (!targetMessageId) return undefined;
+        let secondFrame = null;
+        const timeoutIds = [];
+        const tryScroll = () => {
+            if (scrollToMessage(targetMessageId)) {
+                pendingJumpMessageIdRef.current = null;
+            }
+        };
+        const firstFrame = window.requestAnimationFrame(() => {
+            tryScroll();
+            secondFrame = window.requestAnimationFrame(tryScroll);
+        });
+        [120, 280, 520].forEach((delay) => {
+            timeoutIds.push(window.setTimeout(tryScroll, delay));
+        });
+        return () => {
+            window.cancelAnimationFrame(firstFrame);
+            if (secondFrame !== null) window.cancelAnimationFrame(secondFrame);
+            timeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
+        };
+    }, [messages, scrollToMessage]);
+
+    useEffect(() => {
+        if (pendingJumpMessageIdRef.current) return undefined;
+        if (!isConversationPinnedToBottomRef.current) return undefined;
+        if (!isForegroundLayoutLifted || !messagesEndRef.current) return undefined;
+        const rafId = window.requestAnimationFrame(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        });
+        return () => window.cancelAnimationFrame(rafId);
+    }, [isForegroundLayoutLifted]);
+
+    const loadNewerMessages = useCallback(async () => {
+        if (loadingNewer || messages.length === 0 || !group?.id) return;
+        const newestId = messages.reduce((maxId, msg) => {
+            const id = Number(msg?.id);
+            return Number.isSafeInteger(id) && id > maxId ? id : maxId;
+        }, 0);
+        if (!newestId) {
+            setHasNewer(false);
+            return;
+        }
+        setLoadingNewer(true);
+        try {
+            const data = await fetch(`${apiUrl}/groups/${group.id}/messages?limit=100&after=${newestId}`, {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` }
+            }).then(r => r.json());
+            const list = Array.isArray(data) ? data : [];
+            if (list.length > 0) {
+                isConversationPinnedToBottomRef.current = false;
+                setMessages(prev => {
+                    const seen = new Set(prev.map(msg => String(msg.id)));
+                    const fresh = list.filter(msg => !seen.has(String(msg.id)));
+                    return fresh.length > 0 ? normalizeGroupMessages([...prev, ...fresh]) : prev;
+                });
+            }
+            setHasNewer(list.length >= 100);
+        } catch (e) {
+            console.error('Failed to load newer group messages:', e);
+        } finally {
+            setLoadingNewer(false);
+        }
+    }, [apiUrl, group?.id, loadingNewer, messages]);
+
+    const handleConversationScroll = useCallback(() => {
+        updateConversationPinnedState();
+        if (!isSearchContextWindow || !hasNewer || loadingNewer) return;
+        const scroller = getConversationScroller();
+        if (!scroller) return;
+        const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+        if (distanceFromBottom <= 80) {
+            loadNewerMessages();
+        }
+    }, [getConversationScroller, hasNewer, isSearchContextWindow, loadingNewer, loadNewerMessages, updateConversationPinnedState]);
+
     const handleSend = async () => {
         if (!input.trim() || !group) return;
         const text = input.trim(); setInput('');
+        isConversationPinnedToBottomRef.current = true;
+        setIsSearchContextWindow(false);
+        setHasNewer(false);
         try { await fetch(`${apiUrl}/groups/${group.id}/messages`, { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: text }) }); } catch (e) { console.error(e); }
     };
 
@@ -829,6 +1026,11 @@ function GroupChatWindow({
                         <span className="chat-state-chip group-member-count">{lang === 'en' ? `${group.members?.length || 0} members` : `${group.members?.length || 0} 人`}</span>
                     </div>
                     <div className="chat-header-actions group-chat-header-actions" style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                        <button onClick={() => setShowConversationSearch(value => !value)} title={lang === 'en' ? 'Search all conversations' : '搜索全部对话'}
+                            style={showConversationSearch ? { color: 'var(--accent-color)', background: 'rgba(var(--accent-rgb, 74,144,226), 0.12)', borderRadius: '8px', border: 'none', cursor: 'pointer', padding: '6px' } : { background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-color)', padding: '6px' }}>
+                            <Search size={20} />
+                            <span>{lang === 'en' ? 'Search' : '搜索'}</span>
+                        </button>
                         <button onClick={() => { setSelectMode(m => !m); setSelectedIds(new Set()); }} title={lang === 'en' ? 'Select Messages' : '选择消息'}
                             style={selectMode ? { color: 'var(--accent-color)', background: 'rgba(var(--accent-rgb, 74,144,226), 0.12)', borderRadius: '8px', border: 'none', cursor: 'pointer', padding: '6px' } : { background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-color)', padding: '6px' }}>
                             <Trash size={20} />
@@ -843,17 +1045,22 @@ function GroupChatWindow({
                     </div>
                 </div>
 
-
+                <ConversationSearchPanel
+                    apiUrl={apiUrl}
+                    isOpen={showConversationSearch}
+                    onClose={() => setShowConversationSearch(false)}
+                    onResultSelect={onSearchResultSelect}
+                />
 
                 {/* Messages */}
-                <div className="chat-history">
+                <div className="chat-history" onScroll={handleConversationScroll}>
                     {messages.map((msg, index) => {
                         const sender = resolveSender(msg.sender_id);
                         const isUser = msg.sender_id === 'user';
                         const parsed = parseContent(msg.content);
 
                         const currentLimit = group?.context_msg_limit || 60;
-                        const isBoundary = index === Math.max(0, messages.length - currentLimit) && messages.length > currentLimit;
+                        const isBoundary = !isSearchContextWindow && index === Math.max(0, messages.length - currentLimit) && messages.length > currentLimit;
 
                         const boundaryElement = isBoundary ? (
                             <div key={`boundary-${msg.id}`} style={{ textAlign: 'center', margin: '30px 0', position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -872,7 +1079,11 @@ function GroupChatWindow({
                             return (
                                 <React.Fragment key={msg.id}>
                                     {boundaryElement}
-                                    <div style={{ textAlign: 'center', margin: '8px 0' }}>
+                                    <div
+                                        ref={(node) => setMessageElement(msg.id, node)}
+                                        className={getMessageAnchorClass(msg.id, 'group-system-message-anchor')}
+                                        style={{ textAlign: 'center', margin: '8px 0' }}
+                                    >
                                         <span style={{ fontSize: '12px', color: 'var(--text-secondary)', backgroundColor: 'rgba(255, 247, 250, 0.92)', padding: '3px 10px', borderRadius: '10px' }}>
                                             {parsed.text || (msg.content || '').replace('[System] ', '')}
                                         </span>
@@ -896,7 +1107,9 @@ function GroupChatWindow({
                             return (
                                 <React.Fragment key={msg.id}>
                                     {boundaryElement}
-                                    <div className={`message-wrapper ${isUser ? 'user' : 'character'}`}
+                                    <div
+                                        ref={(node) => setMessageElement(msg.id, node)}
+                                        className={getMessageAnchorClass(msg.id, `message-wrapper ${isUser ? 'user' : 'character'}`)}
                                         style={isSelected ? { backgroundColor: 'rgba(var(--accent-rgb, 74,144,226), 0.08)', borderRadius: '8px' } : {}}
                                         onClick={selectionClick}>
                                         {selectMode && (
@@ -943,7 +1156,9 @@ function GroupChatWindow({
                             return (
                                 <React.Fragment key={msg.id}>
                                     {boundaryElement}
-                                    <div className={`message-wrapper ${isUser ? 'user' : 'character'}`}
+                                    <div
+                                        ref={(node) => setMessageElement(msg.id, node)}
+                                        className={getMessageAnchorClass(msg.id, `message-wrapper ${isUser ? 'user' : 'character'}`)}
                                         style={isSelected ? { backgroundColor: 'rgba(var(--accent-rgb, 74,144,226), 0.08)', borderRadius: '8px' } : {}}
                                         onClick={selectionClick}>
                                     {selectMode && (
@@ -990,7 +1205,9 @@ function GroupChatWindow({
                         return (
                             <React.Fragment key={msg.id}>
                                 {boundaryElement}
-                                <div className={`message-wrapper ${isUser ? 'user' : 'character'}`}
+                                <div
+                                    ref={(node) => setMessageElement(msg.id, node)}
+                                    className={getMessageAnchorClass(msg.id, `message-wrapper ${isUser ? 'user' : 'character'}`)}
                                     style={isSelected ? { backgroundColor: 'rgba(var(--accent-rgb, 74,144,226), 0.08)', borderRadius: '8px' } : {}}
                                     onClick={selectionClick}>
                                 {selectMode && (
@@ -1026,6 +1243,21 @@ function GroupChatWindow({
                             </React.Fragment>
                         );
                     })}
+                    {isSearchContextWindow && hasNewer && (
+                        <div style={{ textAlign: 'center', padding: '10px' }}>
+                            <button
+                                onClick={loadNewerMessages}
+                                disabled={loadingNewer}
+                                style={{
+                                    fontSize: '12px', color: 'var(--text-secondary)', background: 'rgba(255, 247, 250, 0.92)',
+                                    border: '1px solid #ddd', borderRadius: '12px',
+                                    padding: '5px 16px', cursor: loadingNewer ? 'default' : 'pointer'
+                                }}
+                            >
+                                {loadingNewer ? (lang === 'en' ? 'Loading...' : '加载中...') : (lang === 'en' ? '↓ Load newer messages' : '↓ 加载更新的消息')}
+                            </button>
+                        </div>
+                    )}
                     <div ref={messagesEndRef} />
                 </div>
 

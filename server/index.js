@@ -2917,6 +2917,17 @@ app.post('/api/characters', authMiddleware, (req, res) => {
         if (!data.id || !data.name) return res.status(400).json({ error: 'Missing ID or Name' });
         const prevCharacter = typeof db.getCharacter === 'function' ? db.getCharacter(data.id) : null;
         const characterPatch = preserveExistingSecretFields(data, prevCharacter, CHARACTER_SECRET_FIELDS);
+        if (!prevCharacter) {
+            if (!String(characterPatch.memory_api_endpoint || '').trim()) {
+                characterPatch.memory_api_endpoint = characterPatch.api_endpoint || '';
+            }
+            if (!String(characterPatch.memory_api_key || '').trim()) {
+                characterPatch.memory_api_key = characterPatch.api_key || '';
+            }
+            if (!String(characterPatch.memory_model_name || '').trim()) {
+                characterPatch.memory_model_name = characterPatch.model_name || '';
+            }
+        }
 
         db.updateCharacter(data.id, characterPatch);
         // Changing S only changes future batch size; keep summaries/baseline so failed pending messages stay pending.
@@ -3064,7 +3075,34 @@ app.get('/api/models', authMiddleware, async (req, res) => {
     return handleModelListProxy(req, res, req.query);
 });
 
-// 3. Get messages for a character (supports ?limit=N and ?before=msgId for pagination)
+app.get('/api/messages/search', authMiddleware, (req, res) => {
+    const db = req.db;
+    try {
+        const query = String(req.query.q || '').trim();
+        if (!query) return res.json({ success: true, query: '', results: [], has_more: false, next_offset: null, offset: 0, limit: 10 });
+        if (query.length > 120) return res.status(400).json({ error: 'Search query is too long' });
+        const limit = normalizeQueryLimit(req.query.limit, 10, 10);
+        if (!limit) return res.status(400).json({ error: 'Invalid search limit' });
+        const offset = req.query.offset !== undefined && req.query.offset !== null && String(req.query.offset).trim() !== ''
+            ? Number(req.query.offset)
+            : 0;
+        if (!Number.isSafeInteger(offset) || offset < 0) {
+            return res.status(400).json({ error: 'Invalid search offset' });
+        }
+        const scope = String(req.query.scope || 'all').trim();
+        if (!['all', 'private', 'group'].includes(scope)) {
+            return res.status(400).json({ error: 'Invalid search scope' });
+        }
+        const page = typeof db.searchMessages === 'function'
+            ? db.searchMessages(query, { limit, scope, offset })
+            : { results: [], has_more: false, next_offset: null, offset, limit };
+        res.json({ success: true, query, ...page });
+    } catch (e) {
+        res.status(e.status || 500).json({ error: e.message });
+    }
+});
+
+// 3. Get messages for a character (supports ?limit=N, ?before=msgId, ?after=msgId, and ?around=msgId)
 app.get('/api/messages/:characterId', authMiddleware, (req, res) => {
     const db = req.db;
     try {
@@ -3079,10 +3117,30 @@ app.get('/api/messages/:characterId', authMiddleware, (req, res) => {
         if (req.query.before !== undefined && (!Number.isSafeInteger(before) || before <= 0)) {
             return res.status(400).json({ error: 'Invalid before cursor' });
         }
+        const after = req.query.after !== undefined && req.query.after !== null && String(req.query.after).trim() !== ''
+            ? Number(req.query.after)
+            : 0;  // message ID cursor for newer messages
+        if (req.query.after !== undefined && (!Number.isSafeInteger(after) || after <= 0)) {
+            return res.status(400).json({ error: 'Invalid after cursor' });
+        }
+        const around = req.query.around !== undefined && req.query.around !== null && String(req.query.around).trim() !== ''
+            ? Number(req.query.around)
+            : 0;
+        if (req.query.around !== undefined && (!Number.isSafeInteger(around) || around <= 0)) {
+            return res.status(400).json({ error: 'Invalid around cursor' });
+        }
 
         let messages;
-        if (before) {
+        if (around) {
+            messages = typeof db.getMessagesAround === 'function'
+                ? db.getMessagesAround(charId, around, limit)
+                : db.getMessages(charId, limit);
+        } else if (before) {
             messages = db.getMessagesBefore(charId, before, limit);
+        } else if (after) {
+            messages = typeof db.getMessagesAfter === 'function'
+                ? db.getMessagesAfter(charId, after, limit)
+                : [];
         } else {
             messages = db.getMessages(charId, limit);
             // Do not let unread-badge bookkeeping block the main history response.
@@ -3459,10 +3517,22 @@ function requireGeneratedCharacterText(value, field, maxLength = 6000) {
 }
 
 function requireGeneratedCharacterInteger(value, field, min, max) {
-    if (!Number.isSafeInteger(value) || value < min || value > max) {
+    const normalized = typeof value === 'number'
+        ? value
+        : (typeof value === 'string' && value.trim() !== '' ? Number(value.trim()) : NaN);
+    if (!Number.isSafeInteger(normalized) || normalized < min || normalized > max) {
         throw new Error(`Generated character has invalid ${field}.`);
     }
-    return value;
+    return normalized;
+}
+
+function requireGeneratedCharacterFlag(value, field) {
+    if (typeof value === 'boolean') return value ? 1 : 0;
+    const text = String(value ?? '').trim().toLowerCase();
+    if (['true', 'yes', 'on'].includes(text)) return 1;
+    if (['false', 'no', 'off'].includes(text)) return 0;
+    const numeric = requireGeneratedCharacterInteger(value, field, 0, 100);
+    return numeric > 0 ? 1 : 0;
 }
 
 function normalizeGeneratedCharacterPayload(parsed) {
@@ -3476,12 +3546,83 @@ function normalizeGeneratedCharacterPayload(parsed) {
         persona: requireGeneratedCharacterText(parsed.persona, 'persona'),
         world_info: requireGeneratedCharacterText(parsed.world_info, 'world_info'),
         affinity: requireGeneratedCharacterInteger(parsed.affinity, 'affinity', 0, 100),
-        sys_pressure: requireGeneratedCharacterInteger(parsed.sys_pressure, 'sys_pressure', 0, 1),
-        sys_jealousy: requireGeneratedCharacterInteger(parsed.sys_jealousy, 'sys_jealousy', 0, 1),
+        sys_pressure: requireGeneratedCharacterFlag(parsed.sys_pressure, 'sys_pressure'),
+        sys_jealousy: requireGeneratedCharacterFlag(parsed.sys_jealousy, 'sys_jealousy'),
         interval_min: intervalMin,
         interval_max: intervalMax,
         target_emoji: requireGeneratedCharacterText(parsed.target_emoji, 'target_emoji', 16)
     };
+}
+
+function isLocalOllamaEndpoint(endpoint) {
+    try {
+        const parsed = new URL(String(endpoint || '').trim());
+        const host = parsed.hostname.toLowerCase();
+        return ['127.0.0.1', 'localhost', '::1'].includes(host)
+            && (!parsed.port || parsed.port === '11434');
+    } catch (_) {
+        return false;
+    }
+}
+
+function getLocalCharacterGeneratorConfig({ endpoint, model }) {
+    if (!isLocalOllamaEndpoint(endpoint)) {
+        return {
+            model,
+            maxTokens: 1500,
+            temperature: 0.7,
+            requestTimeoutMs: 0,
+            maxAttempts: 2,
+            responseFormat: null,
+            localOllama: false
+        };
+    }
+    return {
+        model: String(process.env.CP_LOCAL_CHARACTER_GENERATOR_MODEL || model).trim() || model,
+        maxTokens: Math.max(256, Math.min(1200, Number(process.env.CP_LOCAL_CHARACTER_GENERATOR_MAX_TOKENS || 512) || 512)),
+        temperature: Math.max(0, Math.min(1, Number(process.env.CP_LOCAL_CHARACTER_GENERATOR_TEMPERATURE || 0.35) || 0.35)),
+        requestTimeoutMs: Math.max(0, Number(process.env.CP_LOCAL_CHARACTER_GENERATOR_TIMEOUT_MS || 1200000) || 1200000),
+        maxAttempts: 1,
+        responseFormat: { type: 'json_object' },
+        localOllama: true
+    };
+}
+
+function buildLocalOllamaNativeChatUrl(endpoint) {
+    const parsed = new URL(String(endpoint || '').trim());
+    parsed.pathname = '/api/chat';
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+}
+
+async function callLocalOllamaCharacterGenerator({ endpoint, model, messages, maxTokens, temperature }) {
+    const url = buildLocalOllamaNativeChatUrl(endpoint);
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            model,
+            messages,
+            stream: false,
+            format: 'json',
+            think: false,
+            options: {
+                num_predict: maxTokens,
+                temperature,
+                top_p: 0.9
+            }
+        })
+    });
+    if (!response.ok) {
+        throw new Error(`Ollama native API Error ${response.status}: ${await response.text()}`);
+    }
+    const data = await response.json();
+    const content = String(data?.message?.content || data?.response || '').trim();
+    if (!content) {
+        throw new Error('Local Ollama did not return JSON content.');
+    }
+    return content;
 }
 
 // 4.55 Generate Character via LLM
@@ -3496,7 +3637,28 @@ app.post('/api/characters/generate', authMiddleware, async (req, res) => {
             return res.status(400).json({ error: 'Missing required API keys or query description.' });
         }
 
-        const systemPrompt = `You are a professional RPG character generator. You must create a detailed character persona and world background based on the user's description. The character is intended for a realistic social messaging app simulation. Return ONLY a raw JSON object with no markdown formatting. Do not include \`\`\`json blocks.
+        const generatorConfig = getLocalCharacterGeneratorConfig({
+            endpoint: api_endpoint,
+            model: model_name
+        });
+
+        const systemPrompt = generatorConfig.localOllama
+            ? `You are a compact RPG character generator for a realistic social messaging app simulation.
+Return ONLY one raw JSON object. No markdown. No prose outside JSON. Do not reason step by step.
+Keep persona and world_info short: 1-2 sentences each.
+Every string must be valid JSON with escaped newlines if needed.
+
+The JSON MUST have the EXACT following keys:
+- "name" (string)
+- "persona" (string, first-person personality and speech habits)
+- "world_info" (string, background and relationship to the user)
+- "affinity" (integer 0-100)
+- "sys_pressure" (integer 0 or 1)
+- "sys_jealousy" (integer 0 or 1)
+- "interval_min" (integer minutes)
+- "interval_max" (integer minutes, >= interval_min)
+- "target_emoji" (string, one emoji)`
+            : `You are a professional RPG character generator. You must create a detailed character persona and world background based on the user's description. The character is intended for a realistic social messaging app simulation. Return ONLY a raw JSON object with no markdown formatting. Do not include \`\`\`json blocks.
 CRITICAL JSON RULES:
 1. Ensure all newlines within string values are escaped as \\n (Do not output literal newlines inside strings).
 2. Do NOT include any comments (like // or /* */).
@@ -3523,14 +3685,26 @@ The JSON MUST have the EXACT following keys:
 
         const finalSystemPrompt = systemPrompt + excludeEmojiStr;
 
-        const generatedText = await callLLM({
-            endpoint: api_endpoint,
-            key: api_key,
-            model: model_name,
-            messages: [{ role: 'system', content: finalSystemPrompt }, { role: 'user', content: query }],
-            maxTokens: 1500,
-            temperature: 0.7
-        });
+        const generatorMessages = [{ role: 'system', content: finalSystemPrompt }, { role: 'user', content: query }];
+        const generatedText = generatorConfig.localOllama
+            ? await callLocalOllamaCharacterGenerator({
+                endpoint: api_endpoint,
+                model: generatorConfig.model,
+                messages: generatorMessages,
+                maxTokens: generatorConfig.maxTokens,
+                temperature: generatorConfig.temperature
+            })
+            : await callLLM({
+                endpoint: api_endpoint,
+                key: api_key,
+                model: generatorConfig.model,
+                messages: generatorMessages,
+                maxTokens: generatorConfig.maxTokens,
+                temperature: generatorConfig.temperature,
+                requestTimeoutMs: generatorConfig.requestTimeoutMs,
+                maxAttempts: generatorConfig.maxAttempts,
+                responseFormat: generatorConfig.responseFormat
+            });
 
         console.log(`[Character Generator] LLM returned ${String(generatedText || '').length} chars.`);
 

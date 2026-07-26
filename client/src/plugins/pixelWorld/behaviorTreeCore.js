@@ -1,5 +1,8 @@
 const commercialV2BehaviorConfigStorageKey = 'pixelWorld.commercialStreetV2.behaviorTreeConfig';
 const commercialV2BehaviorTreeStorageKey = 'pixelWorld.commercialStreetV2.behaviorTreeState';
+const commercialV2BehaviorTreeUpdatedEvent = 'pixel-world-behavior-tree-updated';
+const commercialV2BehaviorServerSceneKey = 'commercial_street_v2';
+const roomBehaviorServerSceneKey = 'pixel_cottage_room_v1';
 const commercialV2BehaviorInteractionDistance = 170;
 const commercialV2BehaviorInteractionSessionIdleMs = 180000;
 const commercialV2BehaviorAutonomousInitialDelayMs = 1600;
@@ -401,7 +404,7 @@ function resolveBehaviorChoicePlaceIdFromPlaces(choice = {}, triggerAction = '',
     choice?.targetLabel
   ].filter(Boolean).join(' '));
   if (!searchText) return '';
-  const keywordHints = ['梳妆台', '床头柜', '书架', '书桌', '挂画', '地毯', '沙发', '衣柜', '床', '画', '灯', '柜', '桌', '椅', '镜'];
+  const keywordHints = ['梳妆台', '床头柜', '书架', '挂画', '地毯', '沙发', '衣柜', '床', '画', '灯', '柜', '椅', '镜'];
   let best = null;
   const places = Array.isArray(behaviorPlaces) && behaviorPlaces.length
     ? behaviorPlaces
@@ -1005,6 +1008,9 @@ function normalizeCommercialBehaviorNodeId(value, fallback = 'node') {
 function isCommercialBehaviorAiSource(source = '') {
   return String(source || '').startsWith('ai');
 }
+function isRoomBehaviorDefaultBaseActionNodeId(nodeId = '') {
+  return String(nodeId || '').startsWith('room_base_');
+}
 function buildCommercialBehaviorOwnerMeta(characterId = '', character = null) {
   const ownerCharacterId = String(characterId || character?.id || '').trim();
   if (!ownerCharacterId) return {};
@@ -1145,6 +1151,13 @@ function commercialBehaviorBranchMatchesOwner(branch = {}, characterId = '') {
   const ownerCharacterId = String(branch?.owner_character_id || branch?.ownerCharacterId || '').trim();
   return !ownerCharacterId || ownerCharacterId === String(characterId || '').trim();
 }
+
+function preferCommercialBehaviorBranchesForOwner(branches = [], characterId = '') {
+  const validBranches = Array.isArray(branches) ? branches.filter(Boolean) : [];
+  const ownerMatches = validBranches.filter((branch) => commercialBehaviorBranchMatchesOwner(branch, characterId));
+  return ownerMatches.length ? ownerMatches : validBranches;
+}
+
 function createCommercialBehaviorPatchFromBranch(branch, source = 'manual', patchMeta = {}) {
   if (!branch || typeof branch !== 'object') return null;
   const branchId = normalizeCommercialBehaviorNodeId(branch.branch_id || branch.id || patchMeta.node_id, 'branch');
@@ -1325,6 +1338,54 @@ function mergeCommercialBehaviorTreePatchesForRuntime(currentTree, rawPatches = 
   });
   if (!patches.length) return null;
   return { tree: nextTree, patches };
+}
+
+function summarizeMountedGeneratedBehaviorBranches(treeState = {}) {
+  const nodes = treeState?.nodes && typeof treeState.nodes === 'object' ? treeState.nodes : {};
+  const uniqueIds = (ids = []) => Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
+  const baseNodeIds = uniqueIds(commercialV2BehaviorBaseNodeIds.flatMap((nodeId) => (
+    Array.isArray(nodes[nodeId]?.children_ids) ? nodes[nodeId].children_ids : []
+  ))).filter((nodeId) => isCommercialBehaviorAiSource(nodes[nodeId]?.source));
+  const interactionNodeIds = uniqueIds(
+    Array.isArray(nodes.player_interaction?.children_ids) ? nodes.player_interaction.children_ids : []
+  ).filter((nodeId) => isCommercialBehaviorAiSource(nodes[nodeId]?.source));
+  return {
+    base_node_ids: baseNodeIds,
+    interaction_node_ids: interactionNodeIds,
+    base_count: baseNodeIds.length,
+    interaction_count: interactionNodeIds.length,
+    generated_node_count: uniqueIds([...baseNodeIds, ...interactionNodeIds]).length
+  };
+}
+
+function buildBehaviorTreeStorageSyncSignature(treeState = {}) {
+  const mounted = summarizeMountedGeneratedBehaviorBranches(treeState);
+  const nodes = treeState?.nodes && typeof treeState.nodes === 'object' ? treeState.nodes : {};
+  const uniqueIds = (ids = []) => Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
+  const baseChildrenSignature = commercialV2BehaviorBaseNodeIds.map((nodeId) => {
+    const childIds = uniqueIds(Array.isArray(nodes[nodeId]?.children_ids) ? nodes[nodeId].children_ids : []);
+    return `${nodeId}:${childIds.join(',')}`;
+  }).join('|');
+  const interactionChildrenSignature = uniqueIds(
+    Array.isArray(nodes.player_interaction?.children_ids) ? nodes.player_interaction.children_ids : []
+  ).join(',');
+  const patchHistory = Array.isArray(treeState?.patch_history) ? treeState.patch_history : [];
+  const patchSignature = patchHistory.map((record) => [
+    record?.node_id || record?.nodeId || record?.id || '',
+    record?.source || '',
+    record?.created_at || record?.createdAt || record?.at || ''
+  ].join('@')).join('|');
+  return [
+    treeState?.tree_id || '',
+    treeState?.schema || '',
+    treeState?.version || 0,
+    patchHistory.length,
+    mounted.base_node_ids.join(','),
+    mounted.interaction_node_ids.join(','),
+    baseChildrenSignature,
+    interactionChildrenSignature,
+    patchSignature
+  ].join('::');
 }
 
 function createCommercialBehaviorBranchFromNode(node) {
@@ -1558,10 +1619,9 @@ function pickCommercialBehaviorBaseBranchByTrigger(treeState, triggerId = '', al
     .filter((branch) => branch
       && branch.branch_kind === 'base'
       && commercialBehaviorBranchHasTrigger(branch, triggerId)
-      && commercialBehaviorBranchMatchesOwner(branch, ownerCharacterId)
       && behaviorBranchReferencesOnlyPlaces(branch, allowedPlaceIds))
     .sort((a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0));
-  return candidates[0] || null;
+  return preferCommercialBehaviorBranchesForOwner(candidates, ownerCharacterId)[0] || null;
 }
 function pickGeneratedInteractionStarterBranch(treeState, actionId, placeId = '', allowedPlaceIds = [], ownerCharacterId = '') {
   const nodes = treeState?.nodes && typeof treeState.nodes === 'object' ? treeState.nodes : {};
@@ -1573,16 +1633,16 @@ function pickGeneratedInteractionStarterBranch(treeState, actionId, placeId = ''
     .filter((node) => {
       if (!node || node.branch_kind !== 'special' || !Array.isArray(node.steps) || !node.steps.length) return false;
       if (String(node.source || '') !== 'ai-interaction-starter') return false;
-      if (!commercialBehaviorBranchMatchesOwner(node, ownerCharacterId)) return false;
       return String(node.trigger?.player_action || node.trigger?.playerAction || '').trim() === safeActionId;
     })
     .map((node) => createCommercialBehaviorBranchFromNode(node))
     .filter((branch) => branch && behaviorBranchReferencesOnlyPlaces(branch, allowedPlaceIds));
-  if (!candidates.length) return null;
+  const ownerPreferredCandidates = preferCommercialBehaviorBranchesForOwner(candidates, ownerCharacterId);
+  if (!ownerPreferredCandidates.length) return null;
   const safePlaceId = String(placeId || '').trim();
-  return candidates.find((branch) => String(branch.trigger?.place_id || branch.trigger?.placeId || '').trim() === safePlaceId)
-    || candidates.find((branch) => !String(branch.trigger?.place_id || branch.trigger?.placeId || '').trim())
-    || candidates[0];
+  return ownerPreferredCandidates.find((branch) => String(branch.trigger?.place_id || branch.trigger?.placeId || '').trim() === safePlaceId)
+    || ownerPreferredCandidates.find((branch) => !String(branch.trigger?.place_id || branch.trigger?.placeId || '').trim())
+    || ownerPreferredCandidates[0];
 }
 
 function normalizeRoomBehaviorPlace(place, index = 0) {
@@ -1641,13 +1701,13 @@ function createRoomDefaultBehaviorSeedNodes(roomPlaces = []) {
 
   addNode('hard_needs', {
     id: 'room_base_needs_rest',
-    title: `基础：在${restPlace.label}旁边缓一下`,
+    title: `基础：在${restPlace.label}附近停一下`,
     priority: 82,
     trigger: 'runtime_state.energy_low',
-    summary: '无互动时，角色会利用当前房间里的休息锚点短暂停留。',
+    summary: '无互动时，角色会利用当前房间里的物件或中心站位短暂停留。',
     steps: [
       { action: 'go_to_place', place_id: restPlace.id, movement_style: 'quiet' },
-      { action: 'say', text: '我在这里歇一会儿。', duration_ms: 1400 },
+      { action: 'say', text: '我在这儿停一下，看看房间里还缺什么。', duration_ms: 1400 },
       { action: 'idle_at_place', place_id: restPlace.id, movement_style: 'resting' },
       { action: 'wait', duration_ms: 1600 }
     ]
@@ -1670,7 +1730,7 @@ function createRoomDefaultBehaviorSeedNodes(roomPlaces = []) {
     title: `基础：在${affordancePlace.label}旁停留`,
     priority: 68,
     trigger: 'location.has_affordance',
-    summary: '无互动时，角色会使用或观察附近家具锚点。',
+    summary: '无互动时，角色会使用或观察附近物件锚点。',
     steps: [
       { action: 'browse_near', place_id: affordancePlace.id, movement_style: 'checking' },
       { action: 'emote', text: '低头确认了一下摆放的位置', duration_ms: 1200 },
@@ -1746,11 +1806,29 @@ function adaptRoomBehaviorTreeStateForPlaces(treeState, roomPlaces = []) {
   const currentNodes = currentTree.nodes && typeof currentTree.nodes === 'object' ? currentTree.nodes : {};
   const { nodes: roomSeedNodes, categoryChildren } = createRoomDefaultBehaviorSeedNodes(roomPlaces);
   const oldCommercialSeedIds = new Set(commercialV2BehaviorAutonomousNodeIds);
+  const allowedRoomPlaceIds = roomPlaces
+    .map((place, index) => normalizeRoomBehaviorPlace(place, index)?.id || '')
+    .filter(Boolean);
   const nodes = {
     ...fallback.nodes,
     ...currentNodes,
     ...roomSeedNodes
   };
+  const getValidRoomDynamicChildren = (existingChildren = [], seedChildren = []) => existingChildren.filter((id) => (
+    id
+    && !seedChildren.includes(id)
+    && !isRoomBehaviorDefaultBaseActionNodeId(id)
+    && !oldCommercialSeedIds.has(id)
+    && behaviorBranchReferencesOnlyPlaces(createCommercialBehaviorBranchFromNode(nodes[id]), allowedRoomPlaceIds)
+  ));
+  const hasAnyGeneratedRoomBaseChildren = commercialV2BehaviorBaseNodeIds
+    .filter((nodeId) => nodeId !== 'movement_recovery')
+    .some((nodeId) => {
+      const seedChildren = categoryChildren[nodeId] || [];
+      const existingChildren = Array.isArray(nodes[nodeId]?.children_ids) ? nodes[nodeId].children_ids : [];
+      return getValidRoomDynamicChildren(existingChildren, seedChildren)
+        .some((id) => isCommercialBehaviorAiSource(nodes[id]?.source));
+    });
   nodes.street_character_root = {
     ...fallback.nodes.street_character_root,
     ...(nodes.street_character_root || {}),
@@ -1779,11 +1857,9 @@ function adaptRoomBehaviorTreeStateForPlaces(treeState, roomPlaces = []) {
   commercialV2BehaviorBaseNodeIds.forEach((nodeId) => {
     const seedChildren = categoryChildren[nodeId] || [];
     const existingChildren = Array.isArray(nodes[nodeId]?.children_ids) ? nodes[nodeId].children_ids : [];
-    const dynamicChildren = existingChildren.filter((id) => (
-      id
-      && !seedChildren.includes(id)
-      && !oldCommercialSeedIds.has(id)
-    ));
+    const dynamicChildren = getValidRoomDynamicChildren(existingChildren, seedChildren);
+    const hasGeneratedChildren = dynamicChildren.some((id) => isCommercialBehaviorAiSource(nodes[id]?.source));
+    const mountedChildren = (hasAnyGeneratedRoomBaseChildren || hasGeneratedChildren) ? dynamicChildren : [...seedChildren, ...dynamicChildren];
     const [title, summary] = baseNodeMeta[nodeId] || [fallback.nodes[nodeId]?.title, fallback.nodes[nodeId]?.summary];
     nodes[nodeId] = {
       ...fallback.nodes[nodeId],
@@ -1791,7 +1867,7 @@ function adaptRoomBehaviorTreeStateForPlaces(treeState, roomPlaces = []) {
       title,
       summary,
       branch_kind: 'base',
-      children_ids: [...seedChildren, ...dynamicChildren].slice(0, 12)
+      children_ids: mountedChildren.slice(0, 12)
     };
   });
   const roomAnchorSignature = roomPlaces
@@ -1815,6 +1891,9 @@ function adaptRoomBehaviorTreeStateForPlaces(treeState, roomPlaces = []) {
 export {
   commercialV2BehaviorConfigStorageKey,
   commercialV2BehaviorTreeStorageKey,
+  commercialV2BehaviorTreeUpdatedEvent,
+  commercialV2BehaviorServerSceneKey,
+  roomBehaviorServerSceneKey,
   commercialV2BehaviorInteractionDistance,
   commercialV2BehaviorInteractionSessionIdleMs,
   commercialV2BehaviorAutonomousInitialDelayMs,
@@ -1871,11 +1950,14 @@ export {
   buildCommercialBehaviorSourceOwnerMeta,
   mergeCommercialBehaviorOwnerMemoryDelta,
   commercialBehaviorBranchMatchesOwner,
+  preferCommercialBehaviorBranchesForOwner,
   createCommercialBehaviorPatchFromBranch,
   normalizeCommercialBehaviorPatch,
   applyCommercialBehaviorTreePatch,
   mergeCommercialBehaviorTreePatchForRuntime,
   mergeCommercialBehaviorTreePatchesForRuntime,
+  summarizeMountedGeneratedBehaviorBranches,
+  buildBehaviorTreeStorageSyncSignature,
   createCommercialBehaviorBranchFromNode,
   sortCommercialBehaviorBranchesByLiveliness,
   normalizeCommercialBehaviorIterationStep,

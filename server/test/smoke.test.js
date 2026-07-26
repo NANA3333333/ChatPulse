@@ -1328,6 +1328,93 @@ test('memory generation parsers require full JSON before persistence', () => {
     assert.doesNotMatch(memorySource, /responseText\.slice\(startIdx, endIdx \+ 1\)|responseText\.indexOf\('\{'\)|responseText\.lastIndexOf\('\}'\)|responseText\.indexOf\('\['\)|responseText\.lastIndexOf\('\]'\)/, 'memory generation paths must not slice JSON out of malformed model text');
 });
 
+test('memory focus prompts keep situational states out of user profile', () => {
+    const engineSource = readRepoFile('server', 'engine.js');
+    const memorySource = readRepoFile('server', 'memory.js');
+    const maintenanceSource = readRepoFile('server', 'memoryMaintenanceService.js');
+    const classifyStart = memorySource.indexOf('function classifyUserCenteredMemory');
+    const classifyEnd = memorySource.indexOf('function computeMemoryRetrievalWeight', classifyStart);
+    assert.notEqual(classifyStart, -1, 'memory classifier should exist');
+    assert.notEqual(classifyEnd, -1, 'memory classifier should have a stable end marker');
+    const classifyBlock = memorySource.slice(classifyStart, classifyEnd);
+
+    assert.match(engineSource, /user_current_arc is for non-stable user experiences[\s\S]*situations[\s\S]*temporary conditions/, 'RAG decision should distinguish situational memory from stable profile memory');
+    assert.match(engineSource, /Do not narrow retrieval to user_profile merely because the content is about the user/, 'RAG rewrite should not collapse user-related recall to profile-only filters');
+    assert.match(memorySource, /Non-stable facts such as one-off, dated, current, or situational states\/events belong to "user_current_arc", not "user_profile"/, 'memory extraction prompts should keep situational states out of profile');
+    assert.match(classifyBlock, /当时\|当天\|今天\|昨天\|前天\|上次\|这次\|那次\|几号\|日期\|时间/, 'fallback memory classifier should use generic temporal markers as current-arc signals');
+    assert.doesNotMatch(classifyBlock, /身体状况\|健康问题/, 'fallback memory classifier should not treat generic body/health wording as profile identity');
+    assert.match(maintenanceSource, /带日期、一次性或情境性的状态\/事件不归入这里/, 'memory library focus definition should describe situational states as non-profile');
+});
+
+test('RAG rewrite strips implicit scope names that the user did not type', () => {
+    const engineSource = readRepoFile('server', 'engine.js');
+    function extractEngineFunction(name) {
+        const start = engineSource.indexOf(`function ${name}`);
+        assert.notEqual(start, -1, `${name} should exist`);
+        const headerEnd = engineSource.indexOf('\n', start);
+        const bodyStart = engineSource.lastIndexOf('{', headerEnd === -1 ? engineSource.length : headerEnd);
+        assert.notEqual(bodyStart, -1, `${name} should have a body`);
+        let depth = 0;
+        for (let index = bodyStart; index < engineSource.length; index += 1) {
+            const char = engineSource[index];
+            if (char === '{') depth += 1;
+            if (char === '}') {
+                depth -= 1;
+                if (depth === 0) return engineSource.slice(start, index + 1);
+            }
+        }
+        assert.fail(`${name} should have a complete body`);
+    }
+
+    const sandbox = { module: { exports: {} } };
+    vm.runInNewContext([
+        extractEngineFunction('escapeRegExp'),
+        extractEngineFunction('isRagScopeTermMentioned'),
+        extractEngineFunction('buildImplicitRagQueryScopeTerms'),
+        extractEngineFunction('normalizeRagQuerySpacing'),
+        extractEngineFunction('stripImplicitRagQueryScopeTerms'),
+        extractEngineFunction('sanitizeStructuredRagQueries'),
+        extractEngineFunction('buildSlotQueries'),
+        'module.exports = { buildImplicitRagQueryScopeTerms, stripImplicitRagQueryScopeTerms, sanitizeStructuredRagQueries, buildSlotQueries };'
+    ].join('\n'), sandbox);
+
+    const helpers = sandbox.module.exports;
+    const absentTerms = helpers.buildImplicitRagQueryScopeTerms({
+        latestUserMessage: '我上一次什么时候记录的',
+        userName: 'Nana',
+        characterName: 'Claude4.6opus'
+    });
+    const sanitized = helpers.sanitizeStructuredRagQueries([
+        'Nana 记录',
+        '用户上次记录时间',
+        'Claude4.6opus 什么时候记录',
+        'Gemini 3 Pro 记录',
+        '记录时间'
+    ], { implicitQueryScopeTerms: absentTerms });
+
+    assert.deepEqual(Array.from(sanitized), ['记录', '上次记录时间', '什么时候记录', 'Gemini 3 Pro 记录', '记录时间']);
+    assert.equal(sanitized.some(query => /Nana|User|用户|Claude4\.6opus/i.test(query)), false, 'implicit current-chat participant names should be stripped from semantic queries');
+    assert.equal(sanitized.includes('Gemini 3 Pro 记录'), true, 'non-current entity names should remain available for actor/object distinction');
+    assert.deepEqual(
+        Array.from(helpers.buildSlotQueries(['Nana 记录'], ['用户近况'], absentTerms)),
+        ['记录', '近况'],
+        'slot query construction should pass scope terms without throwing'
+    );
+
+    const presentTerms = helpers.buildImplicitRagQueryScopeTerms({
+        latestUserMessage: 'Nana 上一次什么时候记录的',
+        userName: 'Nana',
+        characterName: 'Claude4.6opus'
+    });
+    assert.equal(presentTerms.includes('Nana'), false, 'a name explicitly typed by the user should not be stripped');
+    assert.equal(helpers.stripImplicitRagQueryScopeTerms('Nana 记录', presentTerms), 'Nana 记录');
+
+    assert.match(engineSource, /Do not introduce the current user name, current character name, or generic speaker labels such as User\/用户 as query terms unless the newest user message literally uses that label\/name/, 'rewrite prompt should forbid invented current-chat scope labels in queries');
+    assert.match(engineSource, /entity labels are useful for actor\/object distinction/, 'rewrite prompt should preserve real entity labels when they distinguish actors or objects');
+    assert.match(engineSource, /implicitQueryScopeTerms: buildImplicitRagQueryScopeTerms\(\{[\s\S]*userName: db\.getUserProfile\?\.\(\)\?\.name \|\| ''[\s\S]*characterName: character\.name \|\| ''/, 'runtime should derive implicit scope terms from the current user and character');
+    assert.match(engineSource, /deriveRagRetrievalSlots\(\{[\s\S]*implicitQueryScopeTerms: rewriteConstraints\.implicitQueryScopeTerms \|\| \[\]/, 'retrieval slots should keep the same implicit scope cleanup without putting scope names into the request JSON');
+});
+
 test('character settings are normalized before character writes', () => {
     const dbSource = readRepoFile('server', 'db.js');
 
@@ -1376,7 +1463,7 @@ test('character deletion clears plugin and diagnostic rows tied to the character
     assert.match(dbSource, /function deleteExternalKnowledgeDocsForCharacter\(characterId\)[\s\S]*SELECT id FROM external_knowledge_docs WHERE character_id = \?[\s\S]*DELETE FROM external_knowledge_chunks WHERE doc_id IN[\s\S]*DELETE FROM external_knowledge_docs WHERE character_id = \?/, 'character deletion should remove MCP Lab knowledge docs and chunks bound to the deleted character');
     assert.match(dbSource, /function deleteCharacterAttachedRows\(characterId\)[\s\S]*DELETE FROM message_tts WHERE character_id = \?[\s\S]*DELETE FROM message_tts WHERE message_id IN \(SELECT id FROM messages WHERE character_id = \?\)/, 'character deletion should remove direct and message-derived TTS rows before messages are deleted');
     assert.match(dbSource, /function deleteCharacterAttachedRows\(characterId\)[\s\S]*DELETE FROM emotion_logs WHERE character_id = \?[\s\S]*DELETE FROM llm_debug_logs WHERE character_id = \?[\s\S]*DELETE FROM reply_dispatch_logs WHERE character_id = \?[\s\S]*DELETE FROM token_usage WHERE character_id = \?/, 'character deletion should remove diagnostic and token rows for the deleted character');
-    assert.match(dbSource, /function deleteCharacterAttachedRows\(characterId\)[\s\S]*DELETE FROM scheduled_tasks WHERE character_id = \?[\s\S]*DELETE FROM city_character_courses WHERE character_id = \?/, 'character deletion should remove scheduler tasks and city growth progress for the deleted character');
+    assert.match(dbSource, /function deleteCharacterAttachedRows\(characterId\)[\s\S]*DELETE FROM scheduled_tasks WHERE character_id = \?/, 'character deletion should remove scheduler tasks for the deleted character');
     assert.match(dbSource, /function deleteCharacterAttachedRows\(characterId\)[\s\S]*DELETE FROM city_logs WHERE character_id = \?[\s\S]*DELETE FROM city_inventory WHERE character_id = \?[\s\S]*DELETE FROM city_quest_progress_reviews WHERE character_id = \?[\s\S]*DELETE FROM city_quest_claims WHERE character_id = \?/, 'character deletion should remove city runtime, inventory, and quest rows for the deleted character');
     assert.match(dbSource, /function deleteCharacterAttachedRows\(characterId\)[\s\S]*DELETE FROM social_housing_bindings WHERE character_id = \?/, 'character deletion should remove social housing bindings for the deleted character');
     assert.match(dbSource, /function deleteCharacterAttachedRows\(characterId\)[\s\S]*DELETE FROM social_housing_rental_chain_events WHERE chain_id IN \(SELECT id FROM social_housing_rental_chains WHERE character_id = \?\)[\s\S]*DELETE FROM social_housing_rental_chains WHERE character_id = \?/, 'character deletion should remove social housing rental chains and their events for the deleted character');
@@ -2292,14 +2379,11 @@ test('city admin grant routes reject invalid numeric inputs', () => {
     assert.match(inputGuards, /const MAX_CITY_GOLD_GRANT = 1000000/, 'city gold grants should have a bounded maximum');
     assert.match(inputGuards, /const MAX_CITY_CALORIES_GRANT = 4000/, 'city calorie grants should cap at the frontend range');
     assert.match(inputGuards, /const MAX_CITY_ITEM_QUANTITY = 100/, 'city item grants should reject excessive quantities');
-    assert.match(inputGuards, /const MAX_CITY_TIME_SKIP_MINUTES = 1440/, 'city time skips should match the frontend one-day slider');
     assert.match(inputGuards, /if \(!Number\.isFinite\(amount\) \|\| amount <= 0 \|\| amount > max\) return null/, 'money guard should reject negative, zero, non-finite, and over-limit values');
     assert.match(inputGuards, /if \(!Number\.isFinite\(parsed\) \|\| !Number\.isInteger\(parsed\)\) return null/, 'integer guard should reject fractional and non-finite values');
 
-    assert.match(coreRoutes, /const minutes = normalizeCityTimeSkipMinutes\(req\.body\?\.minutes\)/, 'time skip route should normalize minutes before writes');
-    assert.match(coreRoutes, /const oldDays = normalizeStoredCityOffsetDays\(config\.city_time_offset_days\)/, 'time skip should read stored day offsets without loose parsing');
-    assert.match(coreRoutes, /const oldHours = normalizeStoredCityOffsetHours\(config\.city_time_offset_hours\)/, 'time skip should preserve fractional stored hour offsets');
-    assert.doesNotMatch(coreRoutes, /parseInt\(config\.city_time_offset_hours\)/, 'time skip must not truncate fractional hour offsets');
+    assert.doesNotMatch(coreRoutes, /\/api\/city\/time-skip/, 'city time skip route should not exist');
+    assert.doesNotMatch(inputGuards, /normalizeCityTimeSkipMinutes|MAX_CITY_TIME_SKIP_MINUTES/, 'time skip input guards should be removed');
     assert.match(coreRoutes, /const giftAmount = normalizeCityGoldAmount\(amount\)/, 'gold route should normalize grant amounts before wallet writes');
     assert.match(coreRoutes, /const addCals = normalizeCityCalories\(calories\)/, 'feed route should normalize calories before state writes');
     assert.match(coreRoutes, /const safeQuantity = normalizeCityItemQuantity\(quantity\)/, 'give-item route should normalize quantities before inventory writes');
@@ -2424,6 +2508,7 @@ test('autonomous city action parser tolerates quoted narration text', () => {
 
 test('city behavior generation returns retryable errors instead of fallback patches', () => {
     const cityIndex = readRepoFile('server', 'plugins', 'city', 'index.js');
+    const dbSource = readRepoFile('server', 'db.js');
     const pixelWorldPanel = readPixelWorldSources();
     const parserStart = cityIndex.indexOf('function repairUnescapedJsonStringQuotes');
     const parserEnd = cityIndex.indexOf('async function fetchBehaviorModelList', parserStart);
@@ -2441,14 +2526,18 @@ parseJsonObjectFromLlmText(${JSON.stringify('{"reason":"玩家在预设互动末
     assert.match(cityIndex, /throw createCityError\('基础枝丫生成缺少模型 URL\/Key\/模型名，请补全后重试。', 400, true\)/, 'base branch generation should reject missing model config');
     assert.match(cityIndex, /throw createCityError\(`基础枝丫生成返回的 JSON 无法解析，请重试：/, 'base branch generation should fail invalid model JSON');
     assert.match(cityIndex, /if \(!sanitized\.base_patches\.length\) \{\s*throw createCityError\('基础枝丫生成结果没有可用的行为步骤，请重试。', 502, true\)/, 'base branch generation should fail empty sanitized output');
+    assert.match(cityIndex, /throw createCityError\('互动开场枝丫生成缺少模型 URL\/Key\/模型名，请补全后重试。', 400, true\)/, 'interaction starter generation should reject missing model config');
     assert.match(cityIndex, /schema: \{[\s\S]*base_branches:[\s\S]*interaction_branches:/, 'behavior tree branch pack contract should include generated interaction starter branches');
     assert.match(cityIndex, /function sanitizeBehaviorInteractionStarterPack\(rawValue, char, payload = \{\}, fallbackReason = 'starter_pack_invalid', allowedPlaceIds = \[\]\)/, 'behavior generation should sanitize interaction starter branches into player_interaction patches');
-    assert.match(cityIndex, /interaction_branches: generated\.interaction_branches \|\| \[\],[\s\S]*interaction_patches: generated\.interaction_patches \|\| \[\]/, 'behavior base route should return generated interaction starter branches');
+    assert.match(cityIndex, /const generated = await createBaseBehaviorBranchesWithModel\(char, input, rebuildPayload, req\.db\);[\s\S]*interaction_branches: generated\.interaction_branches \|\| \[\],[\s\S]*interaction_patches: generated\.interaction_patches \|\| \[\]/, 'behavior base route should make one full-tree model call and return generated interaction starter branches');
+    assert.doesNotMatch(cityIndex, /const interactionGenerated = await createBehaviorInteractionStarterBranchesWithModel/, 'full behavior regeneration route should not split into a second interaction-starter model call');
+    assert.equal((cityIndex.match(/maxTokens: null,\s*\n\s*temperature: (?:0\.72|0\.35),\s*\n\s*responseFormat: \{ type: 'json_object' \}/g) || []).length, 6, 'behavior tree model calls should not send a client-side max_tokens cap');
+    assert.doesNotMatch(cityIndex, /maxTokens: (1800|2600|5600|4200)/, 'behavior tree generation should not keep old explicit output caps');
     assert.match(cityIndex, /活跃度规则：每条特殊枝丫在 offer_choices 前要有 3-5 个可见步骤，至少 1 个身体动作或移动步骤，至少 2 个 say\/emote/, 'special behavior branches should prompt for visible movement and more short speech');
     assert.match(cityIndex, /活跃度规则：除 movement_recovery 外，每条 base_branch 要有 4-7 个步骤，至少 2 个身体动作\/移动\/地点停留步骤，至少 1 个 say/, 'base behavior branches should prompt for livelier movement and speech');
     assert.match(cityIndex, /interaction_branches 每条 4-6 个步骤[\s\S]*前面至少 2 个 say\/emote 和 1 个身体动作或移动步骤/, 'interaction starter branches should also require movement and speech before choices');
     const behaviorModelFallbackMatches = cityIndex.match(/const payloadModelName = limitText\(payload\.model_name \|\| payload\.model \|\| '', 200\);\s*const modelName = usePayloadCredentials\s*\?\s*limitText\(payloadModelName \|\| char\?\.model_name \|\| '', 200\)\s*:\s*limitText\(char\?\.model_name \|\| '', 200\);/g) || [];
-    assert.equal(behaviorModelFallbackMatches.length, 2, 'behavior generation should only use panel model overrides when panel URL and Key are both provided');
+    assert.equal(behaviorModelFallbackMatches.length, 3, 'behavior generation should only use panel model overrides when panel URL and Key are both provided');
     assert.match(cityIndex, /res\.status\(e\.status \|\| 500\)\.json\(\{\s*error: e\.message,[\s\S]*canRetry/, 'behavior routes should return retryable error metadata');
     assert.match(parserBlock, /function repairUnescapedJsonStringQuotes\(text = ''\)[\s\S]*nextChar === ':'[\s\S]*nextChar === ','[\s\S]*repaired \+= char[\s\S]*repaired \+=/, 'behavior JSON parser should narrowly repair unescaped quote characters inside strings');
     assert.match(parserBlock, /function parseJsonObjectFromLlmText\(text\)[\s\S]*try \{[\s\S]*return JSON\.parse\(cleaned\)[\s\S]*const repaired = repairUnescapedJsonStringQuotes\(cleaned\)[\s\S]*return JSON\.parse\(repaired\)/, 'behavior generation should parse full JSON and only retry with narrow string-quote repair');
@@ -2495,11 +2584,11 @@ parseJsonObjectFromLlmText(${JSON.stringify('{"reason":"玩家在预设互动末
     assert.match(pixelWorldPanel, /function buildCommercialBehaviorSourceOwnerMeta\(source = '', characterId = '', character = null\)[\s\S]*isCommercialBehaviorAiSource\(source\)[\s\S]*buildCommercialBehaviorOwnerMeta\(characterId, character\)/, 'AI behavior patches should derive an owner from the selected character');
     assert.match(pixelWorldPanel, /owner_character_id: ownerCharacterId[\s\S]*owner_character_name: ownerCharacterName/, 'AI behavior patch nodes should persist owner metadata');
     assert.match(pixelWorldPanel, /function mergeCommercialBehaviorTreePatchesForRuntime\(currentTree, rawPatches = \[\], source = 'manual', characterId = '', character = null\)[\s\S]*const ownerMeta = buildCommercialBehaviorSourceOwnerMeta\(patchSource, characterId, character\)/, 'merged AI behavior patch packs should bind to the selected AI character');
-    assert.match(pixelWorldPanel, /commercialBehaviorBranchMatchesOwner\(branch, behaviorCharacterId\)/, 'autonomous behavior candidates should be filtered by owner character');
+    assert.match(pixelWorldPanel, /function preferCommercialBehaviorBranchesForOwner\(branches = \[\], characterId = ''\)[\s\S]*commercialBehaviorBranchMatchesOwner\(branch, characterId\)[\s\S]*ownerMatches\.length \? ownerMatches : validBranches/, 'AI behavior candidates should prefer owner matches without dropping generated branches on transient owner mismatches');
     assert.match(pixelWorldPanel, /const commercialV2BehaviorAutonomousCooldownMs = 6200;[\s\S]*const commercialV2BehaviorNearbyCooldownMs = 3000;/, 'autonomous behavior should run often enough to feel alive without interrupting interactions');
     assert.match(pixelWorldPanel, /function sortCommercialBehaviorBranchesByLiveliness\(branches = \[\]\)[\s\S]*getCommercialBehaviorBranchLivelinessScore/, 'autonomous behavior should score livelier branches first');
-    assert.equal((pixelWorldPanel.match(/sortCommercialBehaviorBranchesByLiveliness\(freshCandidates\.length \? freshCandidates : candidates\)/g) || []).length, 2, 'commercial and room autonomous behavior should both prefer livelier generated branches');
-    assert.match(pixelWorldPanel, /pickGeneratedInteractionStarterBranch\([\s\S]*behaviorOrderedPlaces\.map\(\(place\) => place\.placeId\),\s*\n\s*behaviorCharacterId/, 'generated interaction starter branches should be selected for the current AI character only');
+    assert.equal((pixelWorldPanel.match(/sortCommercialBehaviorBranchesByLiveliness\(freshCandidates\.length \? freshCandidates : playableOwnerCandidates\)/g) || []).length, 2, 'commercial and room autonomous behavior should both prefer livelier generated branches');
+    assert.match(pixelWorldPanel, /pickGeneratedInteractionStarterBranch\([\s\S]*behaviorOrderedPlaces\.map\(\(place\) => place\.placeId\),\s*\n\s*behaviorCharacterId/, 'generated interaction starter branches should prefer the current AI character');
     assert.match(pixelWorldPanel, /const commercialV2BehaviorTravelFailureTrigger = 'runtime_state\.travel_failed'[\s\S]*'movement_recovery'[\s\S]*base_travel_blocked_recover/, 'behavior trees should include a base movement recovery branch for travel failures');
     assert.match(pixelWorldPanel, /function pickCommercialBehaviorBaseBranchByTrigger\(treeState, triggerId = '', allowedPlaceIds = \[\], ownerCharacterId = ''\)[\s\S]*commercialBehaviorBranchHasTrigger\(branch, triggerId\)/, 'runtime events should select base behavior branches by trigger');
     assert.equal((pixelWorldPanel.match(/!commercialBehaviorBranchIsTravelRecovery\(branch\)/g) || []).length, 2, 'movement recovery branches should not enter ordinary commercial or room autonomous polling');
@@ -2529,8 +2618,26 @@ parseJsonObjectFromLlmText(${JSON.stringify('{"reason":"玩家在预设互动末
     assert.match(pixelWorldPanel, /function createCommercialBehaviorTreeRebuildState\(currentTree = null, defaultTreeId = 'street_runtime_single_character'\)[\s\S]*memory: \{\},[\s\S]*patch_history: \[\]/, 'behavior full rebuilds should start from a clean branch context');
     assert.equal((pixelWorldPanel.match(/function summarizeBehaviorTreeForPayload\(treeState = behaviorTreeState\)/g) || []).length, 2, 'commercial and room behavior payload summaries should accept an explicit tree snapshot');
     assert.equal((pixelWorldPanel.match(/behavior_tree: summarizeBehaviorTreeForPayload\(options\.behaviorTreeState \|\| behaviorTreeState\)/g) || []).length, 2, 'commercial and room full rebuild requests should be able to send the clean tree snapshot');
-    assert.match(pixelWorldPanel, /const rebuildTree = createCommercialBehaviorTreeRebuildState\([\s\S]*'street_runtime_single_character'[\s\S]*const requestPayload = buildBehaviorPayload\(\{ behaviorTreeState: rebuildTree \}\)[\s\S]*mergeBehaviorTreePatches\(combinedPatches, 'ai-tree', rebuildTree\)/, 'commercial full behavior regeneration should clear old branch context before request and merge');
-    assert.match(pixelWorldPanel, /const rebuildTree = adaptRoomBehaviorTreeStateForPlaces\([\s\S]*createCommercialBehaviorTreeRebuildState\([\s\S]*'room_runtime_single_character'[\s\S]*behaviorOrderedPlaces[\s\S]*const requestPayload = buildBehaviorPayload\(\{ behaviorTreeState: rebuildTree \}\)[\s\S]*mergeBehaviorTreePatches\(combinedPatches, 'ai-tree', rebuildTree\)/, 'room full behavior regeneration should clear old branch context before request and merge');
+    assert.match(pixelWorldPanel, /const rebuildTree = createCommercialBehaviorTreeRebuildState\([\s\S]*'street_runtime_single_character'[\s\S]*const requestPayload = buildBehaviorPayload\(\{ behaviorTreeState: rebuildTree \}\)[\s\S]*mergeBehaviorTreePatches\(combinedPatches, 'ai-tree', rebuildTree(?:, data\.input)?\)/, 'commercial full behavior regeneration should clear old branch context before request and merge');
+    assert.match(pixelWorldPanel, /const rebuildTree = adaptRoomBehaviorTreeStateForPlaces\([\s\S]*createCommercialBehaviorTreeRebuildState\([\s\S]*'room_runtime_single_character'[\s\S]*behaviorOrderedPlaces[\s\S]*const requestPayload = buildBehaviorPayload\(\{ behaviorTreeState: rebuildTree \}\)[\s\S]*mergeBehaviorTreePatches\(combinedPatches, 'ai-tree', rebuildTree(?:, data\.input)?\)/, 'room full behavior regeneration should clear old branch context before request and merge');
+    assert.equal((pixelWorldPanel.match(/function commitBehaviorTreeState\(nextTreeOrUpdater, options = \{\}\)/g) || []).length, 2, 'commercial and room behavior trees should update the runtime ref immediately when state changes');
+    assert.equal((pixelWorldPanel.match(/window\.dispatchEvent\(new CustomEvent\(commercialV2BehaviorTreeUpdatedEvent/g) || []).length, 2, 'commercial and room behavior tree commits should notify other mounted pages');
+    assert.equal((pixelWorldPanel.match(/window\.addEventListener\(commercialV2BehaviorTreeUpdatedEvent, onBehaviorTreeUpdated\)/g) || []).length, 2, 'commercial and room behavior trees should listen for same-page behavior tree sync');
+    assert.equal((pixelWorldPanel.match(/window\.addEventListener\('storage', onBehaviorTreeStorage\)/g) || []).length, 2, 'commercial and room behavior trees should listen for cross-tab behavior tree sync');
+    assert.equal((pixelWorldPanel.match(/buildBehaviorTreeStorageSyncSignature\(nextTree\) === buildBehaviorTreeStorageSyncSignature\(currentTree\)/g) || []).length, 2, 'behavior tree sync should ignore active-node-only runtime writes');
+    assert.match(dbSource, /CREATE TABLE IF NOT EXISTS pixel_behavior_tree_states[\s\S]*scene_key TEXT PRIMARY KEY[\s\S]*tree_json TEXT NOT NULL/, 'pixel behavior tree state should persist in the user database');
+    assert.match(cityIndex, /app\.get\('\/api\/city\/behavior-tree-state\/:sceneKey'[\s\S]*getPixelBehaviorTreeState/, 'pixel behavior tree state should be readable through an authenticated API');
+    assert.match(cityIndex, /app\.post\('\/api\/city\/behavior-tree-state\/:sceneKey'[\s\S]*upsertPixelBehaviorTreeState/, 'pixel behavior tree state should be saved through an authenticated API');
+    assert.equal((pixelWorldPanel.match(/bootstrap-local-cache/g) || []).length, 2, 'commercial and room behavior trees should bootstrap server state from an existing generated local tree');
+    assert.equal((pixelWorldPanel.match(/prefer-local-generated-cache/g) || []).length, 2, 'commercial and room behavior trees should not overwrite a generated local tree with an empty server seed');
+    assert.match(pixelWorldPanel, /function buildBehaviorTreeStorageSyncSignature\(treeState = \{\}\)[\s\S]*baseChildrenSignature[\s\S]*interactionChildrenSignature/, 'behavior tree sync signatures should include mounted parent children, not only generated ids');
+    assert.match(pixelWorldPanel, /behaviorDebugRuntimeSummary[\s\S]*AI 日常[\s\S]*互动/, 'room behavior debug summary should show the mounted runtime tree counts instead of the input skeleton count');
+    assert.equal((pixelWorldPanel.match(/if \(patchResult\?\.tree\) \{[\s\S]*?clearBehaviorRuntime\(''\);[\s\S]*?autonomousBehaviorCooldownRef\.current = Date\.now\(\) \+ 800;[\s\S]*?\}/g) || []).length, 2, 'full behavior regeneration should stop old runtime travel after a new tree is merged');
+    assert.equal((pixelWorldPanel.match(/if \(!patchResult\?\.tree \|\| !patchResult\?\.patches\?\.length\) \{[\s\S]*?AI 返回了枝丫，但没有可合并 patch；运行树未替换。[\s\S]*?return;[\s\S]*?\}/g) || []).length, 2, 'full behavior regeneration should not report success when generated patches were not mounted');
+    assert.equal((pixelWorldPanel.match(/const aiBaseNodeIds = dynamicBaseNodeIds\.filter/g) || []).length, 2, 'autonomous behavior should separate AI-generated branches from local seed branches');
+    assert.equal((pixelWorldPanel.match(/const sourceNodeIds = aiBaseNodeIds\.length[\s\S]*?\? Array\.from\(new Set\(aiBaseNodeIds\)\)[\s\S]*?: Array\.from\(new Set\(fallbackNodeIds\)\)/g) || []).length, 2, 'autonomous behavior should prefer the newly generated AI tree before room or street seed fallbacks');
+    assert.equal((pixelWorldPanel.match(/if \(behaviorTreeStateRef\.current && behaviorTreeStateRef\.current !== behaviorTreeState\) return;[\s\S]*?behaviorTreeStateRef\.current = behaviorTreeState;/g) || []).length, 2, 'stale behavior-tree effects should not overwrite a freshly committed runtime ref');
+    assert.equal((pixelWorldPanel.match(/const treeToStore = behaviorTreeStateRef\.current \|\| behaviorTreeState;[\s\S]*?localStorage\.setItem\([^,]+, JSON\.stringify\(treeToStore\)\)/g) || []).length, 2, 'behavior-tree persistence should write the latest committed runtime ref');
     assert.match(cityIndex, /function buildBehaviorBaseRebuildPayload\(payload = \{\}\)[\s\S]*nodes: \{\},[\s\S]*memory: \{\},[\s\S]*patch_history: \[\],[\s\S]*summaries: \[\],[\s\S]*records: \[\]/, 'backend full base regeneration should hard-reset old behavior tree context even if the frontend sends stale state');
     assert.match(cityIndex, /const rebuildPayload = buildBehaviorBaseRebuildPayload\(req\.body \|\| \{\}\);[\s\S]*buildBehaviorInputPackage\(req\.user\.id, req\.db, char, rebuildPayload\)[\s\S]*createBaseBehaviorBranchesWithModel\(char, input, rebuildPayload, req\.db\)/, 'base behavior regeneration route should use the backend clean rebuild payload');
     assert.match(pixelWorldPanel, /const nextBehaviorIterationSequence = previousIterationSequence \+ 1[\s\S]*sequence: nextBehaviorIterationSequence[\s\S]*behavior_iteration_sequence: nextBehaviorIterationSequence/, 'behavior patch history should persist stable iteration sequence numbers');
@@ -2544,9 +2651,15 @@ parseJsonObjectFromLlmText(${JSON.stringify('{"reason":"玩家在预设互动末
     assert.match(cityIndex, /function inferBehaviorScene\(payload = \{\}, rawWorld = \{\}\)[\s\S]*input_kind: 'room_behavior_input_v1'[\s\S]*movement_model: 'room_semantic_v1'/, 'behavior input should infer room runtime from room payloads');
     assert.match(cityIndex, /const hasRoomPlaceId = candidatePlaceIds\.some[\s\S]*room-anchor:[\s\S]*room-point:[\s\S]*const isRoom = sceneType === 'room' \|\| movementModel\.includes\('room'\) \|\| hasRoomPlaceId \|\| hasRoomLayout/, 'room anchor ids should make behavior input use room scene context even when scene.type is missing');
     assert.match(cityIndex, /function summarizeBehaviorRoomLayout\(rawLayout = \{\}\)[\s\S]*current_ascii[\s\S]*furniture: furniture\.slice\(0, 60\)/, 'room behavior input should expose current room ASCII and furniture context');
+    assert.match(cityIndex, /anchor_id: limitText\(item\?\.anchor_id \|\| item\?\.anchorId \|\| '', 120\)/, 'room behavior layout furniture should carry the matching behavior anchor id');
     assert.match(cityIndex, /\.\.\.\(roomLayout \? \{ room_layout: roomLayout \} : \{\}\)/, 'behavior input package should include room_layout only for room scenes');
     assert.match(pixelWorldPanel, /scene:\s*\{[\s\S]*type: 'room'[\s\S]*room_layout:\s*\{[\s\S]*current_ascii: aiLayout\.currentAscii[\s\S]*furniture: aiLayout\.furniture\.map/, 'room behavior payload should tell the backend it is in a room and include furniture layout context');
+    assert.match(pixelWorldPanel, /required_anchor_branches: roomBehaviorRequiredAnchorBranches[\s\S]*anchor_branch_rule: '当前每个房间物件锚点（家具、装饰、地毯、墙饰、灯）都必须对应至少一条 target_node_id=place_affordance 的基础枝丫/, 'room behavior full generation should be driven by the current room object anchors');
+    assert.match(pixelWorldPanel, /roomEditorBehaviorSafePoints[\s\S]*\.filter\(\(point\) => point\.id === 'center'\)[\s\S]*genericSafePointPlaces/, 'room behavior generation should not treat fixed bedside, vanity, or wardrobe points as required branch targets');
+    assert.match(cityIndex, /function findMissingRequiredRoomAnchorBranches\(baseBranches = \[\], inputPackage = \{\}\)[\s\S]*target_node_id !== 'place_affordance'[\s\S]*requiredTargets\.filter/, 'backend should verify every required room object anchor has a place_affordance branch');
+    assert.match(cityIndex, /基础枝丫生成未覆盖当前物件锚点/, 'room full behavior generation should fail visibly when model output misses required room object anchors');
     assert.match(pixelWorldPanel, /function createRoomDefaultBehaviorSeedNodes\(roomPlaces = \[\]\)[\s\S]*room_base_needs_rest/, 'room behavior tree state should seed reusable base branches from current room anchors');
+    assert.match(pixelWorldPanel, /function adaptRoomBehaviorTreeStateForPlaces\(treeState, roomPlaces = \[\]\)[\s\S]*isRoomBehaviorDefaultBaseActionNodeId\(id\)[\s\S]*hasGeneratedChildren[\s\S]*mountedChildren/, 'room behavior tree adaptation should unmount default room seed branches once generated branches exist');
     assert.match(pixelWorldPanel, /function adaptRoomBehaviorTreeStateForPlaces\(treeState, roomPlaces = \[\]\)[\s\S]*room_anchor_signature/, 'room behavior tree state should remember the current room anchor signature');
     assert.match(pixelWorldPanel, /function createCommercialV2PresetInteractionBranch\(actionId, placeId = 'restaurant', placeLabel = '街区', options = \{\}\)[\s\S]*const isRoomScene[\s\S]*预设互动：房间闲聊[\s\S]*往\$\{targetPlaceLabel\}那边看了一眼/, 'room preset small-talk should use room wording instead of street-side wording');
     assert.match(pixelWorldPanel, /selectedPlaceLabel,\s*\n\s*\{ sceneType: 'room' \}/, 'room preset interactions should pass room scene context to the shared preset branch builder');
@@ -2636,7 +2749,7 @@ test('city action chat prompts read the latest private-chat tail without hard du
     const survivalPromptStart = cityIndex.indexOf('function buildSurvivalPrompt');
     const survivalPromptEnd = cityIndex.indexOf('function buildSchedulePrompt', survivalPromptStart);
     const bridgeStart = cityIndex.indexOf('function broadcastCityToChat');
-    const bridgeEnd = cityIndex.indexOf('function parseTimeSkipBackfillReply', bridgeStart);
+    const bridgeEnd = cityIndex.indexOf('// Broadcast', bridgeStart);
     assert.notEqual(freshTailStart, -1, 'city prompt should have a fresh private-chat tail helper');
     assert.notEqual(freshTailEnd, -1, 'fresh private-chat tail helper should have a stable end marker');
     assert.notEqual(survivalPromptStart, -1, 'city survival prompt should exist');
@@ -2831,43 +2944,20 @@ test('city busy penalty narration failures do not become fallback penalty logs',
     assert.doesNotMatch(releaseBlock, /buildCollapsedCityLog\(char, '(?:忙碌|休息)惩罚文案生成失败'/, 'busy release should not keep local fallback penalty logs');
 });
 
-test('city time skip backfill fails instead of ordinary fallback writes', () => {
+test('city time skip interface and backfill logic stay removed', () => {
     const cityIndex = readRepoFile('server', 'plugins', 'city', 'index.js');
     const coreRoutes = readRepoFile('server', 'plugins', 'city', 'routes', 'coreRoutes.js');
-    const parserStart = cityIndex.indexOf('function parseTimeSkipBackfillReply');
-    const normalizeStart = cityIndex.indexOf('function normalizeTimeSkipBackfillResult', parserStart);
-    const runStart = cityIndex.indexOf('async function runTimeSkipBackfill', normalizeStart);
-    const runEnd = cityIndex.indexOf('function broadcastCityEvent', runStart);
-    const routeStart = coreRoutes.indexOf("app.post('/api/city/time-skip'");
-    const routeEnd = coreRoutes.indexOf("app.get('/api/city/economy'", routeStart);
+    const cityDbSource = readRepoFile('server', 'plugins', 'city', 'cityDb.js');
+    const cityManager = readRepoFile('client', 'src', 'plugins', 'city', 'CityManager.jsx');
+    const cityLog = readRepoFile('client', 'src', 'plugins', 'city', 'CityLog.jsx');
+    const appSource = readRepoFile('client', 'src', 'App.jsx');
 
-    assert.notEqual(parserStart, -1, 'time skip JSON parser should exist');
-    assert.notEqual(normalizeStart, -1, 'time skip result normalizer should exist');
-    assert.notEqual(runStart, -1, 'time skip backfill runner should exist');
-    assert.notEqual(runEnd, -1, 'time skip runner should end before broadcast event helper');
-    assert.notEqual(routeStart, -1, 'time skip route should exist');
-    assert.notEqual(routeEnd, -1, 'time skip route should end before economy route');
-
-    const parserBlock = cityIndex.slice(parserStart, normalizeStart);
-    const normalizeBlock = cityIndex.slice(normalizeStart, runStart);
-    const runBlock = cityIndex.slice(runStart, runEnd);
-    const routeBlock = coreRoutes.slice(routeStart, routeEnd);
-
-    assert.match(parserBlock, /const parsed = JSON\.parse\(cleaned\)/, 'time skip backfill should parse the exact JSON reply');
-    assert.match(parserBlock, /createCityError\(`\$\{char\?\.name \|\| '角色'\} 时间跳过回溯生成失败：JSON 无法解析，请重试。`, 502, true\)/, 'time skip JSON parse failures should be retryable errors');
-    assert.match(normalizeBlock, /if \(!summary\) \{[\s\S]*缺少 summary，请重试。/, 'time skip backfill should require a generated summary');
-    assert.match(normalizeBlock, /!Array\.isArray\(raw\?\.tasks_completed\) \|\| !Array\.isArray\(raw\?\.tasks_missed\)/, 'time skip backfill should require explicit task classification arrays');
-    assert.match(normalizeBlock, /有跳过任务没有被分类，请重试。/, 'time skip backfill should reject omitted skipped task statuses');
-    assert.match(runBlock, /const backfillResults = \[\]/, 'time skip backfill should collect generated results before writing');
-    assert.match(runBlock, /db\.getCharacters\(\)\.filter\(c => c\.api_endpoint && c\.api_key && c\.model_name\)/, 'time skip should only generate for fully configured model characters');
-    assert.match(runBlock, /backfillResults\.push\(\{[\s\S]*result[\s\S]*\}\);[\s\S]*for \(const item of backfillResults\)/, 'time skip should defer schedule and log writes until after generation succeeds');
-    assert.match(runBlock, /throw createCityError\(`\$\{char\.name\} 时间跳过回溯结果缺少任务 \$\{h\}:00 的状态，请重试。`, 502, true\)/, 'time skip should not invent statuses for omitted tasks');
-    assert.doesNotMatch(runBlock, /fallbackToOrdinary|触发平凡保底|时间跳过总结生成失败|reply\.match\(\/\\\{\[\\s\\S\]\*\\\}\/\)|Default to completed if fallback/, 'time skip generation failures should not become ordinary fallback writes');
-
-    const backfillPos = routeBlock.indexOf('const processedTasks = await runTimeSkipBackfill');
-    const firstConfigWritePos = routeBlock.indexOf("req.db.city.setConfig('city_time_offset_days'");
-    assert.ok(backfillPos !== -1 && firstConfigWritePos !== -1 && backfillPos < firstConfigWritePos, 'time skip route should run backfill before advancing stored city time');
-    assert.match(routeBlock, /res\.status\(e\.status \|\| 500\)\.json\(\{ error: e\.message, canRetry: !!e\.canRetry \}\)/, 'time skip retryable generation failures should be visible to the client');
+    assert.doesNotMatch(coreRoutes, /\/api\/city\/time-skip|normalizeCityTimeSkipMinutes|runTimeSkipBackfill/, 'time skip route and guards should be removed');
+    assert.doesNotMatch(cityIndex, /parseTimeSkipBackfillReply|normalizeTimeSkipBackfillResult|runTimeSkipBackfill|city_timeskip_backfill|time-skip-start|time-skip-end|TIMESKIP/, 'time skip backfill and websocket events should be removed');
+    assert.doesNotMatch(cityManager, /Virtual Clock|虚拟时钟|city\/time-skip|previewTimeSkipMinutes|city_time_offset/, 'city manager should not render or call the virtual clock');
+    assert.doesNotMatch(cityLog, /Time Skip|时间快进/, 'city settings shell should not expose a time skip section');
+    assert.doesNotMatch(appSource, /time-skip-start|time-skip-end|TIMESKIP/, 'global notifications should not include removed time skip events');
+    assert.match(cityDbSource, /DELETE FROM city_config WHERE key IN \('tick_label', 'tick_interval_minutes', 'city_time_offset_days', 'city_time_offset_hours'\)/, 'city DB should clean legacy virtual clock config keys');
 });
 
 test('city log action routes reject loose numeric ids', () => {
@@ -3176,17 +3266,17 @@ test('city config rejects invalid numeric values before persistence', () => {
     assert.match(inputGuards, /const MAX_CITY_CONFIG_LOG_LIMIT = 20/, 'city log limit config values should match frontend slider bounds');
     assert.match(inputGuards, /const MAX_CITY_CONFIG_INTERVAL_HOURS = 168/, 'mayor interval config should be bounded');
     assert.match(inputGuards, /function normalizeCityConfigValue\(key, value\)/, 'city config value validation should be centralized');
-    assert.match(inputGuards, /function normalizeStoredCityOffsetHours\(value\)[\s\S]*!Number\.isFinite\(parsed\) \|\| parsed < 0 \|\| parsed >= 24/, 'stored city hour offsets should allow fractional hours but reject non-finite and out-of-day values');
     assert.match(inputGuards, /BOOLEAN_CONFIG_KEYS/, 'boolean city config keys should be normalized explicitly');
     assert.doesNotMatch(inputGuards, /city_moment_probability/, 'removed moments probability config should not be accepted');
-    assert.match(inputGuards, /city_time_offset_hours' && parsed >= 24/, 'city time offset hours should stay within one day');
+    assert.match(inputGuards, /REMOVED_CONFIG_KEYS[\s\S]*city_time_offset_days[\s\S]*city_time_offset_hours/, 'virtual clock offset config should be explicitly rejected');
+    assert.doesNotMatch(inputGuards, /normalizeStoredCityOffset/, 'virtual clock offset normalizers should be removed');
 
     assert.match(coreRoutes, /const value = normalizeCityConfigValue\(key, req\.body\?\.value\)/, 'city config route should validate values before DB writes');
     assert.match(coreRoutes, /if \(value === null\) return res\.status\(400\)\.json\(\{ error: '城市配置值无效' \}\)/, 'city config route should reject invalid config values with 400');
-    assert.match(cityIndex, /const hoursOffset = normalizeStoredCityOffsetHours\(config\.city_time_offset_hours\)[\s\S]*now\.setTime\(now\.getTime\(\) \+ daysOffset \* 24 \* 60 \* 60 \* 1000 \+ hoursOffset \* 60 \* 60 \* 1000\)/, 'city virtual clock should preserve fractional hour offsets');
+    assert.match(cityIndex, /function getCityDate\(\) \{\s*return new Date\(\);\s*\}/, 'city runtime should use real current time');
     assert.match(cityIndex, /function normalizeMetabolismPerMinute\(config\)[\s\S]*if \(metabolismRate <= 0\) return 0[\s\S]*Math\.max\(1, Math\.round\(metabolismRate \/ 15\)\)/, 'city metabolism runtime should honor zero metabolism without changing positive-rate behavior');
     assert.match(cityIndex, /const minuteMetabolism = normalizeMetabolismPerMinute\(config\)/, 'city passive survival tick should use normalized metabolism config');
-    assert.doesNotMatch(cityIndex, /parseInt\(config\.city_time_offset_hours\)/, 'city virtual clock must not truncate minute-level time skips');
+    assert.doesNotMatch(cityIndex, /city_time_offset|normalizeStoredCityOffset/, 'city runtime should not keep virtual clock offset logic');
     assert.doesNotMatch(cityIndex, /parseInt\(config\.metabolism_rate\) \|\| 20/, 'city metabolism config must not treat valid zero as missing');
 
     assert.match(actionService, /function normalizeCityActionConfigNumber\(config, key, fallback\)/, 'city action runtime config reads should share strict config normalization');
@@ -3208,87 +3298,31 @@ test('city config rejects invalid numeric values before persistence', () => {
     assert.equal(guards.normalizeCityConfigValue('gambling_win_rate', 0), '0');
     assert.equal(guards.normalizeCityConfigValue('gambling_payout', 0), '0');
     assert.equal(guards.normalizeCityConfigValue('gambling_win_rate', 1.1), null);
-    assert.equal(guards.normalizeCityConfigValue('city_time_offset_hours', 24), null);
+    assert.equal(guards.normalizeCityConfigValue('city_time_offset_hours', 0.5), null);
+    assert.equal(guards.normalizeCityConfigValue('city_time_offset_days', 1), null);
     assert.equal(guards.normalizeCityConfigValue('city_actions_paused', 'true'), '1');
     assert.equal(guards.normalizeCityConfigValue('city_actions_paused', 'false'), '0');
-    assert.equal(guards.normalizeCityConfigValue('city_time_offset_hours', 0.0166666667), '0.0166666667');
-    assert.equal(guards.normalizeStoredCityOffsetHours('0.5'), 0.5);
-    assert.equal(guards.normalizeStoredCityOffsetHours(24), 0);
-    assert.equal(guards.normalizeStoredCityOffsetDays('2.5'), 0);
     assert.equal(guards.normalizeCityConfigValue('unknown_plugin_key', undefined), '');
 });
 
-test('city growth course writes reject invalid ids and numeric fields', () => {
-    const growthIndex = readRepoFile('server', 'plugins', 'cityGrowth', 'index.js');
-    const growthDbSource = readRepoFile('server', 'plugins', 'cityGrowth', 'growthDb.js');
-    const inputGuards = readRepoFile('server', 'plugins', 'cityGrowth', 'inputGuards.js');
-    const guards = require(path.join(repoRoot, 'server', 'plugins', 'cityGrowth', 'inputGuards.js'));
+test('city growth course system stays removed from frontend and backend', () => {
+    const cityIndex = readRepoFile('server', 'plugins', 'city', 'index.js');
+    const actionService = readRepoFile('server', 'plugins', 'city', 'services', 'actionService.js');
+    const coreRoutes = readRepoFile('server', 'plugins', 'city', 'routes', 'coreRoutes.js');
+    const cityDbSource = readRepoFile('server', 'plugins', 'city', 'cityDb.js');
+    const cityManager = readRepoFile('client', 'src', 'plugins', 'city', 'CityManager.jsx');
 
-    assert.match(inputGuards, /const MAX_COURSE_SORT_ORDER = 10000/, 'cityGrowth course sort order should be bounded');
-    assert.match(inputGuards, /class CityGrowthValidationError extends Error/, 'cityGrowth validation should expose a typed 400 error');
-    assert.match(inputGuards, /function normalizeCityGrowthCoursePayload\(payload = \{\}\)/, 'cityGrowth course payload validation should be centralized');
-    assert.match(inputGuards, /function normalizeCityGrowthCourseId\(value\)/, 'cityGrowth course id validation should be reusable outside course upserts');
-    assert.match(inputGuards, /function normalizeCityGrowthMasteryGain\(value\)/, 'cityGrowth mastery gain validation should be centralized');
-    assert.match(inputGuards, /!Number\.isSafeInteger\(parsed\) \|\| parsed < min \|\| parsed > max/, 'cityGrowth numeric fields should reject NaN, Infinity, decimals, and out-of-range values');
-    assert.match(inputGuards, /id\.includes\('\\0'\) \|\| \/\[\/\?#\\\\\]\//, 'cityGrowth course ids should reject path-like or null-byte ids');
-
-    assert.match(growthIndex, /const payload = normalizeCityGrowthCoursePayload\(req\.body \|\| \{\}\)/, 'cityGrowth route should validate course payloads before DB writes');
-    assert.match(growthIndex, /res\.status\(isCityGrowthValidationError\(e\) \? 400 : 500\)/, 'cityGrowth route should return validation errors as 400');
-    assert.doesNotMatch(growthIndex, /sort_order: Number\(payload\.sort_order \|\| 0\) \|\| 0/, 'cityGrowth route must not persist raw or non-finite sort order values');
-
-    assert.match(growthDbSource, /const payload = normalizeCityGrowthCoursePayload\(data\)/, 'cityGrowth DB writes should keep a defensive validation layer');
-    assert.match(growthDbSource, /const courseId = normalizeCityGrowthCourseId\(id\)/, 'cityGrowth course lookup and toggle should normalize route ids');
-    assert.match(growthDbSource, /const cleanCourseId = normalizeCityGrowthCourseId\(courseId\)/, 'cityGrowth progress writes should normalize course ids defensively');
-    assert.match(growthDbSource, /const gain = normalizeCityGrowthMasteryGain\(delta\)/, 'cityGrowth progress writes should reject non-finite or negative mastery gains');
-    assert.match(growthDbSource, /SELECT id FROM characters WHERE id = \?/, 'cityGrowth progress writes should reject ghost characters before inserting progress');
-    assert.match(growthDbSource, /if \(!getSchoolCourse\(cleanCourseId\)\)[\s\S]*throw new Error\('课程不存在'\)/, 'cityGrowth progress writes should reject ghost courses before inserting progress');
-    assert.match(growthDbSource, /payload\.sort_order,[\s\S]*payload\.is_enabled/, 'cityGrowth DB writes should store normalized numeric fields');
-    assert.doesNotMatch(growthDbSource, /data\.sort_order \?\? 0/, 'cityGrowth DB writes must not persist raw sort order values');
-
-    assert.throws(
-        () => guards.normalizeCityGrowthCoursePayload({ id: 'bad/path', name: 'x' }),
-        /课程 id 无效/,
-        'path-like course ids should be rejected'
-    );
-    assert.throws(
-        () => guards.normalizeCityGrowthCoursePayload({ id: 'x', name: 'x', sort_order: Infinity }),
-        /课程排序无效/,
-        'non-finite sort order should be rejected'
-    );
-    assert.throws(
-        () => guards.normalizeCityGrowthCoursePayload({ id: 'x', name: 'x', is_enabled: 2 }),
-        /启用状态无效/,
-        'invalid enabled flags should be rejected'
-    );
-    assert.throws(
-        () => guards.normalizeCityGrowthCourseId('bad/path'),
-        /课程 id 无效/,
-        'course id route parameters should reject path-like ids'
-    );
-    assert.throws(
-        () => guards.normalizeCityGrowthMasteryGain(Infinity),
-        /课程熟练度增量无效/,
-        'non-finite mastery gains should be rejected'
-    );
-    assert.throws(
-        () => guards.normalizeCityGrowthMasteryGain(-1),
-        /课程熟练度增量无效/,
-        'negative mastery gains should be rejected'
-    );
-    assert.equal(
-        guards.normalizeCityGrowthCoursePayload({ id: '心理课', name: '心理课', sort_order: -2, is_enabled: false }).is_enabled,
-        0,
-        'human-readable non-path ids should still be accepted'
-    );
+    assert.equal(fs.existsSync(path.join(repoRoot, 'server', 'plugins', 'cityGrowth')), false, 'cityGrowth backend plugin directory should be removed');
+    assert.equal(fs.existsSync(path.join(repoRoot, 'client', 'src', 'plugins', 'cityGrowth', 'SchoolGrowthPanel.jsx')), false, 'school growth panel should be removed');
+    assert.doesNotMatch(cityIndex, /cityGrowth|schoolLogic|SchoolPrompt|学校成长|buildSchoolPromptBlock/, 'city plugin should not import or inject course logic');
+    assert.doesNotMatch(actionService, /cityGrowth|schoolLogic|getSchoolActionEffects|addCharacterCourseMastery|课程=|熟练度/, 'city actions should not read or write course progress');
+    assert.doesNotMatch(coreRoutes, /city-growth/, 'core city routes should not expose city-growth APIs');
+    assert.doesNotMatch(cityManager, /SchoolGrowthPanel|city-growth|学校课程|School Courses/, 'city manager should not render or call course APIs');
+    assert.match(cityDbSource, /DROP TABLE IF EXISTS city_character_courses;[\s\S]*DROP TABLE IF EXISTS city_school_courses;/, 'city DB should drop legacy course tables on startup');
 });
 
 test('small plugin db migrations avoid silent alter-table catches', () => {
-    const growthDbSource = readRepoFile('server', 'plugins', 'cityGrowth', 'growthDb.js');
     const socialHousingDbSource = readRepoFile('server', 'plugins', 'socialHousing', 'db.js');
-
-    assert.match(growthDbSource, /function addColumnIfMissing/, 'cityGrowth migrations should use schema-aware column creation');
-    assert.match(growthDbSource, /addColumnIfMissing\('city_school_courses', 'prompt_effect_basic'/, 'cityGrowth basic prompt effect migration should be explicit');
-    assert.doesNotMatch(growthDbSource, /try \{ db\.exec\("ALTER TABLE/, 'cityGrowth should not silently catch ALTER TABLE migrations');
 
     assert.match(socialHousingDbSource, /function addColumnIfMissing/, 'socialHousing migrations should use schema-aware column creation');
     assert.match(socialHousingDbSource, /addColumnIfMissing\('social_housing_bindings', 'rent_due_at'/, 'socialHousing rent migration should be explicit');
@@ -3496,6 +3530,7 @@ test('social housing room assembly generation waits for uncapped model output', 
     assert.match(socialHousingIndex, /const constrainPlacement = purchase\.item === 'wallArt'[\s\S]*\{ clamp: constrainPlacement \}/, 'room assembly backend should only clamp wall art coordinates');
     assert.match(socialHousingIndex, /return options\.clamp === false \? num : clampNumber\(rounded, 1, 14\)/, 'room assembly backend should preserve fractional AI coordinates for non-wall-art furniture');
     assert.match(socialHousingIndex, /普通家具渲染时地线会按背景向上校准半格/, 'room assembly prompt should explain the raised visual floor line');
+    assert.match(socialHousingIndex, /wallArt\/挂画的主体图案要尽量完整露出[\s\S]*床、衣柜、书柜\/书架、沙发/, 'room assembly prompt should keep wall art from being hidden behind large furniture');
     assert.match(housingPanel, /const roomAssemblySingleInstanceKinds = new Set\(\['wallArt'\]\)/, 'room assembly should only keep wall art as a single-instance constrained kind');
     assert.match(housingPanel, /const roomAssemblyVisualFloorLineOffsetCells = 0\.5/, 'room assembly frontend should raise the visual floor line by half a cell');
     assert.match(housingPanel, /const shouldConstrainGrid = kind === 'wallArt'/, 'room assembly frontend should only constrain wall art grid positions');
@@ -3504,10 +3539,28 @@ test('social housing room assembly generation waits for uncapped model output', 
     assert.match(housingPanel, /if \(baseItem\.assemblyKind !== 'wallArt'\) \{[\s\S]*items\.push\(baseItem\)[\s\S]*return;[\s\S]*\}/, 'room assembly frontend should accept raw AI placement for non-wall-art furniture');
     assert.doesNotMatch(housingPanel, /\.sort\(\(a, b\) => \(a\.occurrence - b\.occurrence\)/, 'room assembly frontend should preserve AI placement order');
 
-    assert.match(pixelWorldPanel, /const roomEditorCalibratedSizeProfile = \{[\s\S]*desk: \{ w: 430, h: 337[\s\S]*bookshelf: \{ w: 291, h: 444[\s\S]*sofa: \{ w: 526, h: 362/, 'manual room editor should share calibrated default furniture sizes');
-    assert.match(pixelWorldPanel, /const calibratedBox = applyRoomEditorCalibratedSizeProfile\(displayBox, realWorldKind\)[\s\S]*box: calibratedBox/, 'manual room editor catalog should use calibrated boxes as defaults');
-    assert.match(pixelWorldPanel, /const derivedProfile = \{ \.\.\.baseProfile, \.\.\.roomEditorCalibratedSizeProfile \}/, 'room editor size profile application should prefer calibrated defaults');
-    assert.match(pixelWorldPanel, /const size = roomEditorCalibratedSizeProfile\[kind\] \|\| liveProfile\[kind\] \|\| storedProfile\[kind\]/, 'manual room editor add should not let stale stored sizes override calibrated defaults');
+    assert.match(pixelWorldPanel, /const roomEditorCalibratedSizeProfile = \{[\s\S]*bed: \{ w: 343, h: 370[\s\S]*nightstand: \{ w: 185, h: 220[\s\S]*sofa: \{ w: 526, h: 362/, 'manual room editor should use the enlarged calibrated furniture sizes');
+    assert.doesNotMatch(pixelWorldPanel, /room_front_[a-z_]*desk_v1|_desk:|书桌|desk: \{ w:/, 'pixel cottage should not expose desk furniture assets');
+    assert.match(pixelWorldPanel, /const roomEditorSizeProfileVersion = `\$\{roomEditorFurnitureScaleVersion\}:kind-size-v1`/, 'room editor user size profiles should be versioned as kind-level overrides');
+    assert.match(pixelWorldPanel, /function normalizeRoomEditorSizeProfile\(value = \{\}\)[\s\S]*kindSizes[\s\S]*roomEditorCalibratedSizeProfile\[safeKind\]/, 'room editor should store user size defaults by furniture kind instead of individual asset id');
+    assert.match(pixelWorldPanel, /function updateStoredRoomEditorItemSizes\(items = \[\], assetMap = new Map\(\)\)[\s\S]*const kind = getRoomEditorItemSizeKind\(item, asset\)[\s\S]*kindSizes\[kind\] = \{/, 'manual resizing should persist the latest size as the default for that furniture kind');
+    assert.match(pixelWorldPanel, /function applyRoomEditorKindSizeToItems\(items = \[\], assetMap = new Map\(\), targetItem = null\)[\s\S]*if \(kind !== targetKind\) return item[\s\S]*resizeRoomEditorItemByKindSize\(item, targetSize, kind\)/, 'manual resizing should immediately update all same-kind furniture on the canvas');
+    assert.match(pixelWorldPanel, /wallArt\/paintings should stay readable[\s\S]*beds, wardrobes, bookshelves, sofas/, 'manual room AI prompt should keep wall art readable around large furniture');
+    assert.match(pixelWorldPanel, /const kind = getRoomEditorAiFurnitureKind\(asset\)[\s\S]*item\.groundLayer && kind !== 'wallArt'/, 'manual room AI current placement grid should expose wall art while still skipping floor decor');
+    assert.match(pixelWorldPanel, /function readStoredRoomEditorSizeProfile\(\) \{[\s\S]*localStorage\.removeItem\(roomEditorSizeProfileStorageKey\)[\s\S]*return getRoomEditorCanonicalSizeProfile\(\)/, 'room editor should discard stale browser size profiles');
+    assert.match(pixelWorldPanel, /function applyRoomEditorSizeProfileToItems\(items = \[\], assetMap = new Map\(\), options = \{\}\) \{[\s\S]*getRoomEditorCanonicalItemSize\(item, asset,\s*\{[\s\S]*canonicalFallback: options\.canonicalFallback !== false/, 'stored room layouts should normalize through the current kind-size source of truth');
+    assert.match(pixelWorldPanel, /function normalizeRoomEditorLayoutState\(rawItems, options = \{\}\)[\s\S]*const applyCanonicalSizes = options\.applyCanonicalSizes !== false[\s\S]*applyRoomEditorSizeProfileToItems\(cleaned, assetMap, \{[\s\S]*canonicalFallback: applyCanonicalSizes/, 'room editor should apply latest user kind sizes even when current-version saved layouts bypass canonical migration');
+    assert.match(pixelWorldPanel, /const roomEditorFurnitureScaleVersion = 'large-furniture-no-desk-v1'/, 'room editor snapshots should carry the no-desk furniture scale version');
+    assert.match(pixelWorldPanel, /roomEditorFurnitureScaleVersion,[\s\S]*normalizeRoomEditorLayoutState/, 'room editor should export the furniture scale version for live editor restore paths');
+    assert.match(pixelWorldPanel, /const normalizeRoomEditorLiveItem = useCallback\(\(item\) => \{[\s\S]*return clampBox\(normalizeRoomEditorItemAspect\(item, asset\), stageSize\)/, 'manual resize commits should preserve the edited item size instead of forcing canonical sizes every time');
+    assert.match(pixelWorldPanel, /const size = getRoomEditorCanonicalItemSize\(next, asset\)/, 'manual room editor add should use the latest user kind-size default before falling back to code defaults');
+    assert.match(housingPanel, /const roomAssemblyCalibratedSizeProfile = \{[\s\S]*bed: \{ w: 343, h: 370[\s\S]*nightstand: \{ w: 185, h: 220[\s\S]*sofa: \{ w: 526, h: 362/, 'room assembly should use the same enlarged calibrated furniture sizes');
+    assert.match(housingPanel, /const roomEditorSizeProfileVersion = `\$\{roomEditorFurnitureScaleVersion\}:kind-size-v1`[\s\S]*function readRoomAssemblyUserSizeProfile\(\)/, 'room assembly should read the same kind-size profile used by the room editor');
+    assert.match(housingPanel, /function buildRoomAssemblySizeProfile\(\) \{[\s\S]*kindSizes: \{[\s\S]*\.\.\.roomAssemblyCalibratedSizeProfile,[\s\S]*\.\.\.userProfile\.kindSizes/, 'room assembly should merge user kind-size overrides over the current enlarged defaults');
+    assert.match(housingPanel, /function applyRoomAssemblySizeProfile\(box = \{\}, kind = '', sizeProfile = \{\}\)[\s\S]*normalizedProfile\.kindSizes\[safeKind\] \|\| roomAssemblyCalibratedSizeProfile\[safeKind\]/, 'room assembly placement and AI context should use the latest kind-size profile');
+    assert.doesNotMatch(housingPanel, /room_front_[a-z_]*desk_v1|desk:|'desk'|"desk"|书桌|LampDesk|housing-room-desk/, 'room assembly should not expose desk furniture assets');
+    assert.doesNotMatch(socialHousingIndex, /'desk'|"desk"|书桌|\/desk\//, 'room assembly backend should not accept or prompt for desk furniture');
+    assert.match(housingPanel, /const scaledBaseSize = scaleRoomAssemblyBoxByKind\(baseSize, kind\)[\s\S]*return applyRoomAssemblySizeProfile\(\{ w: scaledBaseSize\.w, h: scaledBaseSize\.h \}, kind, sizeProfile\)/, 'room assembly fallback sizes should use current kind scaling before any explicit override');
     assert.match(pixelWorldPanel, /mappedSideW[\s\S]*calibratedSize[\s\S]*mappedSideW \/ legacyW[\s\S]*calibratedSize\.w[\s\S]*mappedSideH[\s\S]*calibratedSize[\s\S]*mappedSideH \/ legacyH[\s\S]*calibratedSize\.h/, 'directional room assets should derive side sizes from calibrated front-size ratios');
 });
 

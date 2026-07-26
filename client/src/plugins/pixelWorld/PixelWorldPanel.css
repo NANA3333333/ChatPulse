@@ -244,6 +244,7 @@
   user-select: none;
   filter: saturate(.82) brightness(1.12) hue-rotate(5deg);
 }
+
 .pixel-world-shadow-layer {
   position: absolute;
   inset: 0;
@@ -530,12 +531,6 @@
     inset 0 calc(var(--tile) * .3) 0 #ff9fc6,
     inset calc(var(--tile) * .32) calc(var(--tile) * .62) 0 #fff0a8,
     0 calc(var(--tile) * .16) 0 rgba(144, 92, 132, .16);
-}
-.pixel-world-furniture.desk {
-  background:
-    linear-gradient(#ffc17e 0 22%, transparent 22%),
-    linear-gradient(90deg, transparent 0 18%, #b77955 18% 82%, transparent 82%),
-    #f2d2b0;
 }
 .pixel-world-furniture.kitchen {
   background:

@@ -1,6 +1,47 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, ChevronDown, Database, Edit2, FileText, Play, RefreshCw, RotateCcw, Save, Search, SlidersHorizontal, Trash2, Upload, UserPlus, X } from 'lucide-react';
+import {
+    Activity,
+    AlarmClock,
+    Aperture,
+    BrainCircuit,
+    CalendarDays,
+    CheckCircle2,
+    ChevronDown,
+    Clock3,
+    Database,
+    Edit2,
+    FileText,
+    GitBranch,
+    Heart,
+    LibraryBig,
+    Lightbulb,
+    Link2,
+    List,
+    ListFilter,
+    Laptop,
+    LoaderCircle,
+    MapPin,
+    PanelRightClose,
+    Play,
+    RefreshCw,
+    RotateCcw,
+    Route,
+    Save,
+    ScanSearch,
+    Search,
+    SlidersHorizontal,
+    Sparkles,
+    Tags,
+    Trash2,
+    Upload,
+    UserPlus,
+    UserRound,
+    WandSparkles,
+    X
+} from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
+import { LOCAL_OLLAMA_MODEL_PRESET, withLocalModelOption } from '../utils/localModelPreset';
+import './MemoryLibraryPanel.css';
 
 const emptySettings = {
     api_endpoint: '',
@@ -214,16 +255,6 @@ function formatForgettingLabel(item = {}) {
         return mtx(`In grace period, forgettable after ${leftText}`, `缓冲中，${leftText}后可遗忘`);
     }
     return mtx(`Enters grace period after ${formatDays(item.days_until_threshold)}`, `${formatDays(item.days_until_threshold)}后进入缓冲`);
-}
-
-function StatCard({ label, value, detail }) {
-    return (
-        <div className="memory-lib-stat">
-            <div className="memory-lib-stat-label">{label}</div>
-            <div className="memory-lib-stat-value">{value}</div>
-            {detail && <div className="memory-lib-stat-detail">{detail}</div>}
-        </div>
-    );
 }
 
 function MemoryEntryRow({ item, mode = 'category', onRescue, onCharacterClick, onEdit, onDelete, onViewSource, rescuing, deletingIds = [] }) {
@@ -462,10 +493,649 @@ function SourceViewerModal({ viewer, onClose }) {
     );
 }
 
+function getMemoryItemKey(item = {}) {
+    const ids = getMemorySourceIds(item);
+    return `${item.memory_library_source || item.source || 'memory'}-${item.id || item.representative_id || ids[0] || item.consolidation_key || item.summary || item.text}`;
+}
+
+function getMemorySourceIds(item = {}) {
+    const ids = Array.isArray(item.source_ids) && item.source_ids.length
+        ? item.source_ids
+        : [item.representative_id || item.id].filter(Boolean);
+    return Array.from(new Set(ids.map(id => Number(id || 0)).filter(id => id > 0)));
+}
+
+function getMemoryTitle(item = {}, tx = mtx) {
+    return item.summary
+        || item.text
+        || item.event
+        || item.consolidation_summary
+        || tx('Untitled memory', '未命名记忆');
+}
+
+function getMemoryBody(item = {}, tx = mtx) {
+    return item.content
+        || item.consolidation_summary
+        || item.summary
+        || item.text
+        || item.event
+        || tx('This memory does not have saved body text.', '这条记忆没有保存正文。');
+}
+
+function getMemorySourceContexts(item = {}) {
+    return Array.isArray(item.source_contexts) && item.source_contexts.length
+        ? item.source_contexts
+        : [item.source_context || 'unknown'];
+}
+
+function getMemorySceneTags(item = {}) {
+    return Array.isArray(item.scene_tags) && item.scene_tags.length
+        ? item.scene_tags
+        : [item.scene_tag || 'none'];
+}
+
+function uniqueMemoryLabels(values = []) {
+    const seen = new Set();
+    return values
+        .map(value => String(value || '').trim())
+        .filter(value => value && value !== 'none')
+        .filter(value => {
+            const key = value.toLowerCase();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+}
+
+function getMemoryDisplayTags(item = {}) {
+    return uniqueMemoryLabels([...getMemorySourceContexts(item), ...getMemorySceneTags(item)]);
+}
+
+function getMemoryUpdatedAt(item = {}) {
+    return item.updated_at || item.created_at || item.source_time || item.timestamp || 0;
+}
+
+function getMemoryImportance(item = {}) {
+    const score = Number(item.importance ?? item.retention_score ?? 0);
+    return Number.isFinite(score) ? Math.max(0, Math.min(10, score)) : 0;
+}
+
+function getMemoryTier(item = {}) {
+    return String(item.memory_tier || item.tier || 'ambient');
+}
+
+function getMemoryTone(item = {}) {
+    const tier = getMemoryTier(item);
+    if (tier === 'core') return 'core';
+    if (tier === 'active') return 'active';
+    if (String(item.forgetting_stage || '').trim()) return 'fading';
+    return 'ambient';
+}
+
+function getCharacterInitial(name = '') {
+    const text = String(name || '').trim();
+    if (!text) return '?';
+    return text.slice(0, 1).toUpperCase();
+}
+
+function getMemoryCharacterName(item = {}, characterStats = [], tx = mtx) {
+    if (item.character_name) return item.character_name;
+    const found = characterStats.find(character => String(character.character_id) === String(item.character_id));
+    return found?.name || item.character_id || tx('Unknown role', '未知角色');
+}
+
+function getThreadIcon(tone) {
+    if (tone === 'core') return <Heart size={16} />;
+    if (tone === 'active') return <Clock3 size={16} />;
+    if (tone === 'fading') return <AlarmClock size={16} />;
+    return <Aperture size={16} />;
+}
+
+function memoryMatchesLens(item = {}, lens = 'all') {
+    if (lens === 'all') return true;
+    const focus = String(item.memory_focus || '').toLowerCase();
+    const sourceContexts = getMemorySourceContexts(item).map(value => String(value || '').toLowerCase());
+    const sceneTags = getMemorySceneTags(item).map(value => String(value || '').toLowerCase());
+    if (lens === 'relationship') return focus === 'relationship';
+    if (lens === 'user_profile') return focus === 'user_profile';
+    if (lens === 'scene') {
+        return sourceContexts.some(value => ['private_chat', 'group_chat', 'commercial_street', 'external_app'].includes(value))
+            || sceneTags.some(value => value && value !== 'none');
+    }
+    if (lens === 'temporal') {
+        return !item.source_time_text
+            || !item.temporal_checked_at
+            || !item.source_context
+            || String(item.source_context).toLowerCase() === 'unknown';
+    }
+    if (lens === 'forgetting') return !!item.forgetting_stage || Number(item.days_until_threshold ?? 999) < 14;
+    return true;
+}
+
+function memoryMatchesSearch(item = {}, search = '') {
+    const query = String(search || '').trim().toLowerCase();
+    if (!query) return true;
+    const text = [
+        item.summary,
+        item.text,
+        item.content,
+        item.event,
+        item.character_name,
+        item.consolidation_key,
+        item.consolidation_summary,
+        item.memory_focus,
+        item.memory_tier,
+        ...getMemorySourceContexts(item),
+        ...getMemorySceneTags(item)
+    ].filter(Boolean).join(' ').toLowerCase();
+    return text.includes(query);
+}
+
+function normalizeThreadItems(items = [], lens = 'all', search = '') {
+    const seen = new Set();
+    return (items || [])
+        .filter(item => item && memoryMatchesLens(item, lens) && memoryMatchesSearch(item, search))
+        .filter(item => {
+            const key = getMemoryItemKey(item);
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        })
+        .sort((a, b) => Number(getMemoryUpdatedAt(b) || 0) - Number(getMemoryUpdatedAt(a) || 0));
+}
+
+function buildMemoryThreads({ newCategories = [], newSourceGroups = [], categories = [], forgettingGroups = [], lens = 'all', search = '', tx }) {
+    const sourceGroups = lens === 'forgetting'
+        ? forgettingGroups
+        : [
+            ...(newCategories || []).map(group => ({ ...group, groupKind: 'semantic' })),
+            ...(newSourceGroups || []).map(group => ({ ...group, groupKind: 'source' })),
+            ...(categories || []).map(group => ({ ...group, groupKind: 'legacy' }))
+        ];
+    const threads = sourceGroups.map((group, index) => {
+        const items = normalizeThreadItems(group.items || [], lens, search);
+        if (!items.length) return null;
+        const strongest = items.reduce((max, item) => Math.max(max, getMemoryImportance(item)), 0);
+        const tone = items.some(item => getMemoryTone(item) === 'core')
+            ? 'core'
+            : items.some(item => getMemoryTone(item) === 'active')
+                ? 'active'
+                : lens === 'forgetting' || items.some(item => getMemoryTone(item) === 'fading')
+                    ? 'fading'
+                    : 'ambient';
+        return {
+            key: `${group.groupKind || 'group'}-${group.key || index}`,
+            label: group.label || group.name || tx('Memory Thread', '记忆主线'),
+            description: group.description || tx('Grouped by real memory metadata.', '按真实记忆字段聚合。'),
+            count: Number(group.count || items.length),
+            items,
+            tone,
+            strongest
+        };
+    }).filter(Boolean);
+
+    return threads.length ? threads : [];
+}
+
+function getAllThreadItems(threads = []) {
+    const seen = new Set();
+    return threads.flatMap(thread => thread.items.map(item => ({ item, thread })))
+        .filter(({ item }) => {
+            const key = getMemoryItemKey(item);
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+}
+
+function buildLensCount(items = [], lens = 'all') {
+    return items.filter(item => memoryMatchesLens(item, lens)).length;
+}
+
+function MemoryCoreHeader({ tx, primaryView, setPrimaryView, onRefresh, refreshing, autoProgress, onImport }) {
+    const pendingCount = Number(autoProgress?.stats?.pending || autoProgress?.pending_before || 0);
+    return (
+        <header className="memory-core-header">
+            <div className="memory-core-brand">
+                <span><BrainCircuit size={20} /></span>
+                <div>
+                    <small>MEMORY LIBRARY</small>
+                    <strong>{tx('Memory is not a table', '记忆不是一张表')}</strong>
+                </div>
+            </div>
+            <nav className="memory-core-tabs" aria-label={tx('Memory library views', '记忆库视图')}>
+                <button type="button" className={primaryView === 'map' ? 'is-active' : ''} onClick={() => setPrimaryView('map')}>
+                    <Route size={16} /> {tx('Memory Map', '记忆地图')}
+                </button>
+                <button type="button" className={primaryView === 'maintenance' ? 'is-active' : ''} onClick={() => setPrimaryView('maintenance')}>
+                    <WandSparkles size={16} /> {tx('Maintenance Workspace', '维护工作台')}
+                    {pendingCount > 0 && <em>{formatNumber(pendingCount)}</em>}
+                </button>
+            </nav>
+            <div className="memory-core-actions">
+                <button type="button" className="memory-core-ghost" onClick={onImport}>
+                    <Upload size={15} /> {tx('Import External Memory', '导入外部记忆')}
+                </button>
+                <button type="button" className="memory-core-icon" onClick={onRefresh} disabled={refreshing} title={tx('Refresh', '刷新')}>
+                    <RefreshCw size={16} className={refreshing ? 'memory-spin' : ''} />
+                </button>
+            </div>
+        </header>
+    );
+}
+
+function MemoryHealthBar({ tx, memoryStatus, memoryStatusLoading, memoryStatusError, getMemoryBackendLabel, memoryStatusNote, totals, characterStats, autoProgress, setPrimaryView }) {
+    const totalMemories = Number(memoryStatus?.memoriesCount ?? memoryStatus?.structuredMemoriesCount ?? totals?.formal_total ?? totals?.total ?? 0);
+    const indexed = Number(memoryStatus?.indexedPoints ?? memoryStatus?.embeddedMemoriesCount ?? 0);
+    const coverage = totalMemories > 0 ? Math.min(100, Math.round((indexed / totalMemories) * 100)) : Number(memoryStatus?.indexingCoverage || 0);
+    const recalled = Number(memoryStatus?.everRetrievedMemoriesCount || 0);
+    const backendOnline = memoryStatus?.enabled !== false && memoryStatus?.reachable !== false;
+    const running = !!autoProgress?.running;
+    return (
+        <section className="memory-healthbar">
+            <div className={`memory-health-item ${backendOnline ? 'is-healthy' : 'is-warning'}`}>
+                <span><Database size={16} /></span>
+                <div>
+                    <small>{tx('Memory Backend', '记忆后端')}</small>
+                    <strong>{memoryStatus ? getMemoryBackendLabel(memoryStatus.backend) : (memoryStatusLoading ? tx('Loading', '加载中') : tx('Unknown', '未知'))}</strong>
+                    {(memoryStatusNote || memoryStatusError || memoryStatus?.lastError) && <p>{memoryStatusError || memoryStatus?.lastError || memoryStatusNote}</p>}
+                </div>
+                <em>{backendOnline ? tx('Online', '在线') : tx('Fallback', '降级')}</em>
+            </div>
+            <div className="memory-health-item">
+                <span><ScanSearch size={16} /></span>
+                <div>
+                    <small>{tx('Index Coverage', '索引覆盖')}</small>
+                    <strong>{coverage ? `${coverage}%` : tx('Waiting', '等待中')}</strong>
+                    <i><b style={{ width: `${Math.max(0, Math.min(100, coverage || 0))}%` }} /></i>
+                </div>
+            </div>
+            <div className="memory-health-item">
+                <span><LibraryBig size={16} /></span>
+                <div>
+                    <small>{tx('All Memories', '全部记忆')}</small>
+                    <strong>{formatNumber(totalMemories || totals?.formal_total || totals?.total)}</strong>
+                </div>
+                <em>{formatNumber(characterStats.length)} {tx('roles', '角色')}</em>
+            </div>
+            <div className="memory-health-item">
+                <span><Sparkles size={16} /></span>
+                <div>
+                    <small>{tx('Recalled', '被唤起')}</small>
+                    <strong>{formatNumber(recalled)}</strong>
+                </div>
+                <em>{tx('lifetime', '累计')}</em>
+            </div>
+            <div className={`memory-health-item ${running ? 'is-running' : ''}`}>
+                <span>{running ? <LoaderCircle size={16} className="memory-spin" /> : <WandSparkles size={16} />}</span>
+                <div>
+                    <small>{tx('Background Task', '后台任务')}</small>
+                    <strong>{running ? (autoProgress.message || formatProgressPhase(autoProgress.phase)) : tx('No active task', '没有运行中的任务')}</strong>
+                </div>
+                <button type="button" onClick={() => setPrimaryView('maintenance')}>{tx('View', '查看')}</button>
+            </div>
+        </section>
+    );
+}
+
+function MemoryMapView(props) {
+    const {
+        tx,
+        threads,
+        allThreadItems,
+        selectedMemory,
+        selectedThread,
+        selectedMemoryKey,
+        setSelectedMemoryKey,
+        characterStats,
+        totals,
+        activeCharacterId,
+        jumpToCharacter,
+        memoryLens,
+        setMemoryLens,
+        memorySearch,
+        setMemorySearch,
+        libraryViewMode,
+        setLibraryViewMode,
+        forgettingTotal,
+        onViewSource,
+        onEdit,
+        onDelete,
+        deletingIds
+    } = props;
+
+    const items = allThreadItems.map(entry => entry.item);
+    const lensItems = [
+        { key: 'all', icon: <Aperture size={15} />, label: tx('All Threads', '全部脉络'), count: items.length },
+        { key: 'relationship', icon: <Heart size={15} />, label: tx('Relationship', '关系与情感'), count: buildLensCount(items, 'relationship') },
+        { key: 'user_profile', icon: <UserRound size={15} />, label: tx('About You', '关于你'), count: buildLensCount(items, 'user_profile') },
+        { key: 'scene', icon: <MapPin size={15} />, label: tx('Scenes', '地点与场景'), count: buildLensCount(items, 'scene') },
+        { key: 'temporal', icon: <Clock3 size={15} />, label: tx('Missing Time', '缺少时间标签'), count: buildLensCount(items, 'temporal') },
+        { key: 'forgetting', icon: <AlarmClock size={15} />, label: tx('Forgetting Soon', '即将遗忘'), count: forgettingTotal, warning: true },
+    ];
+
+    return (
+        <section className="memory-map-screen">
+            <aside className="memory-map-sidebar">
+                <div className="memory-sidebar-heading">
+                    <div>
+                        <span className="memory-eyebrow">CHARACTERS</span>
+                        <h2>{tx('Whose memories?', '谁的记忆？')}</h2>
+                    </div>
+                    <ListFilter size={17} />
+                </div>
+                <div className="memory-character-list">
+                    <button type="button" className={!activeCharacterId ? 'is-active' : ''} onClick={() => jumpToCharacter('')}>
+                        <span className="memory-avatar is-blue">*</span>
+                        <span><strong>{tx('All Roles', '全部角色')}</strong><small>{formatNumber(totals?.formal_total ?? totals?.total ?? 0)} {tx('memories', '条记忆')}</small></span>
+                        <em>{formatNumber(characterStats.length)}</em>
+                    </button>
+                    {characterStats.map((character, index) => (
+                        <button
+                            type="button"
+                            className={String(activeCharacterId) === String(character.character_id) ? 'is-active' : ''}
+                            key={character.character_id}
+                            onClick={() => jumpToCharacter(character.character_id)}
+                        >
+                            <span className={`memory-avatar ${index % 2 ? 'is-pink' : 'is-blue'}`}>{getCharacterInitial(character.name)}</span>
+                            <span><strong>{character.name}</strong><small>{formatNumber(character.formal_total ?? character.total ?? 0)} {tx('memories', '条记忆')}</small></span>
+                            <em>{formatNumber(character.pending || 0)}</em>
+                        </button>
+                    ))}
+                </div>
+
+                <div className="memory-lens-section">
+                    <span className="memory-eyebrow">MEMORY LENSES</span>
+                    <h3>{tx('View by angle', '从哪个角度看')}</h3>
+                    {lensItems.map(item => (
+                        <button
+                            type="button"
+                            className={`${memoryLens === item.key ? 'is-active' : ''}${item.warning ? ' is-warning' : ''}`}
+                            key={item.key}
+                            onClick={() => setMemoryLens(item.key)}
+                        >
+                            {item.icon}
+                            <span>{item.label}</span>
+                            <em>{formatNumber(item.count)}</em>
+                        </button>
+                    ))}
+                </div>
+
+                <div className="memory-sidebar-note">
+                    <Lightbulb size={17} />
+                    <div>
+                        <strong>{tx('Threads come from real fields', '主线来自真实字段')}</strong>
+                        <p>{tx('Groups use semantic category, source scene, consolidation keys, and dates.', '按语义分类、来源场景、合并键和时间确定性聚合。')}</p>
+                    </div>
+                </div>
+            </aside>
+
+            <main className="memory-map-main">
+                <div className="memory-map-toolbar">
+                    <div>
+                        <span className="memory-eyebrow">MEMORY MAP</span>
+                        <h1>{activeCharacterId ? tx('Role Memory Threads', '角色记忆脉络') : tx('All Memory Threads', '全部记忆脉络')}</h1>
+                        <p>{tx('Browse formal memories by topic, source, time, and traceable carrier cards.', '按主题、来源、时间和可追溯承载卡浏览正式记忆。')}</p>
+                    </div>
+                    <div className="memory-toolbar-controls">
+                        <label className="memory-search-box">
+                            <Search size={15} />
+                            <input
+                                value={memorySearch}
+                                onChange={event => setMemorySearch(event.target.value)}
+                                placeholder={tx('Search memory content, people, or places', '搜索记忆内容、人物或地点')}
+                            />
+                        </label>
+                        <div className="memory-view-switch">
+                            <button type="button" className={libraryViewMode === 'new' ? 'is-active' : ''} onClick={() => setLibraryViewMode('new')} title={tx('New library', '新版记忆库')}>
+                                <GitBranch size={15} />
+                            </button>
+                            <button type="button" className={libraryViewMode === 'old' ? 'is-active' : ''} onClick={() => setLibraryViewMode('old')} title={tx('Legacy backup', '旧库备份')}>
+                                <List size={15} />
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="memory-map-legend">
+                    <span><i className="memory-dot core" />{tx('Core', '核心记忆')}</span>
+                    <span><i className="memory-dot active" />{tx('Active', '活跃记忆')}</span>
+                    <span><i className="memory-dot ambient" />{tx('Ambient', '背景记忆')}</span>
+                    <span><CalendarDays size={14} />{tx('Sorted by latest update', '按最近更新')}</span>
+                </div>
+
+                <div className="memory-thread-canvas">
+                    {threads.length === 0 ? (
+                        <div className="memory-map-empty">{tx('No memories match the current filters.', '当前筛选下没有匹配的记忆。')}</div>
+                    ) : threads.map(thread => (
+                        <article className={`memory-thread memory-thread-${thread.tone}`} key={thread.key}>
+                            <div className="memory-thread-line">
+                                <span>{getThreadIcon(thread.tone)}</span>
+                                <i />
+                            </div>
+                            <div className="memory-thread-content">
+                                <div className="memory-thread-heading">
+                                    <div>
+                                        <span>{thread.label} · {formatNumber(thread.count)} {tx('memories', '条记忆')}</span>
+                                        <h3>{thread.description}</h3>
+                                    </div>
+                                    {thread.strongest > 0 && <em>{tx('Importance', '重要性')} {thread.strongest}</em>}
+                                </div>
+                                <div className="memory-cluster-grid">
+                                    {thread.items.slice(0, 6).map(item => {
+                                        const itemKey = getMemoryItemKey(item);
+                                        const sourceIds = getMemorySourceIds(item);
+                                        const deleting = sourceIds.some(id => deletingIds.includes(Number(id)));
+                                        return (
+                                            <button
+                                                type="button"
+                                                className={`memory-map-card ${String(selectedMemoryKey || '') === String(itemKey) || (!selectedMemoryKey && selectedMemory && getMemoryItemKey(selectedMemory) === itemKey) ? 'is-selected' : ''}`}
+                                                key={itemKey}
+                                                onClick={() => setSelectedMemoryKey(itemKey)}
+                                            >
+                                                <span>{formatDate(getMemoryUpdatedAt(item))}</span>
+                                                <strong>{getMemoryTitle(item, tx)}</strong>
+                                                <small>{getMemoryCharacterName(item, characterStats, tx)} · {optionLabel(item.memory_focus, item.memory_focus)} · {deleting ? tx('Deleting', '删除中') : `${tx('Sources', '来源')} ${formatNumber(item.source_count || sourceIds.length || 1)}`}</small>
+                                                <div>
+                                                    {getMemoryDisplayTags(item).slice(0, 4).map((tag, tagIndex) => <em key={`${itemKey}-${tag}-${tagIndex}`}>{optionLabel(tag, tag)}</em>)}
+                                                </div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        </article>
+                    ))}
+                </div>
+            </main>
+
+            <MemoryInspector
+                tx={tx}
+                memory={selectedMemory}
+                thread={selectedThread}
+                characterStats={characterStats}
+                onViewSource={onViewSource}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                deletingIds={deletingIds}
+            />
+        </section>
+    );
+}
+
+function MemoryInspector({ tx, memory, thread, characterStats, onViewSource, onEdit, onDelete, deletingIds }) {
+    if (!memory) {
+        return (
+            <aside className="memory-inspector">
+                <div className="memory-inspector-heading">
+                    <div>
+                        <span className="memory-eyebrow">MEMORY DETAIL</span>
+                        <h2>{tx('Memory Detail', '记忆详情')}</h2>
+                    </div>
+                    <PanelRightClose size={17} />
+                </div>
+                <div className="memory-map-empty">{tx('Select a memory to inspect details.', '选择一条记忆查看详情。')}</div>
+            </aside>
+        );
+    }
+
+    const sourceIds = getMemorySourceIds(memory);
+    const isNewMemory = memory.memory_library_source === 'new'
+        || memory.memory_library_source === 'new_grouped'
+        || Array.isArray(memory.source_ids);
+    const isDeleting = sourceIds.some(id => deletingIds.includes(Number(id)));
+    const related = (thread?.items || []).filter(item => getMemoryItemKey(item) !== getMemoryItemKey(memory)).slice(0, 3);
+    const importance = getMemoryImportance(memory);
+    const tone = getMemoryTone(memory);
+
+    return (
+        <aside className="memory-inspector">
+            <div className="memory-inspector-heading">
+                <div>
+                    <span className="memory-eyebrow">MEMORY DETAIL</span>
+                    <h2>{tx('Memory Detail', '记忆详情')}</h2>
+                </div>
+                <PanelRightClose size={17} />
+            </div>
+            <section className="memory-detail-hero">
+                <div className="memory-detail-badges">
+                    <span>{optionLabel(getMemoryTier(memory), getMemoryTier(memory))}</span>
+                    <span>{optionLabel(memory.memory_focus, memory.memory_focus || 'general')}</span>
+                </div>
+                <h3>{getMemoryTitle(memory, tx)}</h3>
+                <p>{getMemoryBody(memory, tx)}</p>
+                {importance > 0 && (
+                    <div className="memory-importance-meter">
+                        <span><strong>{tx('Importance', '重要性')}</strong><em>{importance} / 10</em></span>
+                        <i><b className={`is-${tone}`} style={{ width: `${importance * 10}%` }} /></i>
+                    </div>
+                )}
+            </section>
+            <section className="memory-detail-card">
+                <div className="memory-card-heading">
+                    <span><Link2 size={15} />{tx('Source', '来源')}</span>
+                    <button type="button" onClick={() => onViewSource({ item: memory, ids: sourceIds })} disabled={!sourceIds.length}>
+                        {tx('View Source', '查看原文')}
+                    </button>
+                </div>
+                <div className="memory-source-summary">
+                    <strong>{getMemoryCharacterName(memory, characterStats, tx)}</strong>
+                    <small>{formatDateTime(getMemoryUpdatedAt(memory))} · {sourceIds.slice(0, 5).map(id => `#${id}`).join(' ') || tx('No carrier id', '无承载卡 ID')}</small>
+                </div>
+            </section>
+            <section className="memory-detail-card">
+                <div className="memory-card-heading">
+                    <span><Tags size={15} />{tx('Bound Tags', '绑定标签')}</span>
+                    <button type="button" onClick={() => onEdit({ type: isNewMemory ? 'new' : 'legacy', item: memory, ids: isNewMemory ? sourceIds : [memory.representative_id || memory.id].filter(Boolean) })}>
+                        {tx('Edit', '编辑')}
+                    </button>
+                </div>
+                <div className="memory-tag-cloud">
+                    {uniqueMemoryLabels([memory.consolidation_key, ...getMemoryDisplayTags(memory)])
+                        .filter(Boolean)
+                        .slice(0, 8)
+                        .map((tag, tagIndex) => <span key={`${getMemoryItemKey(memory)}-${tag}-${tagIndex}`}>{optionLabel(tag, tag)}</span>)}
+                </div>
+            </section>
+            {related.length > 0 && (
+                <section className="memory-detail-card">
+                    <div className="memory-card-heading">
+                        <span><Activity size={15} />{tx('Related by Same Thread', '同主线关联')}</span>
+                        <em>{related.length}</em>
+                    </div>
+                    <div className="memory-related-list">
+                        {related.map(item => (
+                            <div key={getMemoryItemKey(item)}>
+                                <i className={`memory-dot ${getMemoryTone(item)}`} />
+                                <span><strong>{getMemoryTitle(item, tx)}</strong><small>{formatDate(getMemoryUpdatedAt(item))}</small></span>
+                            </div>
+                        ))}
+                    </div>
+                </section>
+            )}
+            <div className="memory-detail-actions">
+                <button type="button" className="memory-core-ghost" onClick={() => onEdit({ type: isNewMemory ? 'new' : 'legacy', item: memory, ids: isNewMemory ? sourceIds : [memory.representative_id || memory.id].filter(Boolean) })}>
+                    <Edit2 size={14} />{tx('Edit', '编辑')}
+                </button>
+                <button type="button" className="memory-core-ghost" onClick={() => onViewSource({ item: memory, ids: sourceIds })} disabled={!sourceIds.length}>
+                    <FileText size={14} />{tx('Source', '原文')}
+                </button>
+                <button type="button" className="memory-core-ghost danger" onClick={() => onDelete({ type: isNewMemory ? 'new' : 'legacy', item: memory, ids: sourceIds })} disabled={isDeleting}>
+                    <Trash2 size={14} />{isDeleting ? tx('Deleting', '删除中') : tx('Delete', '删除')}
+                </button>
+            </div>
+        </aside>
+    );
+}
+
+function MemoryMaintenanceIntro({ tx, autoProgress, promptTaskMode, setPromptTaskMode, maintenanceMode, setMaintenanceMode, activeCharacterName, pendingCount, temporalCount, reviewCount, onShowExternalImport }) {
+    const running = !!autoProgress?.running;
+    return (
+        <section className="memory-maintenance-intro">
+            <aside className="memory-maintenance-sidebar">
+                <div>
+                    <span className="memory-eyebrow">IMPORT</span>
+                    <h2>{tx('Memory Import', '记忆导入')}</h2>
+                </div>
+                <button type="button" className={promptTaskMode === 'complete' ? 'is-active' : ''} onClick={() => setPromptTaskMode('complete')}>
+                    <span><WandSparkles size={16} /></span>
+                    <div><strong>{tx('Import Summary', '导入总结')}</strong><small>{formatNumber(pendingCount)} {tx('pending', '待处理')}</small></div>
+                    <em>{formatNumber(pendingCount)}</em>
+                </button>
+                <button type="button" className={promptTaskMode === 'supplement' ? 'is-active' : ''} onClick={() => setPromptTaskMode('supplement')}>
+                    <span><Clock3 size={16} /></span>
+                    <div><strong>{tx('Supplement Tags', '补充标签')}</strong><small>{formatNumber(temporalCount)} {tx('need tags', '缺标签')}</small></div>
+                    <em>{formatNumber(temporalCount)}</em>
+                </button>
+                <button type="button" onClick={onShowExternalImport}>
+                    <span><Upload size={16} /></span>
+                    <div><strong>{tx('External Chat Import', '外部聊天导入')}</strong><small>{tx('Preview candidates before writing', '预览候选后再写入')}</small></div>
+                </button>
+                <button type="button" className={maintenanceMode === 'manual' ? 'is-active' : ''} onClick={() => setMaintenanceMode('manual')}>
+                    <span><ListFilter size={16} /></span>
+                    <div><strong>{tx('Single Batch Review', '单批预览')}</strong><small>{tx('Preview prompt and run once', '预览 prompt 并运行一次')}</small></div>
+                </button>
+                <button type="button" className={maintenanceMode === 'auto' ? 'is-active' : ''} onClick={() => setMaintenanceMode('auto')}>
+                    <span><Play size={16} /></span>
+                    <div><strong>{tx('Background Auto Run', '后台连续运行')}</strong><small>{tx('Recoverable live progress', '可恢复实时进度')}</small></div>
+                </button>
+            </aside>
+            <main className="memory-maintenance-main">
+                <div className="memory-maintenance-title">
+                    <div>
+                        <span className="memory-eyebrow">AI MEMORY IMPORT</span>
+                        <h1>{promptTaskMode === 'supplement'
+                            ? tx(`Supplement tags for ${activeCharacterName || 'selected role'}`, `为 ${activeCharacterName || '当前角色'} 补来源和时间`)
+                            : tx(`Import and summarize ${activeCharacterName || 'selected role'} memories`, `导入并总结 ${activeCharacterName || '当前角色'} 的记忆`)}</h1>
+                        <p>{promptTaskMode === 'supplement'
+                            ? tx('Supplement mode only adds source-scene and time tags; it does not rewrite memory content.', '补充模式只补来源场景和时间标签，不改写记忆内容。')
+                            : tx('The small model summarizes old or external records into new memories, then writes them after preview or confirmation.', '小模型把旧库或外部记录整理成新记忆，预览或确认后再写入。')}</p>
+                    </div>
+                    <span className={`memory-run-state ${running ? 'is-running' : ''}`}>{running ? formatProgressPhase(autoProgress.phase) : tx('Ready', '准备就绪')}</span>
+                </div>
+                <div className="memory-pipeline">
+                    {[tx('Read old/file records', '读取旧库/文件'), tx('Small-model summary', '小模型总结'), tx('Preview and check', '预览校验'), tx('Write new memories', '写入新记忆')].map((label, index) => (
+                        <React.Fragment key={label}>
+                            <div className={index === 0 && running ? 'is-current' : ''}><span>{index + 1}</span><strong>{label}</strong></div>
+                            {index < 3 && <ChevronDown size={15} />}
+                        </React.Fragment>
+                    ))}
+                </div>
+                {reviewCount > 0 && (
+                    <div className="memory-review-strip">
+                        <strong>{formatNumber(reviewCount)} {tx('items need attention', '条记忆需要关注')}</strong>
+                        <span>{tx('Uncertain model results remain visible in the run result area and are not deleted automatically.', '不确定结果会保留在运行结果区，不会自动删除。')}</span>
+                    </div>
+                )}
+            </main>
+        </section>
+    );
+}
+
 function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
     const { lang } = useLanguage();
     const tx = useCallback((en, zh) => (lang === 'en' ? en : zh), [lang]);
-    const statsRef = useRef(null);
+    const pageRef = useRef(null);
     const progressRefreshRef = useRef(null);
     const activeRunMissRef = useRef(0);
     const externalImportFileRef = useRef(null);
@@ -497,7 +1167,6 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
     const [promptTaskMode, setPromptTaskMode] = useState('complete');
     const [manualBatchIndex, setManualBatchIndex] = useState(1);
     const [autoMaxBatches, setAutoMaxBatches] = useState('');
-    const [rescuingIds, setRescuingIds] = useState([]);
     const [deletingIds, setDeletingIds] = useState([]);
     const [editingMemory, setEditingMemory] = useState(null);
     const [sourceViewer, setSourceViewer] = useState(null);
@@ -511,15 +1180,44 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
     const [selectedExternalRoles, setSelectedExternalRoles] = useState([]);
     const [externalImportLoading, setExternalImportLoading] = useState(false);
     const [externalImportCommitting, setExternalImportCommitting] = useState(false);
-    const [openGroups, setOpenGroups] = useState({ category_user_profile: true, source_commercial_street: true, source_group_chat: true, forgetting_fast: true });
     const [memoryStatus, setMemoryStatus] = useState(null);
     const [memoryStatusLoading, setMemoryStatusLoading] = useState(false);
     const [memoryStatusError, setMemoryStatusError] = useState('');
+    const [primaryView, setPrimaryView] = useState('map');
+    const [memoryLens, setMemoryLens] = useState('all');
+    const [memorySearch, setMemorySearch] = useState('');
+    const [selectedMemoryKey, setSelectedMemoryKey] = useState('');
+    const [mapSidebarsRaised, setMapSidebarsRaised] = useState(false);
 
     const headers = useMemo(() => ({
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`
     }), []);
+    const modelOptions = useMemo(() => withLocalModelOption(models), [models]);
+
+    const applyLocalModelPreset = useCallback(() => {
+        setSettings(prev => ({
+            ...prev,
+            ...LOCAL_OLLAMA_MODEL_PRESET
+        }));
+        setModels(prev => withLocalModelOption(prev));
+        setModelError('');
+        setNotice(tx('Local Ollama model selected.', '已选择本地 Ollama 模型。'));
+    }, [tx]);
+
+    const handleModelSelect = useCallback((modelName) => {
+        if (modelName === LOCAL_OLLAMA_MODEL_PRESET.model_name) {
+            applyLocalModelPreset();
+            return;
+        }
+        setSettings(prev => ({ ...prev, model_name: modelName }));
+    }, [applyLocalModelPreset]);
+
+    const getModelOptionLabel = useCallback((modelName) => (
+        modelName === LOCAL_OLLAMA_MODEL_PRESET.model_name
+            ? `${modelName} · ${tx('Local Ollama', '本地 Ollama')}`
+            : modelName
+    ), [tx]);
 
     const getMemoryBackendLabel = useCallback((backend) => {
         const labels = {
@@ -546,6 +1244,46 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
         if (notes[code]) return notes[code][lang];
         return status?.statusNote || '';
     }, [lang]);
+
+    useEffect(() => {
+        const page = pageRef.current;
+        if (!page) return undefined;
+
+        let frameId = 0;
+        const updateMapSidebarState = () => {
+            frameId = 0;
+            if (primaryView !== 'map') {
+                setMapSidebarsRaised(false);
+                return;
+            }
+
+            const toolbar = page.querySelector('.memory-map-toolbar');
+            if (!toolbar) {
+                setMapSidebarsRaised(false);
+                return;
+            }
+
+            const pageRect = page.getBoundingClientRect();
+            const toolbarRect = toolbar.getBoundingClientRect();
+            const shouldRaise = toolbarRect.bottom <= pageRect.top + 10;
+            setMapSidebarsRaised(current => (current === shouldRaise ? current : shouldRaise));
+        };
+
+        const requestUpdate = () => {
+            if (frameId) return;
+            frameId = window.requestAnimationFrame(updateMapSidebarState);
+        };
+
+        updateMapSidebarState();
+        page.addEventListener('scroll', requestUpdate, { passive: true });
+        window.addEventListener('resize', requestUpdate);
+
+        return () => {
+            if (frameId) window.cancelAnimationFrame(frameId);
+            page.removeEventListener('scroll', requestUpdate);
+            window.removeEventListener('resize', requestUpdate);
+        };
+    }, [primaryView]);
 
     const loadMemoryStatus = useCallback(async () => {
         setMemoryStatusLoading(true);
@@ -874,7 +1612,7 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
             if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
             const nextModels = data.models || [];
             setModels(nextModels);
-            if (!nextModels.length) setModelError(lang === 'en' ? 'No models found.' : '没有找到模型。');
+            if (!nextModels.length) setModelError(lang === 'en' ? 'No remote models found. The local Ollama option is still available.' : '未找到远端模型；仍可选择本地 Ollama。');
         } catch (e) {
             setModelError(lang === 'en' ? `Fetch failed: ${e.message}` : `拉取失败：${e.message}`);
         } finally {
@@ -1652,47 +2390,18 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
         }
     };
 
-    const rescueItem = async (ids) => {
-        const safeIds = Array.from(new Set((Array.isArray(ids) ? ids : [ids])
-            .map(id => Number(id || 0))
-            .filter(id => id > 0)));
-        if (!safeIds.length) return;
-        setRescuingIds(prev => Array.from(new Set([...prev, ...safeIds])));
-        try {
-            const res = await fetch(`${apiUrl}/memory-maintenance/rescue`, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({ ids: safeIds })
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok || !data.success) throw new Error(data.error || 'Rescue failed');
-            setNotice(tx(`Rescued ${formatNumber(data.rescued || safeIds.length)} carrier cards, marked them as kept again, and returned them to the active memory library.`, `已救回 ${formatNumber(data.rescued || safeIds.length)} 条承载卡片，重新标记为保留并回到活跃记忆库。`));
-            await loadData();
-        } catch (e) {
-            alert(lang === 'en' ? `Rescue failed: ${e.message}` : `救回失败：${e.message}`);
-        } finally {
-            setRescuingIds(prev => prev.filter(item => !safeIds.includes(Number(item))));
-        }
-    };
-
     const jumpToCharacter = useCallback((characterId = '') => {
         const nextId = String(characterId || '');
         const character = overview?.by_character?.find(item => String(item.character_id) === nextId);
         setActiveCharacterId(nextId);
         if (nextId) setSelectedCharacterId(nextId);
+        setSelectedMemoryKey('');
         setManualBatchIndex(1);
         setBatchPreview(null);
         setPromptPreview('');
         setRunResult(null);
         setNotice(nextId ? tx(`Switched to memory stats for ${character?.name || nextId}.`, `已切到 ${character?.name || nextId} 的记忆库统计。`) : tx('Switched back to all-role memory library.', '已切回全部角色记忆库。'));
-        window.setTimeout(() => {
-            statsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 0);
     }, [overview]);
-
-    const toggleGroup = (key) => {
-        setOpenGroups(prev => ({ ...prev, [key]: !prev[key] }));
-    };
 
     const totals = overview?.totals || {};
     const characterStats = overview?.by_character || [];
@@ -1744,9 +2453,6 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
     const selectedExternalRoleSet = new Set(selectedExternalRoles);
     const scopedLegacyTotal = Number(activeCharacter?.legacy_total ?? totals.legacy_total ?? totals.total ?? 0);
     const scopedMigratedCards = Number(activeCharacter?.migrated_card_total ?? activeCharacter?.migrated_total ?? totals.migrated_card_total ?? totals.total ?? 0);
-    const scopedFormalTotal = Number(activeCharacter?.formal_total ?? totals.formal_total ?? 0);
-    const visibleFormalTotal = Number(newLibrary.total ?? scopedFormalTotal);
-    const visibleSourceCards = Number(newLibrary.source_total ?? scopedMigratedCards);
     const pendingMigrationCards = Math.max(0, scopedLegacyTotal - scopedMigratedCards);
     const viewStats = activeCharacter ? {
         total: activeCharacter.total,
@@ -1767,19 +2473,37 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
         fast_forgetting: fastForgetting,
         on_curve_forgetting: onCurveForgetting
     };
-    const searchableMemories = Number(memoryStatus?.indexedPoints || 0);
-    const recalledMemories = Number(memoryStatus?.everRetrievedMemoriesCount || 0);
-    const ragRecallRate = searchableMemories > 0
-        ? Math.round((recalledMemories / searchableMemories) * 100)
-        : 0;
-    const ragRecallTitle = searchableMemories > 0 ? `${ragRecallRate}%` : tx('Waiting for data', '等待数据');
-    const ragRecallDetail = searchableMemories > 0
-        ? tx(`${formatNumber(searchableMemories)} searchable memories, ${formatNumber(recalledMemories)} have been recalled at least once.`, `${formatNumber(searchableMemories)} 条可检索记忆里，已经有 ${formatNumber(recalledMemories)} 条至少被想起来过一次。`)
-        : tx('Recall rate will appear here after memories start being retrieved.', '等记忆开始被检索后，这里会显示召回率。');
     const memoryStatusNote = getMemoryStatusNote(memoryStatus);
+    const memoryThreads = buildMemoryThreads({
+        newCategories,
+        newSourceGroups,
+        categories,
+        forgettingGroups,
+        lens: memoryLens,
+        search: memorySearch,
+        tx
+    });
+    const allThreadItems = getAllThreadItems(memoryThreads);
+    const selectedThreadEntry = allThreadItems.find(({ item }) => getMemoryItemKey(item) === selectedMemoryKey) || allThreadItems[0] || null;
+    const selectedMemory = selectedThreadEntry?.item || null;
+    const selectedThread = selectedThreadEntry?.thread || null;
+    const forgettingTotal = fastForgetting + onCurveForgetting;
+    const pendingMaintenanceCount = Number(viewStats.pending ?? totals.pending ?? pendingMigrationCards ?? 0);
+    const temporalMaintenanceCount = buildLensCount(allThreadItems.map(({ item }) => item), 'temporal');
+    const reviewCount = (Array.isArray(runResult?.normalized?.errors) ? runResult.normalized.errors.length : 0)
+        + (Array.isArray(runResult?.apply?.errors) ? runResult.apply.errors.length : 0)
+        + (Array.isArray(runResult?.errors) ? runResult.errors.length : 0)
+        + Number(runResult?.applied_errors || 0);
+    const selectedMaintenanceCharacterName = migrationCharacters.find(item => String(item.character_id) === String(selectedCharacterId))?.name
+        || activeCharacter?.name
+        || '';
 
     return (
-        <div className="memory-library-page">
+        <div
+            id="memory-library-core-loop-redesign"
+            ref={pageRef}
+            className={`memory-library-page memory-core-loop-page${mapSidebarsRaised ? ' memory-map-sidebars-raised' : ''}`}
+        >
             {notice && <div className="memory-lib-notice">{notice}</div>}
 
             {editingMemory && (
@@ -1859,246 +2583,75 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
 
             <SourceViewerModal viewer={sourceViewer} onClose={() => setSourceViewer(null)} />
 
-            <div className="memory-command-workspace">
-                <aside className="memory-command-rail">
-            <div className="memory-lib-grid stats" ref={statsRef}>
-                <StatCard
-                    label={libraryViewMode === 'old' ? tx('Legacy Cards', '旧库卡片') : tx('Formal Memories', '正式记忆')}
-                    value={formatNumber(libraryViewMode === 'old' ? scopedLegacyTotal : visibleFormalTotal)}
-                    detail={libraryViewMode === 'old'
-                        ? tx(`Migrated cards ${formatNumber(scopedMigratedCards)}`, `已迁移卡片 ${formatNumber(scopedMigratedCards)}`)
-                        : tx(`Carrier cards ${formatNumber(visibleSourceCards)} / legacy ${formatNumber(scopedLegacyTotal)}`, `承载卡片 ${formatNumber(visibleSourceCards)} / 旧库 ${formatNumber(scopedLegacyTotal)}`)}
-                />
-                <StatCard label={tx('Card Calls', '卡片调用')} value={formatNumber(viewStats.total_retrieval_count)} detail={activeCharacter ? tx('Total carrier-card calls for this role', '这个角色的承载卡片调用累计') : tx(`${formatNumber(totals.recalled_memories)} cards have been called`, `被调用过 ${formatNumber(totals.recalled_memories)} 张卡片`)} />
-                <StatCard label={tx('Pending Migration', '待迁移卡片')} value={formatNumber(pendingMigrationCards)} detail={tx(`Migrated ${formatNumber(scopedMigratedCards)} / legacy ${formatNumber(scopedLegacyTotal)}`, `已迁移 ${formatNumber(scopedMigratedCards)} / 旧库 ${formatNumber(scopedLegacyTotal)}`)} />
-                <StatCard
-                    label={tx('Forgetting Curve', '遗忘曲线')}
-                    value={formatNumber(viewStats.forgetting_total)}
-                    detail={tx(`${libraryViewMode === 'new' ? 'By formal memories' : 'By carrier cards'}: forgetting soon ${formatNumber(viewStats.fast_forgetting)} / on curve ${formatNumber(viewStats.on_curve_forgetting)}`, `${libraryViewMode === 'new' ? '按正式记忆计算' : '按承载卡片计算'}：快遗忘 ${formatNumber(viewStats.fast_forgetting)} / 曲线中 ${formatNumber(viewStats.on_curve_forgetting)}`)}
-                />
-            </div>
-
-            <div className="memory-lib-section memory-lib-engine-status">
-                <div className="memory-lib-section-head">
-                    <div>
-                        <div className="memory-lib-section-title"><Database size={16} /> {tx('Memory Engine Status', '记忆引擎状态')}</div>
-                        <p>{tx('Health status for RAG and vector retrieval.', 'RAG 和向量检索的健康状态。')}</p>
-                    </div>
-                    <button className="memory-lib-button compact ghost" onClick={refreshAll} disabled={loading || memoryStatusLoading}>
-                        <RefreshCw size={15} /> {(loading || memoryStatusLoading) ? tx('Refreshing', '刷新中') : tx('Refresh', '刷新')}
-                    </button>
-                </div>
-                <div className="memory-lib-engine-grid">
-                    <div>
-                        <span>{tx('Backend Mode', '后端模式')}</span>
-                        <strong>{memoryStatus ? getMemoryBackendLabel(memoryStatus.backend) : tx('Loading...', '加载中...')}</strong>
-                    </div>
-                    <div>
-                        <span>{tx('Connection', '连接状态')}</span>
-                        <strong className={memoryStatus?.enabled === false || memoryStatus?.reachable === false ? 'offline' : 'online'}>
-                            {memoryStatus?.enabled === false ? tx('Disabled', '已关闭') : memoryStatus?.reachable ? tx('Online', '在线') : tx('Offline', '离线')}
-                        </strong>
-                    </div>
-                    <div>
-                        <span>{tx('Searchable Memories', '可检索记忆')}</span>
-                        <strong>{formatNumber(searchableMemories)}</strong>
-                    </div>
-                    <div>
-                        <span>{tx('RAG Recall Rate', 'RAG 召回率')}</span>
-                        <strong>{ragRecallTitle}</strong>
-                    </div>
-                </div>
-                <div className="memory-lib-engine-note">
-                    {ragRecallDetail} {tx('This metric is strict: it checks how many memories in the whole library have been retrieved at least once.', '这个口径比较严：看的是整个记忆库里，有多少条记忆至少被检索出来过一次。')}
-                </div>
-                {memoryStatusNote && (
-                    <div className="memory-lib-engine-alert warning">{tx('Status note:', '状态说明：')}{memoryStatusNote}</div>
-                )}
-                {memoryStatus?.lastError && (
-                    <div className="memory-lib-engine-alert error">{tx('Latest status note:', '最近状态说明：')}{memoryStatus.lastError}</div>
-                )}
-                {memoryStatusError && (
-                    <div className="memory-lib-engine-alert error">{memoryStatusError}</div>
-                )}
-            </div>
-
-            <div className="memory-lib-section">
-                <div className="memory-lib-section-title">{tx('By Role', '按角色分类')}</div>
-                <div className="memory-character-grid">
-                    <button type="button" className={`memory-character-card ${!activeCharacterId ? 'active' : ''}`} onClick={() => jumpToCharacter('')}>
-                        <strong>{tx('All Roles', '全部角色')}</strong>
-                        <span>{formatNumber(totals.formal_total ?? newLibrary.total ?? totals.total)} {tx('items', '条')}</span>
-                        <small>{tx('Formal', '正式')} {formatNumber(totals.formal_total ?? 0)} / {tx('Carrier', '承载')} {formatNumber(totals.migrated_card_total ?? totals.total)} / {tx('Legacy', '旧库')} {formatNumber(totals.legacy_total ?? totals.total)}</small>
-                    </button>
-                    {characterStats.map(character => (
-                        <button
-                            type="button"
-                            className={`memory-character-card ${String(activeCharacterId) === String(character.character_id) ? 'active' : ''}`}
-                            key={character.character_id}
-                            onClick={() => jumpToCharacter(character.character_id)}
-                        >
-                            <strong>{character.name}</strong>
-                            <span>{formatNumber(character.formal_total ?? character.total)} {tx('items', '条')}</span>
-                            <small>{tx('Formal', '正式')} {formatNumber(character.formal_total ?? 0)} / {tx('Carrier', '承载')} {formatNumber(character.migrated_card_total ?? character.migrated_total ?? character.total)} / {tx('Legacy', '旧库')} {formatNumber(character.legacy_total ?? character.total)}</small>
-                        </button>
-                    ))}
-                </div>
-            </div>
-
-            <div className="memory-lib-view-switch">
-                <div>
-                    <strong>{libraryViewMode === 'old' ? tx('Legacy Backup', '旧库备份') : tx('New Memory Library', '新版记忆库')}</strong>
-                    <span>{libraryViewMode === 'old' ? tx('Viewed only as a migration source and backup; RAG and stats do not read the legacy library. Unmigrated roles may temporarily have no recallable memories.', '只作为迁移来源和备份查看；RAG 和统计都不读取旧库，未迁移角色会暂时没有可召回记忆。') : tx(`Showing formal memories summarized by the small model: ${formatNumber(newLibrary.total)} items from ${formatNumber(newLibrary.source_total)} old cards.`, `显示小模型归纳出的正式记忆，共 ${formatNumber(newLibrary.total)} 条，来自 ${formatNumber(newLibrary.source_total)} 张旧卡片。`)}</span>
-                </div>
-                <div className="memory-lib-mode-tabs">
-                    <button type="button" className={libraryViewMode === 'new' ? 'active' : ''} onClick={() => setLibraryViewMode('new')}>{tx('New Memory Library', '新版记忆库')}</button>
-                    <button type="button" className={libraryViewMode === 'old' ? 'active' : ''} onClick={() => setLibraryViewMode('old')}>{tx('Legacy Backup', '旧库备份')}</button>
-                </div>
-            </div>
-
-                </aside>
+            <MemoryCoreHeader
+                tx={tx}
+                primaryView={primaryView}
+                setPrimaryView={setPrimaryView}
+                onRefresh={refreshAll}
+                refreshing={loading || memoryStatusLoading}
+                autoProgress={autoProgress}
+                onImport={() => {
+                    setPrimaryView('maintenance');
+                    setPromptTaskMode('complete');
+                    setMaintenanceMode('manual');
+                    window.setTimeout(() => document.querySelector('.memory-external-import')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+                }}
+            />
+            <MemoryHealthBar
+                tx={tx}
+                memoryStatus={memoryStatus}
+                memoryStatusLoading={memoryStatusLoading}
+                memoryStatusError={memoryStatusError}
+                getMemoryBackendLabel={getMemoryBackendLabel}
+                memoryStatusNote={memoryStatusNote}
+                totals={totals}
+                characterStats={characterStats}
+                autoProgress={autoProgress}
+                setPrimaryView={setPrimaryView}
+            />
+            <div className="memory-core-content">
+                {primaryView === 'map' ? (
+                    <MemoryMapView
+                        tx={tx}
+                        threads={memoryThreads}
+                        allThreadItems={allThreadItems}
+                        selectedMemory={selectedMemory}
+                        selectedThread={selectedThread}
+                        selectedMemoryKey={selectedMemoryKey}
+                        setSelectedMemoryKey={setSelectedMemoryKey}
+                        characterStats={characterStats}
+                        totals={totals}
+                        activeCharacterId={activeCharacterId}
+                        jumpToCharacter={jumpToCharacter}
+                        memoryLens={memoryLens}
+                        setMemoryLens={setMemoryLens}
+                        memorySearch={memorySearch}
+                        setMemorySearch={setMemorySearch}
+                        libraryViewMode={libraryViewMode}
+                        setLibraryViewMode={setLibraryViewMode}
+                        forgettingTotal={forgettingTotal}
+                        onViewSource={openSourceViewer}
+                        onEdit={openMemoryEditor}
+                        onDelete={deleteMemoryItems}
+                        deletingIds={deletingIds}
+                    />
+                ) : (
+                    <div className="memory-maintenance-layout">
+                        <MemoryMaintenanceIntro
+                            tx={tx}
+                            autoProgress={autoProgress}
+                            promptTaskMode={promptTaskMode}
+                            setPromptTaskMode={setPromptTaskMode}
+                            maintenanceMode={maintenanceMode}
+                            setMaintenanceMode={setMaintenanceMode}
+                            activeCharacterName={selectedMaintenanceCharacterName}
+                            pendingCount={pendingMaintenanceCount}
+                            temporalCount={temporalMaintenanceCount}
+                            reviewCount={reviewCount}
+                            onShowExternalImport={() => document.querySelector('.memory-external-import')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                        />
+            <div className="memory-command-workspace memory-maintenance-workspace memory-maintenance-main-only">
                 <main className="memory-command-main">
-            <div className="memory-lib-section">
-                <div className="memory-lib-section-title">{tx('Forgetting Curve', '遗忘曲线')}</div>
-                <div className="memory-forgetting-stack">
-                    {forgettingGroups.map(group => (
-                        <section className={`memory-category-card forgetting ${group.key} ${openGroups[`forgetting_${group.key}`] ? 'open' : ''}`} key={group.key}>
-                            <button type="button" className="memory-category-head" onClick={() => toggleGroup(`forgetting_${group.key}`)}>
-                                <div>
-                                    <h3>{group.label}</h3>
-                                    <p>{group.description}</p>
-                                </div>
-                                <span className="memory-category-count">{formatNumber(group.count)} {tx('items', '条')}</span>
-                                <ChevronDown size={16} />
-                            </button>
-                            {openGroups[`forgetting_${group.key}`] && (
-                                <>
-                                    <EntryList
-                                        items={group.items}
-                                        mode="forgetting"
-                                        emptyText={tx('This forgetting category has no memory entries for now.', '这个遗忘大类暂时没有记忆条目。')}
-                                        onRescue={rescueItem}
-                                        onCharacterClick={jumpToCharacter}
-                                        onEdit={openMemoryEditor}
-                                        onDelete={deleteMemoryItems}
-                                        onViewSource={openSourceViewer}
-                                        rescuingIds={rescuingIds}
-                                        deletingIds={deletingIds}
-                                    />
-                                    {group.items?.length > 0 && <div className="memory-lib-more">{tx(`Sorted by fastest forgetting. Loaded ${formatNumber(group.items.length)} items${group.has_more ? ` / ${formatNumber(group.count)} total` : ''}; scroll inside the bubble to view.`, `已按最快遗忘排序，当前加载 ${formatNumber(group.items.length)} 条${group.has_more ? ` / 共 ${formatNumber(group.count)} 条` : ''}，可在气泡内滚动查看。`)}</div>}
-                                </>
-                            )}
-                        </section>
-                    ))}
-                </div>
-            </div>
-
-            {libraryViewMode === 'old' ? (
-                <>
-                    <div className="memory-lib-section">
-                        <div className="memory-lib-section-title">{tx('Memory Categories', '记忆分类')}</div>
-                        <div className="memory-category-stack">
-                            {categories.map(category => (
-                                <section className={`memory-category-card ${openGroups[`category_${category.key}`] ? 'open' : ''}`} key={category.key}>
-                                    <button type="button" className="memory-category-head" onClick={() => toggleGroup(`category_${category.key}`)}>
-                                        <div>
-                                            <h3>{category.label}</h3>
-                                            <p>{category.description}</p>
-                                        </div>
-                                        <span className="memory-category-count">{formatNumber(category.count)} {tx('items', '条')}</span>
-                                        <ChevronDown size={16} />
-                                    </button>
-                                    {openGroups[`category_${category.key}`] && (
-                                        <>
-                                            <EntryList
-                                                items={category.items}
-                                                mode="category"
-                                                emptyText={tx('This category has no memory entries for now.', '这个分类暂时没有记忆条目。')}
-                                                onRescue={rescueItem}
-                                                onCharacterClick={jumpToCharacter}
-                                                onEdit={openMemoryEditor}
-                                                onDelete={deleteMemoryItems}
-                                                onViewSource={openSourceViewer}
-                                                rescuingIds={rescuingIds}
-                                                deletingIds={deletingIds}
-                                            />
-                                            {category.items?.length > 0 && <div className="memory-lib-more">{tx(`Loaded ${formatNumber(category.items.length)} items in this category${category.has_more ? ` / ${formatNumber(category.count)} total` : ''}; scroll inside the bubble to view.`, `已加载这个分类 ${formatNumber(category.items.length)} 条${category.has_more ? ` / 共 ${formatNumber(category.count)} 条` : ''}，可在气泡内滚动查看。`)}</div>}
-                                        </>
-                                    )}
-                                </section>
-                            ))}
-                        </div>
-                    </div>
-                </>
-            ) : (
-                <>
-                    <div className="memory-lib-section">
-                        <div className="memory-lib-section-title">{tx('New Source Scene Categories', '新版来源场景分类')}</div>
-                        <div className="memory-lib-view-note">{tx('City street, group chat, private chat, and external apps are source-scene dimensions, not semantic categories; the same memory can still belong to user profile, relationship, current arc, or general events.', '商业街、群聊、私聊和外部 App 是来源场景维度，不是语义分类；同一条记忆仍会同时归入用户画像、关系、当前阶段或普通事件。')}</div>
-                        <div className="memory-category-stack">
-                            {newSourceGroups.map(group => (
-                                <section className={`memory-category-card new-summary source ${openGroups[`source_${group.key}`] ? 'open' : ''}`} key={group.key}>
-                                    <button type="button" className="memory-category-head" onClick={() => toggleGroup(`source_${group.key}`)}>
-                                        <div>
-                                            <h3>{group.label}</h3>
-                                            <p>{group.description}</p>
-                                        </div>
-                                        <span className="memory-category-count">{formatNumber(group.count)} {tx('items', '条')}</span>
-                                        <ChevronDown size={16} />
-                                    </button>
-                                    {openGroups[`source_${group.key}`] && (
-                                        <>
-                                            <NewSummaryList
-                                                items={group.items}
-                                                emptyText={tx('This source scene has no formal new memories yet. They will appear here after full migration or tag supplementation.', '这个来源场景暂时没有正式新版记忆。完整迁移或补充标签后会出现在这里。')}
-                                                onCharacterClick={jumpToCharacter}
-                                                onEdit={openMemoryEditor}
-                                                onDelete={deleteMemoryItems}
-                                                onViewSource={openSourceViewer}
-                                                deletingIds={deletingIds}
-                                            />
-                                            {group.items?.length > 0 && <div className="memory-lib-more">{tx(`Loaded ${formatNumber(group.items.length)} new summaries for this source scene${group.has_more ? ` / ${formatNumber(group.count)} total` : ''}; scroll inside the bubble to view.`, `已加载这个来源场景 ${formatNumber(group.items.length)} 条${group.has_more ? ` / 共 ${formatNumber(group.count)} 条` : ''}新版总结，可在气泡内滚动查看。`)}</div>}
-                                        </>
-                                    )}
-                                </section>
-                            ))}
-                        </div>
-                    </div>
-                    <div className="memory-lib-section">
-                        <div className="memory-lib-section-title">{tx('New Semantic Categories', '新版语义分类')}</div>
-                        <div className="memory-lib-view-note">{tx('This shows the current formal memory library. RAG and memory stats only read these new summaries; roles without migrated summaries will not fall back to the legacy library.', '这里显示的是当前正式记忆库。RAG 和记忆统计只读取这些新版总结；没有迁移出新版总结的角色不会回退到旧库。')}</div>
-                        <div className="memory-category-stack">
-                            {newCategories.map(category => (
-                                <section className={`memory-category-card new-summary ${openGroups[`new_${category.key}`] ? 'open' : ''}`} key={category.key}>
-                                    <button type="button" className="memory-category-head" onClick={() => toggleGroup(`new_${category.key}`)}>
-                                        <div>
-                                            <h3>{category.label}</h3>
-                                            <p>{category.description}</p>
-                                        </div>
-                                        <span className="memory-category-count">{formatNumber(category.count)} {tx('items', '条')}</span>
-                                        <ChevronDown size={16} />
-                                    </button>
-                                    {openGroups[`new_${category.key}`] && (
-                                        <>
-                                            <NewSummaryList
-                                                items={category.items}
-                                                emptyText={tx('This category has no new summaries generated by the small model yet.', '这个分类暂时还没有小模型生成的新总结。')}
-                                                onCharacterClick={jumpToCharacter}
-                                                onEdit={openMemoryEditor}
-                                                onDelete={deleteMemoryItems}
-                                                onViewSource={openSourceViewer}
-                                                deletingIds={deletingIds}
-                                            />
-                                            {category.items?.length > 0 && <div className="memory-lib-more">{tx(`Loaded ${formatNumber(category.items.length)} new summaries in this category${category.has_more ? ` / ${formatNumber(category.count)} total` : ''}; scroll inside the bubble to view.`, `已加载这个分类 ${formatNumber(category.items.length)} 条${category.has_more ? ` / 共 ${formatNumber(category.count)} 条` : ''}新版总结，可在气泡内滚动查看。`)}</div>}
-                                        </>
-                                    )}
-                                </section>
-                            ))}
-                        </div>
-                    </div>
-                </>
-            )}
-
             <div className="memory-lib-section">
                 <div className="memory-lib-section-title"><SlidersHorizontal size={16} /> {tx('Memory Library Management Model', '记忆库管理小模型')}</div>
                 <div className="memory-lib-model-grid">
@@ -2115,6 +2668,9 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                         <input value={settings.model_name} onChange={e => setSettings(prev => ({ ...prev, model_name: e.target.value }))} placeholder={tx('model name', '模型名称')} />
                     </label>
                     <div className="memory-lib-model-actions">
+                        <button className="memory-lib-button ghost" onClick={applyLocalModelPreset}>
+                            <Laptop size={15} /> {tx('Use Local Model', '使用本地模型')}
+                        </button>
                         <button className="memory-lib-button ghost" onClick={fetchModels} disabled={modelFetching}>
                             <Search size={15} /> {modelFetching ? tx('Fetching', '拉取中') : tx('Fetch Models', '拉取模型')}
                         </button>
@@ -2124,15 +2680,15 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                     </div>
                 </div>
                 {modelError && <div className="memory-lib-error">{modelError}</div>}
-                {models.length > 0 && (
-                    <select className="memory-lib-model-select" value="" onChange={e => setSettings(prev => ({ ...prev, model_name: e.target.value }))}>
-                        <option value="" disabled>{tx('Choose a fetched model', '选择拉取到的模型')}</option>
-                        {models.map(model => <option key={model} value={model}>{model}</option>)}
+                {modelOptions.length > 0 && (
+                    <select className="memory-lib-model-select" value="" onChange={e => handleModelSelect(e.target.value)}>
+                        <option value="" disabled>{tx('Choose a model', '选择模型')}</option>
+                        {modelOptions.map(model => <option key={model} value={model}>{getModelOptionLabel(model)}</option>)}
                     </select>
                 )}
                 <div className="memory-external-import">
                     <div className="memory-lib-prompt-head">
-                        <strong><Upload size={15} /> {tx('Import External Chat Logs', '导入外部聊天记录')}</strong>
+                        <strong><Upload size={15} /> {tx('Import Memories', '导入记忆')}</strong>
                         <span>{externalImportPreview ? tx(`${formatNumber(externalPreviewCandidates.length)} candidates`, `候选 ${formatNumber(externalPreviewCandidates.length)} 条`) : 'GPT / Gemini / SillyTavern'}</span>
                     </div>
                     <div className="memory-lib-model-grid external">
@@ -2527,6 +3083,9 @@ function MemoryLibraryPanel({ apiUrl, contacts = [] }) {
                 </div>
             </div>
                 </main>
+            </div>
+                    </div>
+                )}
             </div>
         </div>
     );

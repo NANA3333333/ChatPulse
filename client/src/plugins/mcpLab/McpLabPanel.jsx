@@ -1,81 +1,34 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Clock3, Database, ExternalLink, FileText, Globe2, KeyRound, Play, RefreshCw, Save, Search, Trash2, Wifi } from 'lucide-react';
+import {
+  BookOpen,
+  Check,
+  CheckCircle2,
+  ChevronRight,
+  Clock3,
+  Database,
+  ExternalLink,
+  FileText,
+  FlaskConical,
+  Globe2,
+  KeyRound,
+  Library,
+  Link2,
+  ListChecks,
+  LoaderCircle,
+  PanelRightClose,
+  Play,
+  RefreshCw,
+  RotateCw,
+  Save,
+  Search,
+  Settings2,
+  Trash2,
+  UserRound,
+  Wifi,
+  X
+} from 'lucide-react';
 import { useLanguage } from '../../LanguageContext';
-
-const panel = {
-  height: '100%',
-  background: 'transparent',
-  color: '#342b34',
-  display: 'flex',
-  flexDirection: 'column',
-  overflow: 'hidden'
-};
-
-const iconButton = {
-  width: '36px',
-  height: '36px',
-  border: '1px solid rgba(255, 111, 151, 0.32)',
-  borderRadius: '8px',
-  background: 'rgba(255, 247, 250, 0.88)',
-  color: '#ff4f82',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  cursor: 'pointer'
-};
-
-const primaryButton = {
-  ...iconButton,
-  width: 'auto',
-  padding: '0 12px',
-  gap: '6px',
-  background: 'linear-gradient(180deg, #ff8bad 0%, #ff5c8c 100%)',
-  borderColor: 'rgba(255, 79, 130, 0.42)',
-  color: '#fff',
-  fontWeight: 800
-};
-
-const inputStyle = {
-  height: '36px',
-  border: '1px solid rgba(255, 111, 151, 0.30)',
-  borderRadius: '8px',
-  padding: '0 10px',
-  fontSize: '13px',
-  outline: 'none',
-  background: 'rgba(255, 255, 255, 0.88)',
-  color: '#342b34',
-  minWidth: 0
-};
-
-const textAreaStyle = {
-  ...inputStyle,
-  height: '96px',
-  resize: 'vertical',
-  padding: '8px 10px',
-  lineHeight: 1.45
-};
-
-const sectionStyle = {
-  background: 'rgba(255, 255, 255, 0.88)',
-  border: '1px solid rgba(255, 111, 151, 0.24)',
-  borderRadius: '8px',
-  padding: '14px',
-  boxShadow: '0 7px 16px rgba(255, 111, 151, 0.08)'
-};
-
-const badgeStyle = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: '4px',
-  height: '22px',
-  padding: '0 8px',
-  borderRadius: '999px',
-  border: '1px solid rgba(255, 111, 151, 0.26)',
-  background: 'rgba(255, 247, 250, 0.86)',
-  color: '#806273',
-  fontSize: '11px',
-  whiteSpace: 'nowrap'
-};
+import './McpLabPanel.css';
 
 function getHeaders() {
   const token = localStorage.getItem('cp_token') || '';
@@ -129,6 +82,15 @@ function taskKindLabel(kind, lang = 'zh') {
   return kind || (isEn ? 'Task' : '任务');
 }
 
+function taskStatusLabel(status, lang = 'zh') {
+  const isEn = lang === 'en';
+  if (status === 'done') return isEn ? 'Done' : '完成';
+  if (status === 'error') return isEn ? 'Error' : '错误';
+  if (status === 'running') return isEn ? 'Running' : '运行中';
+  if (status === 'pending') return isEn ? 'Pending' : '等待';
+  return status || (isEn ? 'Task' : '任务');
+}
+
 function formatRawJson(value) {
   if (!value) return '';
   try {
@@ -138,173 +100,214 @@ function formatRawJson(value) {
   }
 }
 
-const rawBlockStyle = {
-  marginTop: '6px',
-  padding: '8px',
-  border: '1px solid rgba(255, 111, 151, 0.20)',
-  borderRadius: '8px',
-  background: 'rgba(255, 255, 255, 0.92)',
-  color: '#59424e',
-  fontSize: '11px',
-  lineHeight: 1.45,
-  whiteSpace: 'pre-wrap',
-  wordBreak: 'break-word',
-  overflowWrap: 'anywhere',
-  maxWidth: '100%',
-  maxHeight: '320px',
-  overflowY: 'auto',
-  overflowX: 'hidden'
-};
-
-function TaskRecord({ task, selected, expanded = false, providers, onSelect, onRerun, onDelete, lang }) {
-  const isEn = lang === 'en';
-  const source = task.output?.source || task.input?.provider || '';
-  const statusColor = task.status === 'done' ? '#16a34a' : task.status === 'error' ? '#dc2626' : '#806273';
-  const outputResults = Array.isArray(task.output?.results) ? task.output.results : [];
-  const outputText = task.output?.text || task.output?.url || '';
-  const showOutput = expanded || selected;
-  const handleTitleKeyDown = (event) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      onSelect(task);
-    }
-  };
+function IconButton({ icon: Icon, title, children, variant = 'quiet', className = '', ...props }) {
   return (
-    <div
-      className={`mcp-command-task-record ${selected ? 'is-selected' : ''}`}
-      style={{
-        border: selected ? '1px solid rgba(255, 79, 130, 0.52)' : '1px solid rgba(255, 111, 151, 0.22)',
-        borderRadius: '14px',
-        padding: '12px 14px',
-        background: selected ? 'rgba(255, 240, 246, 0.94)' : 'rgba(255, 255, 255, 0.88)',
-        minWidth: 0
-      }}
+    <button
+      type="button"
+      className={`mcp-lab-icon-button is-${variant} ${className}`.trim()}
+      title={title}
+      aria-label={title}
+      {...props}
     >
-      <div className="mcp-command-task-meta">
-        <span className="mcp-command-task-kind" style={{ color: statusColor }}>
-          {task.status === 'done' ? <CheckCircle2 size={14} /> : <Clock3 size={14} />}
-          {taskKindLabel(task.kind, lang)}
-        </span>
-        <span className="mcp-command-task-time">{formatTime(task.finished_at || task.created_at)}</span>
-        <div className="mcp-command-task-submeta">
-          <span className="mcp-command-task-status" style={{ color: statusColor }}>{task.status}</span>
-          {source && <span className="mcp-command-task-source">{providerLabel(normalizeProviderId(String(source)), providers)}</span>}
-        </div>
-      </div>
-      <div
-        className="mcp-command-task-title"
-        role="button"
-        tabIndex={0}
-        onClick={() => onSelect(task)}
-        onKeyDown={handleTitleKeyDown}
-        title={isEn ? 'View task output' : '查看任务输出'}
-      >
-        {task.title}
-      </div>
-      <div className="mcp-command-task-actions">
-        <button style={{ ...iconButton, width: '28px', height: '28px' }} onClick={() => onRerun(task)} title={isEn ? 'Run again' : '重新执行'}><Play size={14} /></button>
-        <button style={{ ...iconButton, width: '28px', height: '28px' }} onClick={() => onDelete(task)} title={isEn ? 'Delete' : '删除'}><Trash2 size={14} /></button>
-      </div>
-      {task.error && <div className="mcp-command-wrap-text" style={{ color: '#dc2626', fontSize: '11px', marginTop: '6px' }}>{task.error}</div>}
-      {showOutput && (outputResults.length > 0 || outputText) && (
-        <div className="mcp-command-task-output" style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid rgba(255, 111, 151, 0.20)', display: 'grid', gap: '6px' }}>
-          {outputResults.map((item, index) => (
-            <div className="mcp-command-output-item" key={`${item.url || item.title}-${index}`} style={{ display: 'grid', gap: '2px' }}>
-              <div className="mcp-command-output-title" style={{ fontSize: '12px', fontWeight: 700, color: '#342b34' }}>{item.title || item.url || (isEn ? 'Result' : '结果')}</div>
-              {item.snippet && <div className="mcp-command-wrap-text" style={{ fontSize: '11px', color: '#806273', lineHeight: 1.45 }}>{item.snippet}</div>}
-              {item.url && <a className="mcp-command-text-link" href={item.url} target="_blank" rel="noreferrer" style={{ color: '#ff4f82', fontSize: '11px', textDecoration: 'none' }}>{isEn ? 'Open source' : '打开来源'}</a>}
-              {item.page_text && (
-                <details className="mcp-command-details" style={{ marginTop: '4px' }}>
-                  <summary style={{ cursor: 'pointer', color: '#ff4f82', fontSize: '11px' }}>{isEn ? 'View fetched text' : '查看抓取正文'}</summary>
-                  <pre style={rawBlockStyle}>{item.page_text}</pre>
-                </details>
-              )}
-              {item.page_error && <div className="mcp-command-wrap-text" style={{ color: '#b91c1c', fontSize: '11px' }}>{isEn ? 'Page text fetch failed: ' : '正文抓取失败：'}{item.page_error}</div>}
-              {item.raw && (
-                <details className="mcp-command-details" style={{ marginTop: '4px' }}>
-                  <summary style={{ cursor: 'pointer', color: '#ff4f82', fontSize: '11px' }}>{isEn ? 'View raw API response' : '查看 API 原始返回'}</summary>
-                  <pre style={rawBlockStyle}>{formatRawJson(item.raw)}</pre>
-                </details>
-              )}
-            </div>
-          ))}
-          {task.output?.raw_response && (
-            <details className="mcp-command-details">
-              <summary style={{ cursor: 'pointer', color: '#ff4f82', fontSize: '11px' }}>{isEn ? 'View full response for this query' : '查看本次查询完整响应'}</summary>
-              <pre style={rawBlockStyle}>{formatRawJson(task.output.raw_response)}</pre>
-            </details>
-          )}
-          {!outputResults.length && outputText && (
-            <div className="mcp-command-wrap-text" style={{ fontSize: '11px', color: '#806273', lineHeight: 1.45 }}>
-              {outputText}
-            </div>
-          )}
-        </div>
-      )}
+      {Icon && <Icon size={16} aria-hidden="true" />}
+      {children}
+    </button>
+  );
+}
+
+function ActionButton({ icon: Icon, children, variant = 'secondary', className = '', ...props }) {
+  return (
+    <button
+      type="button"
+      className={`mcp-lab-button is-${variant} ${className}`.trim()}
+      {...props}
+    >
+      {Icon && <Icon size={16} aria-hidden="true" />}
+      <span>{children}</span>
+    </button>
+  );
+}
+
+function Badge({ children, icon: Icon, tone = 'neutral' }) {
+  return (
+    <span className={`mcp-lab-badge is-${tone}`}>
+      {Icon && <Icon size={12} aria-hidden="true" />}
+      {children}
+    </span>
+  );
+}
+
+function ToolButton({ active, icon, label, detail, count, onClick }) {
+  const ToolIcon = icon;
+  return (
+    <button
+      type="button"
+      className={`mcp-lab-rail-button ${active ? 'is-active' : ''}`}
+      onClick={onClick}
+      title={label}
+      aria-pressed={active}
+    >
+      <span className="mcp-lab-rail-icon"><ToolIcon size={18} aria-hidden="true" /></span>
+      <span className="mcp-lab-rail-copy">
+        <strong>{label}</strong>
+        <small>{detail}</small>
+      </span>
+      {typeof count === 'number' && <span className="mcp-lab-rail-count">{count}</span>}
+    </button>
+  );
+}
+
+function EmptyState({ icon: Icon, title, detail }) {
+  return (
+    <div className="mcp-lab-empty">
+      {Icon && <Icon size={20} aria-hidden="true" />}
+      <strong>{title}</strong>
+      {detail && <span>{detail}</span>}
     </div>
   );
 }
 
-function SearchResultList({ result, lang }) {
+function RawDetails({ label, value }) {
+  if (!value) return null;
+  return (
+    <details className="mcp-lab-details">
+      <summary>{label}</summary>
+      <pre>{typeof value === 'string' ? value : formatRawJson(value)}</pre>
+    </details>
+  );
+}
+
+function ResultCard({ item, index, lang }) {
+  const isEn = lang === 'en';
+  return (
+    <article className="mcp-lab-result-card">
+      <div className="mcp-lab-result-main">
+        <div className="mcp-lab-result-index">{index + 1}</div>
+        <div className="mcp-lab-result-copy">
+          <h3>{item.title || item.url || (isEn ? `Result ${index + 1}` : `结果 ${index + 1}`)}</h3>
+          {item.snippet && <p>{item.snippet}</p>}
+          {item.url && (
+            <a className="mcp-lab-link" href={item.url} target="_blank" rel="noreferrer">
+              <ExternalLink size={13} aria-hidden="true" />
+              <span>{isEn ? 'Open source' : '打开来源'}</span>
+            </a>
+          )}
+          <RawDetails label={isEn ? 'Fetched text' : '抓取正文'} value={item.page_text} />
+          {item.page_error && <div className="mcp-lab-inline-error">{isEn ? 'Page text fetch failed: ' : '正文抓取失败：'}{item.page_error}</div>}
+          <RawDetails label={isEn ? 'API fields' : 'API 字段'} value={item.raw} />
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function SearchResultList({ result, providers, lang }) {
   const isEn = lang === 'en';
   const results = Array.isArray(result?.results) ? result.results : [];
   if (!result || results.length === 0) return null;
+  const source = providerLabel(normalizeProviderId(String(result.source || '')), providers);
   return (
-    <div className="mcp-command-result-list" style={{ marginTop: '10px', borderTop: '1px solid rgba(255, 111, 151, 0.20)', paddingTop: '10px', display: 'grid', gap: '8px' }}>
-      <div className="mcp-command-result-head" style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center' }}>
-        <div style={{ fontWeight: 700, fontSize: '12px' }}>{isEn ? 'Search Results' : '本次查询结果'}</div>
-        <span style={badgeStyle}>{result.source || 'web'} / {results.length}</span>
+    <section className="mcp-lab-output-block" aria-label={isEn ? 'Search results' : '搜索结果'}>
+      <div className="mcp-lab-section-head">
+        <div>
+          <span className="mcp-lab-section-kicker">{isEn ? 'Search Output' : '搜索输出'}</span>
+          <h2>{isEn ? 'Current Results' : '本次结果'}</h2>
+        </div>
+        <Badge icon={Globe2}>{source} / {results.length}</Badge>
       </div>
-      <div className="mcp-command-result-stack" style={{ display: 'grid', gap: '7px' }}>
+      <div className="mcp-lab-result-stack">
         {results.map((item, index) => (
-          <div className="mcp-command-result-item" key={`${item.url || item.title}-${index}`} style={{ border: '1px solid rgba(255, 111, 151, 0.20)', borderRadius: '8px', padding: '8px', background: 'rgba(255, 247, 250, 0.72)' }}>
-            <div className="mcp-command-result-layout" style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="mcp-command-output-title" style={{ fontSize: '12px', fontWeight: 700, color: '#342b34' }}>
-                  {item.title || item.url || (isEn ? `Result ${index + 1}` : `结果 ${index + 1}`)}
-                </div>
-                {item.snippet && (
-                  <div className="mcp-command-wrap-text" style={{ marginTop: '3px', color: '#806273', fontSize: '11px', lineHeight: 1.5 }}>
-                    {item.snippet}
-                  </div>
-                )}
-                {item.raw && (
-                  <details className="mcp-command-details" style={{ marginTop: '6px' }}>
-                    <summary style={{ cursor: 'pointer', color: '#ff4f82', fontSize: '11px' }}>{isEn ? 'Expand API fields' : '展开 API 返回字段'}</summary>
-                    <pre style={rawBlockStyle}>{formatRawJson(item.raw)}</pre>
-                  </details>
-                )}
-                {item.page_text && (
-                  <details className="mcp-command-details" style={{ marginTop: '6px' }}>
-                    <summary style={{ cursor: 'pointer', color: '#ff4f82', fontSize: '11px' }}>{isEn ? 'Expand fetched text' : '展开抓取正文'}</summary>
-                    <pre style={rawBlockStyle}>{item.page_text}</pre>
-                  </details>
-                )}
-                {item.page_error && <div className="mcp-command-wrap-text" style={{ color: '#b91c1c', fontSize: '11px', marginTop: '4px' }}>{isEn ? 'Page text fetch failed: ' : '正文抓取失败：'}{item.page_error}</div>}
-              </div>
-              {item.url && (
-                <a
-                  className="mcp-command-source-icon"
-                  href={item.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ ...iconButton, width: '28px', height: '28px', textDecoration: 'none', flexShrink: 0 }}
-                  title={isEn ? 'Open source' : '打开来源'}
-                >
-                  <ExternalLink size={13} />
-                </a>
-              )}
-            </div>
-          </div>
+          <ResultCard key={`${item.url || item.title || 'result'}-${index}`} item={item} index={index} lang={lang} />
         ))}
       </div>
-      {result.raw_response && (
-        <details className="mcp-command-details">
-          <summary style={{ cursor: 'pointer', color: '#ff4f82', fontSize: '11px' }}>{isEn ? 'View full response for this query' : '查看本次查询完整响应'}</summary>
-          <pre style={rawBlockStyle}>{formatRawJson(result.raw_response)}</pre>
-        </details>
+      <RawDetails label={isEn ? 'Full response' : '完整响应'} value={result.raw_response} />
+    </section>
+  );
+}
+
+function TaskOutputPreview({ task, providers, lang }) {
+  const isEn = lang === 'en';
+  if (!task) return null;
+  const source = task.output?.source || task.input?.provider || '';
+  const outputResults = Array.isArray(task.output?.results) ? task.output.results : [];
+  const outputText = task.output?.text || task.output?.url || '';
+  return (
+    <div className="mcp-lab-task-preview">
+      <div className="mcp-lab-preview-head">
+        <div>
+          <span>{taskKindLabel(task.kind, lang)}</span>
+          <strong>{task.title || task.id}</strong>
+        </div>
+        <Badge tone={task.status === 'error' ? 'danger' : task.status === 'done' ? 'success' : 'neutral'}>
+          {taskStatusLabel(task.status, lang)}
+        </Badge>
+      </div>
+      {source && (
+        <div className="mcp-lab-preview-provider">
+          <Wifi size={13} aria-hidden="true" />
+          {providerLabel(normalizeProviderId(String(source)), providers)}
+        </div>
       )}
+      {task.error && <div className="mcp-lab-inline-error">{task.error}</div>}
+      {outputResults.length > 0 && (
+        <div className="mcp-lab-result-stack is-compact">
+          {outputResults.map((item, index) => (
+            <ResultCard key={`${item.url || item.title || 'task-result'}-${index}`} item={item} index={index} lang={lang} />
+          ))}
+        </div>
+      )}
+      {!outputResults.length && outputText && <p className="mcp-lab-task-text">{outputText}</p>}
+      <RawDetails label={isEn ? 'Full task response' : '任务完整响应'} value={task.output?.raw_response || task.output?.raw} />
     </div>
+  );
+}
+
+function TaskRecord({ task, selected, providers, onSelect, onRerun, onDelete, lang }) {
+  const isEn = lang === 'en';
+  const source = task.output?.source || task.input?.provider || '';
+  const isDone = task.status === 'done';
+  const isError = task.status === 'error';
+  const handleSelect = () => onSelect(task);
+  const handleKeyDown = (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      handleSelect();
+    }
+  };
+  return (
+    <article className={`mcp-lab-task-card ${selected ? 'is-selected' : ''} ${isError ? 'has-error' : ''}`}>
+      <button type="button" className="mcp-lab-task-select" onClick={handleSelect} onKeyDown={handleKeyDown}>
+        <span className="mcp-lab-task-state">
+          {isDone ? <CheckCircle2 size={15} aria-hidden="true" /> : <Clock3 size={15} aria-hidden="true" />}
+        </span>
+        <span className="mcp-lab-task-copy">
+          <span className="mcp-lab-task-meta">
+            {taskKindLabel(task.kind, lang)}
+            {source && <span>{providerLabel(normalizeProviderId(String(source)), providers)}</span>}
+          </span>
+          <strong>{task.title || task.id}</strong>
+          <span className="mcp-lab-task-foot">
+            {taskStatusLabel(task.status, lang)}
+            {formatTime(task.finished_at || task.created_at)}
+          </span>
+        </span>
+        <ChevronRight className="mcp-lab-task-chevron" size={15} aria-hidden="true" />
+      </button>
+      <div className="mcp-lab-task-actions">
+        <IconButton
+          icon={RotateCw}
+          title={isEn ? 'Run again' : '重新执行'}
+          onClick={() => onRerun(task)}
+        />
+        <IconButton
+          icon={Trash2}
+          title={isEn ? 'Delete' : '删除'}
+          variant="danger"
+          onClick={() => onDelete(task)}
+        />
+      </div>
+      {task.error && <div className="mcp-lab-inline-error">{task.error}</div>}
+    </article>
   );
 }
 
@@ -312,36 +315,169 @@ function KnowledgeResultList({ results, lang }) {
   const isEn = lang === 'en';
   if (!Array.isArray(results) || results.length === 0) return null;
   return (
-    <div className="mcp-command-knowledge-results">
-      <div className="mcp-command-result-head">
-        <div>{isEn ? 'Knowledge Matches' : '资料命中'}</div>
-        <span style={badgeStyle}>{results.length}</span>
+    <section className="mcp-lab-output-block" aria-label={isEn ? 'Knowledge matches' : '资料命中'}>
+      <div className="mcp-lab-section-head">
+        <div>
+          <span className="mcp-lab-section-kicker">{isEn ? 'Knowledge Output' : '知识输出'}</span>
+          <h2>{isEn ? 'Matches' : '命中资料'}</h2>
+        </div>
+        <Badge icon={Database}>{results.length}</Badge>
       </div>
-      <div className="mcp-command-result-stack">
+      <div className="mcp-lab-knowledge-stack">
         {results.map((item, index) => (
-          <article className="mcp-command-knowledge-hit" key={`${item.chunk_id || item.doc_id || item.title}-${index}`}>
-            <div className="mcp-command-knowledge-hit-head">
+          <article className="mcp-lab-knowledge-hit" key={`${item.chunk_id || item.doc_id || item.title || 'knowledge'}-${index}`}>
+            <div className="mcp-lab-knowledge-head">
               <div>
                 <strong>{item.title || (isEn ? 'Untitled note' : '未命名资料')}</strong>
                 <span>{item.source_type || 'note'} · {isEn ? 'score' : '分数'} {item.score ?? 0}</span>
               </div>
               {item.source_url && (
-                <a
-                  className="mcp-command-source-icon"
-                  href={item.source_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ ...iconButton, width: '28px', height: '28px', textDecoration: 'none', flexShrink: 0 }}
-                  title={isEn ? 'Open source' : '打开来源'}
-                >
-                  <ExternalLink size={13} />
+                <a className="mcp-lab-icon-link" href={item.source_url} target="_blank" rel="noreferrer" title={isEn ? 'Open source' : '打开来源'}>
+                  <ExternalLink size={14} aria-hidden="true" />
                 </a>
               )}
             </div>
-            <p className="mcp-command-wrap-text">{item.content}</p>
+            <p>{item.content}</p>
           </article>
         ))}
       </div>
+    </section>
+  );
+}
+
+function countItems(value) {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function ContextMetric({ label, value }) {
+  return (
+    <span className="mcp-lab-context-metric">
+      <strong>{value}</strong>
+      <small>{label}</small>
+    </span>
+  );
+}
+
+function ContextMiniList({ items, emptyText, renderItem }) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return <div className="mcp-lab-context-empty">{emptyText}</div>;
+  }
+  return (
+    <div className="mcp-lab-context-list">
+      {items.map((item, index) => (
+        <div className="mcp-lab-context-row" key={item.id || item.doc_id || item.timestamp || index}>
+          {renderItem(item, index)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ContextInspector({ contextData, loading, error, onRefresh, characterName, lang }) {
+  const isEn = lang === 'en';
+  const context = contextData?.context || contextData || null;
+  const character = context?.character || {};
+  const privateWindow = context?.private_window || {};
+  const cityLogs = context?.city?.recent_logs || [];
+  const groups = context?.group_context?.groups || [];
+  const docs = context?.external_knowledge?.docs || [];
+  const debugRows = context?.recent_llm_debug || [];
+  const tail = privateWindow.tail || [];
+
+  if (!characterName && !character?.name) {
+    return (
+      <div className="mcp-lab-inspector-scroll">
+        <EmptyState icon={UserRound} title={isEn ? 'Choose a character first' : '先选择角色'} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="mcp-lab-inspector-scroll">
+      <section className="mcp-lab-context-card">
+        <div className="mcp-lab-context-head">
+          <div>
+            <span className="mcp-lab-section-kicker">CONTEXT</span>
+            <strong>{character?.name || characterName}</strong>
+            <small>{character?.location || character?.city_status || (isEn ? 'Context window' : '上下文窗口')}</small>
+          </div>
+          <IconButton icon={RefreshCw} title={isEn ? 'Refresh context' : '刷新上下文'} onClick={onRefresh} disabled={loading} />
+        </div>
+        {error && <div className="mcp-lab-inline-error">{error}</div>}
+        {loading && <div className="mcp-lab-context-empty">{isEn ? 'Loading context...' : '正在读取上下文...'}</div>}
+        {!loading && context && (
+          <>
+            <div className="mcp-lab-context-metrics">
+              <ContextMetric label={isEn ? 'Private msgs' : '私聊'} value={privateWindow.count || countItems(tail)} />
+              <ContextMetric label={isEn ? 'City logs' : '商业街'} value={countItems(cityLogs)} />
+              <ContextMetric label={isEn ? 'Groups' : '群聊'} value={countItems(groups)} />
+              <ContextMetric label={isEn ? 'Docs' : '资料'} value={countItems(docs)} />
+            </div>
+
+            <section className="mcp-lab-context-section">
+              <h3>{isEn ? 'Private Window Tail' : '私聊窗口尾部'}</h3>
+              <ContextMiniList
+                items={tail}
+                emptyText={isEn ? 'No recent private messages.' : '暂无最近私聊消息。'}
+                renderItem={(item) => (
+                  <>
+                    <strong>{item.role || 'message'}</strong>
+                    <p>{item.content || ''}</p>
+                    <small>{formatTime(item.timestamp)}</small>
+                  </>
+                )}
+              />
+            </section>
+
+            <section className="mcp-lab-context-section">
+              <h3>{isEn ? 'Recent City Logs' : '最近商业街日志'}</h3>
+              <ContextMiniList
+                items={cityLogs}
+                emptyText={isEn ? 'No city logs in this context.' : '上下文里暂无商业街日志。'}
+                renderItem={(item) => (
+                  <>
+                    <strong>{item.action_type || 'CITY'}</strong>
+                    <p>{item.message || ''}</p>
+                    <small>{item.location || ''} {formatTime(item.timestamp)}</small>
+                  </>
+                )}
+              />
+            </section>
+
+            <section className="mcp-lab-context-section">
+              <h3>{isEn ? 'Groups and External Knowledge' : '群聊与外部资料'}</h3>
+              <ContextMiniList
+                items={[...groups.map(item => ({ ...item, _kind: 'group' })), ...docs.map(item => ({ ...item, _kind: 'doc' }))]}
+                emptyText={isEn ? 'No group or external knowledge entries.' : '暂无群聊或外部资料条目。'}
+                renderItem={(item) => (
+                  <>
+                    <strong>{item._kind === 'group' ? (item.name || item.id) : (item.title || item.id)}</strong>
+                    <p>{item._kind === 'group'
+                      ? (isEn ? `${item.member_count || 0} members, inject limit ${item.inject_limit ?? '-'}` : `${item.member_count || 0} 位成员，注入上限 ${item.inject_limit ?? '-'}`)
+                      : `${item.source_type || 'note'} · ${item.trust_level || 'normal'}`}</p>
+                    {item.source_url && <a href={item.source_url} target="_blank" rel="noreferrer">{isEn ? 'Open source' : '打开来源'}</a>}
+                  </>
+                )}
+              />
+            </section>
+
+            <section className="mcp-lab-context-section">
+              <h3>{isEn ? 'Recent LLM Debug' : '最近 LLM Debug'}</h3>
+              <ContextMiniList
+                items={debugRows}
+                emptyText={isEn ? 'No recent debug records.' : '暂无最近调试记录。'}
+                renderItem={(item) => (
+                  <>
+                    <strong>{item.direction || 'debug'} · {item.context_type || 'context'}</strong>
+                    <p>{item.payload_preview || ''}</p>
+                    <small>{formatTime(item.timestamp)}</small>
+                  </>
+                )}
+              />
+            </section>
+          </>
+        )}
+      </section>
     </div>
   );
 }
@@ -372,6 +508,12 @@ export default function McpLabPanel({ apiUrl }) {
   const [knowledgeResults, setKnowledgeResults] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [activeTool, setActiveTool] = useState('search');
+  const [inspectorPanel, setInspectorPanel] = useState('tasks');
+  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [contextData, setContextData] = useState(null);
+  const [contextLoading, setContextLoading] = useState(false);
+  const [contextError, setContextError] = useState('');
 
   const load = useCallback(async () => {
     setError('');
@@ -405,6 +547,33 @@ export default function McpLabPanel({ apiUrl }) {
     load();
   }, [load]);
 
+  const loadContext = useCallback(async (nextCharacterId = characterId) => {
+    if (!nextCharacterId) {
+      setContextData(null);
+      setContextError('');
+      return;
+    }
+    setContextLoading(true);
+    setContextError('');
+    try {
+      const data = await requestJson(endpoint(apiUrl, `/mcp-lab/context/${encodeURIComponent(nextCharacterId)}`), { headers }, lang);
+      setContextData(data.context ? data : { success: true, context: data });
+    } catch (e) {
+      setContextError(e.message);
+    } finally {
+      setContextLoading(false);
+    }
+  }, [apiUrl, characterId, headers, lang]);
+
+  useEffect(() => {
+    if (characterId) {
+      loadContext(characterId);
+    } else {
+      setContextData(null);
+      setContextError('');
+    }
+  }, [characterId, loadContext]);
+
   async function runSearch() {
     if (!query.trim()) return;
     setBusy(true);
@@ -424,6 +593,8 @@ export default function McpLabPanel({ apiUrl }) {
         setTasks(current => [data.task, ...current.filter(task => task.id !== data.task.id)].slice(0, 80));
         setSelectedTaskId(data.task.id);
       }
+      setInspectorPanel('tasks');
+      setInspectorOpen(true);
       setNotice(tx(
         `Search complete: ${providerLabel(data.result?.source || selectedProvider, providers)} returned ${count} results`,
         `查询完成：${providerLabel(data.result?.source || selectedProvider, providers)} 返回 ${count} 条结果`
@@ -481,6 +652,8 @@ export default function McpLabPanel({ apiUrl }) {
         setTasks(current => [data.task, ...current.filter(task => task.id !== data.task.id)].slice(0, 80));
         setSelectedTaskId(data.task.id);
       }
+      setInspectorPanel('tasks');
+      setInspectorOpen(true);
       setNotice(tx(
         `Page fetch complete: ${data.result?.status || ''} ${data.result?.content_type || ''}`.trim(),
         `页面抓取完成：${data.result?.status || ''} ${data.result?.content_type || ''}`.trim()
@@ -559,6 +732,8 @@ export default function McpLabPanel({ apiUrl }) {
         headers,
         body: JSON.stringify({ kind, title, input, run_now: true })
       }, lang);
+      setInspectorPanel('tasks');
+      setInspectorOpen(true);
       setNotice(tx('Task created and executed', '任务已创建并执行'));
       await load();
     } catch (e) {
@@ -594,6 +769,26 @@ export default function McpLabPanel({ apiUrl }) {
   const providers = webConfig?.providers || status?.web_search_providers || [];
   const activeProvider = webConfig?.active_provider || status?.search_provider || 'duckduckgo';
   const selectedProviderConfig = providers.find(provider => provider.id === selectedProvider);
+  const taskItems = Array.isArray(tasks) ? tasks : [];
+  const selectedTask = taskItems.find(task => task.id === selectedTaskId) || taskItems[0] || null;
+  const completedTaskCount = taskItems.filter(task => task.status === 'done').length;
+  const erroredTaskCount = taskItems.filter(task => task.status === 'error').length;
+  const savedKeyCount = Number(webConfig?.saved_key_count ?? providers.filter(provider => provider.has_key).length ?? 0);
+  const docCount = Array.isArray(docs) ? docs.length : 0;
+  const selectedKnowledgeOwner = characterId
+    ? (characters.find(character => String(character.id) === String(characterId))?.name || characterId)
+    : tx('Global', '全局');
+  const selectedContextCharacterName = characters.find(character => String(character.id) === String(characterId))?.name || characterId;
+  const currentSearchCount = Array.isArray(searchResult?.results) ? searchResult.results.length : 0;
+
+  const tools = [
+    { id: 'search', icon: Search, label: tx('Search', '搜索'), detail: tx('Web query', '联网查询'), count: currentSearchCount },
+    { id: 'fetch', icon: Link2, label: tx('Fetch', '抓取'), detail: tx('URL text', '网页正文'), count: null },
+    { id: 'knowledge', icon: Library, label: tx('Knowledge', '资料'), detail: selectedKnowledgeOwner, count: docCount },
+    { id: 'keys', icon: KeyRound, label: tx('Keys', '密钥'), detail: tx('Providers', '搜索源'), count: savedKeyCount }
+  ];
+  const activeToolMeta = tools.find(tool => tool.id === activeTool) || tools[0];
+  const ActiveToolIcon = activeToolMeta.icon;
 
   function toggleClearProvider(providerId) {
     setClearKeyIds((current) => current.includes(providerId)
@@ -603,243 +798,428 @@ export default function McpLabPanel({ apiUrl }) {
 
   function selectTask(task) {
     setSelectedTaskId(current => current === task.id ? '' : task.id);
+    setInspectorPanel('tasks');
+    setInspectorOpen(true);
   }
 
-  const taskItems = Array.isArray(tasks) ? tasks : [];
-  const completedTaskCount = taskItems.filter(task => task.status === 'done').length;
-  const erroredTaskCount = taskItems.filter(task => task.status === 'error').length;
-  const savedKeyCount = Number(webConfig?.saved_key_count ?? providers.filter(provider => provider.has_key).length ?? 0);
-  const docCount = Array.isArray(docs) ? docs.length : 0;
-  const selectedKnowledgeOwner = characterId
-    ? (characters.find(character => String(character.id) === String(characterId))?.name || characterId)
-    : tx('Global', '全局');
+  function renderProviderSummary(provider) {
+    const isSaved = !!provider.has_key;
+    return (
+      <article className={`mcp-lab-provider-row ${selectedProvider === provider.id ? 'is-active' : ''}`} key={provider.id}>
+        <button type="button" onClick={() => setSelectedProvider(provider.id)}>
+          <span className="mcp-lab-provider-dot" />
+          <span>
+            <strong>{provider.label}</strong>
+            <small>{isSaved ? tx('API key saved', 'API Key 已保存') : tx('No user key', '未配置用户 Key')}</small>
+          </span>
+        </button>
+        {isSaved && <Badge icon={Check} tone="success">{provider.source === 'env' ? tx('Env', '环境') : tx('Saved', '已保存')}</Badge>}
+      </article>
+    );
+  }
 
   return (
-    <div className="mcp-lab-panel mcp-command-page" style={panel}>
-      <header className="mcp-command-topbar">
-        <div className="mcp-command-brand">
-          <div className="command-page-kicker"><Wifi size={16} /> {tx('MCP Lab', 'MCP 实验室')}</div>
-          <h1>{tx('Research Workbench', '联网研究工作台')}</h1>
+    <div className="mcp-lab-panel mcp-lab-redesign">
+      <header className="mcp-lab-topbar">
+        <div className="mcp-lab-brand">
+          <span className="mcp-lab-kicker"><FlaskConical size={16} aria-hidden="true" /> {tx('MCP Lab', 'MCP 实验室')}</span>
+          <h1>{tx('Research Console', '联网研究控制台')}</h1>
         </div>
 
-        <div className="mcp-command-metrics" aria-label={tx('MCP lab status metrics', 'MCP 实验室状态指标')}>
-          <div>
-            <span>{tx('Tasks', '任务')}</span>
-            <strong>{taskItems.length}</strong>
-          </div>
-          <div>
-            <span>{tx('Done', '完成')}</span>
-            <strong>{completedTaskCount}</strong>
-          </div>
-          <div>
-            <span>{tx('Errors', '错误')}</span>
-            <strong>{erroredTaskCount}</strong>
-          </div>
-          <div>
-            <span>{tx('Docs', '资料')}</span>
-            <strong>{docCount}</strong>
-          </div>
-          <div>
-            <span>{tx('Keys', 'Key')}</span>
-            <strong>{savedKeyCount}</strong>
-          </div>
+        <div className="mcp-lab-toolbar" aria-label={tx('MCP lab tools', 'MCP 实验室功能')}>
+          {tools.map(tool => {
+            const ToolIcon = tool.icon;
+            return (
+              <button
+                type="button"
+                key={tool.id}
+                className={activeTool === tool.id ? 'is-active' : ''}
+                onClick={() => setActiveTool(tool.id)}
+              >
+                <ToolIcon size={15} aria-hidden="true" />
+                <span>{tool.label}</span>
+              </button>
+            );
+          })}
         </div>
 
-        <div className="mcp-command-top-actions">
-          <span className="command-status-pill"><Globe2 size={12} /> {providerLabel(activeProvider, providers)}</span>
-          <button type="button" className="command-icon-button" onClick={load} title={tx('Refresh', '刷新')}>
-            <RefreshCw size={16} />
-          </button>
+        <div className="mcp-lab-top-actions">
+          <Badge icon={Wifi}>{providerLabel(activeProvider, providers)}</Badge>
+          <IconButton icon={RefreshCw} title={tx('Refresh', '刷新')} onClick={load} disabled={busy} />
+          <IconButton
+            icon={PanelRightClose}
+            title={inspectorOpen ? tx('Hide inspector', '收起侧栏') : tx('Show inspector', '展开侧栏')}
+            onClick={() => setInspectorOpen(current => !current)}
+          />
         </div>
       </header>
 
-      {error && <div className="command-alert command-alert--danger">{error}</div>}
-      {notice && <div className="command-alert command-alert--notice">{notice}</div>}
+      {(error || notice) && (
+        <div className="mcp-lab-alerts">
+          {error && <div className="mcp-lab-alert is-danger">{error}</div>}
+          {notice && <div className="mcp-lab-alert is-info">{notice}</div>}
+        </div>
+      )}
 
-      <div className="mcp-lab-panel__body">
-        <div className="mcp-command-workspace">
-          <aside className="mcp-command-left">
-            <section className="command-card mcp-command-card mcp-command-connect-card" style={sectionStyle}>
-              <div className="command-card-title mcp-command-card-title">
-                <h2><KeyRound size={18} /> {tx('Provider', '搜索源')}</h2>
-                <span className="command-status-pill">{tx('Current', '当前')}：{providerLabel(activeProvider, providers)}</span>
+      <div className="mcp-lab-panel__body mcp-lab-body">
+        <div className={`mcp-lab-frame ${inspectorOpen ? 'has-inspector' : 'is-inspector-closed'}`}>
+          <nav className="mcp-lab-rail" aria-label={tx('MCP lab navigation', 'MCP 实验室导航')}>
+            {tools.map(tool => (
+              <ToolButton
+                key={tool.id}
+                active={activeTool === tool.id}
+                icon={tool.icon}
+                label={tool.label}
+                detail={tool.detail}
+                count={tool.count}
+                onClick={() => setActiveTool(tool.id)}
+              />
+            ))}
+          </nav>
+
+          <main className="mcp-lab-workspace">
+            <section className="mcp-lab-work-head">
+              <div className="mcp-lab-work-title">
+                <span><ActiveToolIcon size={18} aria-hidden="true" /></span>
+                <div>
+                  <strong>{activeToolMeta.label}</strong>
+                  <small>{activeToolMeta.detail}</small>
+                </div>
               </div>
-
-              <div className="mcp-command-provider-copy">
-                <strong>
-                  {selectedProviderConfig
-                    ? selectedProviderConfig.label
-                    : (selectedProvider === 'duckduckgo' ? 'DuckDuckGo' : tx('Auto mode', '自动模式'))}
-                </strong>
-                <span>
-                  {selectedProviderConfig
-                    ? (selectedProviderConfig.has_key ? tx('API key saved', 'API Key 已保存') : tx('API key not saved', '未保存 API Key'))
-                    : tx('Saved providers / DuckDuckGo', '已保存源 / DuckDuckGo')}
-                </span>
+              <div className="mcp-lab-work-stats">
+                <Badge icon={ListChecks}>{taskItems.length}</Badge>
+                <Badge icon={CheckCircle2} tone="success">{completedTaskCount}</Badge>
+                <Badge icon={BookOpen}>{docCount}</Badge>
+                {busy && <Badge icon={LoaderCircle} tone="warning">{tx('Busy', '执行中')}</Badge>}
               </div>
+            </section>
 
-              <div className="mcp-command-provider-controls">
-                <select style={inputStyle} value={selectedProvider} onChange={(e) => setSelectedProvider(e.target.value)}>
-                  <option value="auto">{tx('Auto-select available search provider', '自动选择可用搜索源')}</option>
-                  {providers.map(provider => (
-                    <option key={provider.id} value={provider.id}>{provider.label}</option>
-                  ))}
-                  <option value="duckduckgo">{tx('DuckDuckGo, no key required', 'DuckDuckGo 免 Key')}</option>
-                </select>
-                <button style={iconButton} onClick={saveWebConfig} disabled={busy} title={tx('Save web keys and search provider', '保存联网 Key 与搜索源')}>
-                  <Save size={15} />
-                </button>
-              </div>
+            <div className="mcp-lab-work-scroll">
+              {activeTool === 'search' && (
+                <section className="mcp-lab-surface">
+                  <div className="mcp-lab-section-head">
+                    <div>
+                      <span className="mcp-lab-section-kicker">{tx('Web Search', '联网搜索')}</span>
+                      <h2>{tx('Query Builder', '查询面板')}</h2>
+                    </div>
+                    <Badge icon={Globe2}>{providerLabel(activeProvider, providers)}</Badge>
+                  </div>
+                  <form className="mcp-lab-command-row" onSubmit={(event) => { event.preventDefault(); runSearch(); }}>
+                    <label className="mcp-lab-field">
+                      <span>{tx('Query', '关键词')}</span>
+                      <input
+                        value={query}
+                        onChange={(event) => setQuery(event.target.value)}
+                        placeholder={tx('Search keywords', '搜索关键词')}
+                      />
+                    </label>
+                    <ActionButton icon={Search} variant="primary" disabled={busy || !query.trim()}>
+                      {tx('Search', '搜索')}
+                    </ActionButton>
+                    <ActionButton icon={Play} disabled={busy || !query.trim()} onClick={() => createTask('web_search')}>
+                      {tx('Task', '任务')}
+                    </ActionButton>
+                  </form>
+                  {searchResult ? (
+                    <SearchResultList result={searchResult} providers={providers} lang={lang} />
+                  ) : (
+                    <EmptyState icon={Search} title={tx('No search output', '暂无搜索输出')} />
+                  )}
+                </section>
+              )}
 
-              {selectedProviderConfig && (
-                <div className="mcp-command-key-panel">
-                  <div className="mcp-command-key-status">
-                    {selectedProviderConfig.has_key && (
-                      <>
-                        <span className="mcp-command-good-pill">{tx('Saved', '已保存')}</span>
-                        <span className="mcp-command-soft-pill">{selectedProviderConfig.source === 'env' ? tx('Environment variable', '环境变量') : tx('User config', '用户配置')}</span>
-                      </>
+              {activeTool === 'fetch' && (
+                <section className="mcp-lab-surface">
+                  <div className="mcp-lab-section-head">
+                    <div>
+                      <span className="mcp-lab-section-kicker">{tx('Page Fetch', '网页抓取')}</span>
+                      <h2>{tx('URL Reader', 'URL 读取')}</h2>
+                    </div>
+                    <Badge icon={Link2}>{tx('Text', '正文')}</Badge>
+                  </div>
+                  <form className="mcp-lab-command-row" onSubmit={(event) => { event.preventDefault(); fetchUrl(); }}>
+                    <label className="mcp-lab-field">
+                      <span>URL</span>
+                      <input
+                        value={url}
+                        onChange={(event) => setUrl(event.target.value)}
+                        placeholder="https://example.com"
+                      />
+                    </label>
+                    <ActionButton icon={ExternalLink} variant="primary" disabled={busy || !url.trim()}>
+                      {tx('Fetch', '抓取')}
+                    </ActionButton>
+                    <ActionButton icon={Play} disabled={busy || !url.trim()} onClick={() => createTask('fetch_url')}>
+                      {tx('Task', '任务')}
+                    </ActionButton>
+                  </form>
+                  {selectedTask?.kind === 'fetch_url' ? (
+                    <TaskOutputPreview task={selectedTask} providers={providers} lang={lang} />
+                  ) : (
+                    <EmptyState icon={FileText} title={tx('No fetched page selected', '暂无选中的抓取结果')} />
+                  )}
+                </section>
+              )}
+
+              {activeTool === 'knowledge' && (
+                <section className="mcp-lab-surface">
+                  <div className="mcp-lab-section-head">
+                    <div>
+                      <span className="mcp-lab-section-kicker">{tx('External Knowledge', '外部知识')}</span>
+                      <h2>{tx('Knowledge Desk', '资料工作台')}</h2>
+                    </div>
+                    <Badge icon={Library}>{selectedKnowledgeOwner}</Badge>
+                  </div>
+
+                  <div className="mcp-lab-note-grid">
+                    <label className="mcp-lab-field">
+                      <span>{tx('Title', '标题')}</span>
+                      <input value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} placeholder={tx('Title', '标题')} />
+                    </label>
+                    <label className="mcp-lab-field">
+                      <span>{tx('Source', '来源')}</span>
+                      <input value={noteUrl} onChange={(event) => setNoteUrl(event.target.value)} placeholder={tx('Source URL, optional', '来源 URL，可空')} />
+                    </label>
+                    <label className="mcp-lab-field">
+                      <span>{tx('Owner', '归属')}</span>
+                      <select value={characterId} onChange={(event) => setCharacterId(event.target.value)}>
+                        <option value="">{tx('Global knowledge', '全局知识')}</option>
+                        {characters.map((character) => (
+                          <option key={character.id} value={character.id}>{character.name || character.id}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  <label className="mcp-lab-field is-textarea">
+                    <span>{tx('Content', '内容')}</span>
+                    <textarea
+                      value={noteContent}
+                      onChange={(event) => setNoteContent(event.target.value)}
+                      placeholder={tx('Page summary, setting note, or search result excerpt', '网页摘要、设定资料或查询结果摘录')}
+                    />
+                  </label>
+
+                  <div className="mcp-lab-note-actions">
+                    <form className="mcp-lab-knowledge-search" onSubmit={(event) => { event.preventDefault(); searchKnowledge(); }}>
+                      <label className="mcp-lab-field">
+                        <span>{tx('Search', '检索')}</span>
+                        <input
+                          value={knowledgeQuery}
+                          onChange={(event) => setKnowledgeQuery(event.target.value)}
+                          placeholder={tx('Search knowledge', '搜索资料')}
+                        />
+                      </label>
+                      <ActionButton icon={Database} disabled={busy || !knowledgeQuery.trim()}>
+                        {tx('Match', '匹配')}
+                      </ActionButton>
+                    </form>
+                    <ActionButton icon={Save} variant="primary" disabled={busy || !noteContent.trim()} onClick={saveKnowledge}>
+                      {tx('Save', '保存')}
+                    </ActionButton>
+                  </div>
+
+                  <KnowledgeResultList results={knowledgeResults} lang={lang} />
+
+                  <section className="mcp-lab-doc-strip" aria-label={tx('Saved documents', '已保存资料')}>
+                    <div className="mcp-lab-section-head is-compact">
+                      <h2>{tx('Saved Docs', '已保存资料')}</h2>
+                      <Badge icon={FileText}>{docCount}</Badge>
+                    </div>
+                    {docCount > 0 ? (
+                      <div className="mcp-lab-doc-list">
+                        {docs.slice(0, 8).map((doc, index) => (
+                          <article className="mcp-lab-doc-item" key={doc.id || doc.doc_id || `${doc.title || 'doc'}-${index}`}>
+                            <strong>{doc.title || tx('Untitled note', '未命名资料')}</strong>
+                            <span>{doc.source_type || 'note'} · {formatTime(doc.updated_at || doc.created_at)}</span>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <EmptyState icon={FileText} title={tx('No saved documents', '暂无已保存资料')} />
                     )}
-                  </div>
-                  <div className="mcp-command-key-input">
-                    <KeyRound size={14} />
-                    <input
-                      style={inputStyle}
-                      type={webKeys[selectedProviderConfig.id] ? 'password' : 'text'}
-                      value={webKeys[selectedProviderConfig.id] || ''}
-                      onChange={(e) => setWebKeys(current => ({ ...current, [selectedProviderConfig.id]: e.target.value }))}
-                      placeholder={selectedProviderConfig.has_key ? tx('Enter a new key to replace the saved key', '输入新 Key 可替换已保存 Key') : `${selectedProviderConfig.label} API Key`}
-                    />
-                    <button
-                      className={clearKeyIds.includes(selectedProviderConfig.id) ? 'is-danger' : ''}
-                      style={{ ...iconButton, width: 'auto', padding: '0 10px' }}
-                      onClick={() => toggleClearProvider(selectedProviderConfig.id)}
-                      title={tx('Mark this user-level key for clearing, then save to apply', '标记清除这个用户级 Key，再点保存生效')}
-                    >
-                      {tx('Clear', '清除')}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </section>
-
-            <section className="command-card mcp-command-card mcp-command-run-card" style={sectionStyle}>
-              <div className="command-card-title mcp-command-card-title">
-                <h2><Play size={18} /> {tx('Run', '运行')}</h2>
-                <span className="command-status-pill">{busy ? tx('Busy', '执行中') : tx('Ready', '就绪')}</span>
-              </div>
-
-              <div className="mcp-command-tool-stack">
-                <div className="mcp-command-tool">
-                  <div className="mcp-command-block-head">
-                    <span><Search size={16} /> {tx('Search', '搜索')}</span>
-                    <small>{tx('Web query', '联网查询')}</small>
-                  </div>
-                  <div className="mcp-command-field-row">
-                    <input style={inputStyle} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={tx('Search keywords', '搜索关键词')} onKeyDown={(e) => { if (e.key === 'Enter') runSearch(); }} />
-                    <button style={{ ...primaryButton, width: '42px', padding: 0 }} onClick={runSearch} disabled={busy || !query.trim()} title={tx('Search', '搜索')} aria-label={tx('Search', '搜索')}>
-                      <Search size={15} />
-                    </button>
-                  </div>
-                  <button style={iconButton} className="mcp-command-wide-action" onClick={() => createTask('web_search')} disabled={busy || !query.trim()} title={tx('Create and run a search task', '创建并执行查询任务')}>
-                    <Play size={15} /> {tx('Task', '任务')}
-                  </button>
-                </div>
-
-                <div className="mcp-command-tool">
-                  <div className="mcp-command-block-head">
-                    <span><ExternalLink size={16} /> {tx('Fetch Page', '抓取网页')}</span>
-                    <small>{tx('URL text', 'URL 正文')}</small>
-                  </div>
-                  <div className="mcp-command-field-row">
-                    <input style={inputStyle} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com" onKeyDown={(e) => { if (e.key === 'Enter') fetchUrl(); }} />
-                    <button style={{ ...primaryButton, width: '42px', padding: 0 }} onClick={fetchUrl} disabled={busy || !url.trim()} title={tx('Fetch', '抓取')} aria-label={tx('Fetch', '抓取')}>
-                      <ExternalLink size={15} />
-                    </button>
-                  </div>
-                  <button style={iconButton} className="mcp-command-wide-action" onClick={() => createTask('fetch_url')} disabled={busy || !url.trim()} title={tx('Create and run a fetch task', '创建并执行抓取任务')}>
-                    <Play size={15} /> {tx('Task', '任务')}
-                  </button>
-                </div>
-              </div>
-            </section>
-          </aside>
-
-          <main className="mcp-command-main">
-            <section className="command-card mcp-command-card mcp-command-results-card" style={sectionStyle}>
-              <div className="command-card-title mcp-command-card-title">
-                <h2><Globe2 size={19} /> {tx('Results', '结果')}</h2>
-                <span className="command-status-pill">{searchResult?.source ? providerLabel(normalizeProviderId(String(searchResult.source)), providers) : tx('No run', '未运行')}</span>
-              </div>
-              {searchResult ? (
-                <SearchResultList result={searchResult} lang={lang} />
-              ) : (
-                <div className="command-empty mcp-command-empty-state">
-                  <Search size={18} />
-                  <span>{tx('Waiting for output', '等待输出')}</span>
-                </div>
+                  </section>
+                </section>
               )}
 
-              <div className="mcp-command-results-history">
-                <div className="command-card-title mcp-command-card-title">
-                  <h2><Clock3 size={18} /> {tx('Reports', '任务报告')}</h2>
-                  <span className="command-status-pill">{taskItems.length}</span>
+              {activeTool === 'keys' && (
+                <section className="mcp-lab-surface">
+                  <div className="mcp-lab-section-head">
+                    <div>
+                      <span className="mcp-lab-section-kicker">{tx('Provider Settings', '搜索源设置')}</span>
+                      <h2>{tx('Keys and Routing', '密钥与路由')}</h2>
+                    </div>
+                    <Badge icon={KeyRound}>{savedKeyCount}</Badge>
+                  </div>
+
+                  <div className="mcp-lab-provider-layout">
+                    <section className="mcp-lab-provider-config">
+                      <label className="mcp-lab-field">
+                        <span>{tx('Preferred provider', '优先搜索源')}</span>
+                        <select value={selectedProvider} onChange={(event) => setSelectedProvider(event.target.value)}>
+                          <option value="auto">{tx('Auto-select available search provider', '自动选择可用搜索源')}</option>
+                          {providers.map(provider => (
+                            <option key={provider.id} value={provider.id}>{provider.label}</option>
+                          ))}
+                          <option value="duckduckgo">{tx('DuckDuckGo, no key required', 'DuckDuckGo 免 Key')}</option>
+                        </select>
+                      </label>
+
+                      {selectedProviderConfig ? (
+                        <div className="mcp-lab-key-editor">
+                          <div className="mcp-lab-key-title">
+                            <KeyRound size={16} aria-hidden="true" />
+                            <div>
+                              <strong>{selectedProviderConfig.label}</strong>
+                              <span>{selectedProviderConfig.has_key ? tx('API key saved', 'API Key 已保存') : tx('API key not saved', '未保存 API Key')}</span>
+                            </div>
+                          </div>
+                          <label className="mcp-lab-field">
+                            <span>API Key</span>
+                            <input
+                              type={webKeys[selectedProviderConfig.id] ? 'password' : 'text'}
+                              value={webKeys[selectedProviderConfig.id] || ''}
+                              onChange={(event) => setWebKeys(current => ({ ...current, [selectedProviderConfig.id]: event.target.value }))}
+                              placeholder={selectedProviderConfig.has_key ? tx('Enter a new key to replace the saved key', '输入新 Key 可替换已保存 Key') : `${selectedProviderConfig.label} API Key`}
+                            />
+                          </label>
+                          <div className="mcp-lab-key-actions">
+                            {selectedProviderConfig.has_key && (
+                              <Badge icon={Check} tone="success">
+                                {selectedProviderConfig.source === 'env' ? tx('Environment variable', '环境变量') : tx('User config', '用户配置')}
+                              </Badge>
+                            )}
+                            <ActionButton
+                              icon={X}
+                              variant={clearKeyIds.includes(selectedProviderConfig.id) ? 'danger' : 'secondary'}
+                              onClick={() => toggleClearProvider(selectedProviderConfig.id)}
+                            >
+                              {tx('Clear', '清除')}
+                            </ActionButton>
+                          </div>
+                        </div>
+                      ) : (
+                        <EmptyState icon={Settings2} title={selectedProvider === 'duckduckgo' ? 'DuckDuckGo' : tx('Auto mode', '自动模式')} />
+                      )}
+
+                      <ActionButton icon={Save} variant="primary" disabled={busy} onClick={() => saveWebConfig()}>
+                        {tx('Save provider settings', '保存搜索源设置')}
+                      </ActionButton>
+                    </section>
+
+                    <section className="mcp-lab-provider-list" aria-label={tx('Provider list', '搜索源列表')}>
+                      {providers.map(renderProviderSummary)}
+                      <article className={`mcp-lab-provider-row ${selectedProvider === 'duckduckgo' ? 'is-active' : ''}`}>
+                        <button type="button" onClick={() => setSelectedProvider('duckduckgo')}>
+                          <span className="mcp-lab-provider-dot" />
+                          <span>
+                            <strong>DuckDuckGo</strong>
+                            <small>{tx('No key required', '无需 Key')}</small>
+                          </span>
+                        </button>
+                        <Badge tone="success">{tx('Free', '免 Key')}</Badge>
+                      </article>
+                    </section>
+                  </div>
+                </section>
+              )}
+            </div>
+          </main>
+
+          {inspectorOpen && (
+            <aside className="mcp-lab-inspector">
+              <div className="mcp-lab-inspector-head">
+                <div>
+                  <span className="mcp-lab-section-kicker">{tx('Inspector', '检查器')}</span>
+                  <strong>
+                    {inspectorPanel === 'tasks'
+                      ? tx('Task Trail', '任务轨迹')
+                      : inspectorPanel === 'context'
+                        ? tx('Role Context', '角色上下文')
+                        : tx('Providers', '搜索源')}
+                  </strong>
                 </div>
-                <div className="mcp-command-task-list">
-                  {taskItems.length === 0 && <div className="command-empty">{tx('No tasks yet.', '还没有任务。')}</div>}
-                  {taskItems.map(task => (
-                    <TaskRecord
-                      key={task.id}
-                      task={task}
-                      selected={task.id === selectedTaskId}
-                      expanded={task.id === selectedTaskId}
-                      providers={providers}
-                      onSelect={selectTask}
-                      onRerun={rerunTask}
-                      onDelete={deleteTask}
-                      lang={lang}
-                    />
-                  ))}
-                </div>
-              </div>
-            </section>
-
-            <section className="command-card mcp-command-card mcp-command-notes-card" style={sectionStyle}>
-              <div className="command-card-title mcp-command-card-title">
-                <h2><FileText size={19} /> {tx('Knowledge', '资料')}</h2>
-                <span className="command-status-pill">{selectedKnowledgeOwner}</span>
+                <IconButton icon={X} title={tx('Close', '关闭')} onClick={() => setInspectorOpen(false)} />
               </div>
 
-              <div className="mcp-command-note-grid">
-                <input style={inputStyle} value={noteTitle} onChange={(e) => setNoteTitle(e.target.value)} placeholder={tx('Title', '标题')} />
-                <input style={inputStyle} value={noteUrl} onChange={(e) => setNoteUrl(e.target.value)} placeholder={tx('Source URL, optional', '来源 URL，可空')} />
-                <select style={inputStyle} value={characterId} onChange={(e) => setCharacterId(e.target.value)} title={tx('Knowledge owner character', '知识归属角色')}>
-                  <option value="">{tx('Global knowledge', '全局知识')}</option>
-                  {characters.map((character) => (
-                    <option key={character.id} value={character.id}>{character.name || character.id}</option>
-                  ))}
-                </select>
-              </div>
-
-              <textarea style={textAreaStyle} value={noteContent} onChange={(e) => setNoteContent(e.target.value)} placeholder={tx('Page summary, setting note, or search result excerpt', '网页摘要、设定资料或查询结果摘录')} />
-
-              <div className="mcp-command-note-actions">
-                <div className="mcp-command-knowledge-search">
-                  <input style={inputStyle} value={knowledgeQuery} onChange={(e) => setKnowledgeQuery(e.target.value)} placeholder={tx('Search knowledge', '搜索资料')} onKeyDown={(e) => { if (e.key === 'Enter') searchKnowledge(); }} />
-                  <button style={iconButton} onClick={searchKnowledge} disabled={busy || !knowledgeQuery.trim()} title={tx('Search knowledge', '搜索资料')}>
-                    <Database size={15} />
-                  </button>
-                </div>
-                <button style={primaryButton} className="mcp-command-save-note" onClick={saveKnowledge} disabled={busy || !noteContent.trim()} title={tx('Save knowledge', '保存知识')}>
-                  <Save size={15} /> {tx('Save', '保存')}
+              <div className="mcp-lab-inspector-tabs">
+                <button
+                  type="button"
+                  className={inspectorPanel === 'tasks' ? 'is-active' : ''}
+                  onClick={() => setInspectorPanel('tasks')}
+                >
+                  <ListChecks size={14} aria-hidden="true" />
+                  <span>{tx('Tasks', '任务')}</span>
+                </button>
+                <button
+                  type="button"
+                  className={inspectorPanel === 'providers' ? 'is-active' : ''}
+                  onClick={() => setInspectorPanel('providers')}
+                >
+                  <Settings2 size={14} aria-hidden="true" />
+                  <span>{tx('Providers', '搜索源')}</span>
+                </button>
+                <button
+                  type="button"
+                  className={inspectorPanel === 'context' ? 'is-active' : ''}
+                  onClick={() => {
+                    setInspectorPanel('context');
+                    if (characterId) loadContext(characterId);
+                  }}
+                >
+                  <Database size={14} aria-hidden="true" />
+                  <span>{tx('Context', '上下文')}</span>
                 </button>
               </div>
 
-              <KnowledgeResultList results={knowledgeResults} lang={lang} />
-            </section>
-          </main>
+              {inspectorPanel === 'tasks' ? (
+                <div className="mcp-lab-inspector-scroll">
+                  <div className="mcp-lab-task-list">
+                    {taskItems.length === 0 && <EmptyState icon={Clock3} title={tx('No tasks yet', '还没有任务')} />}
+                    {taskItems.map(task => (
+                      <TaskRecord
+                        key={task.id}
+                        task={task}
+                        selected={task.id === selectedTaskId}
+                        providers={providers}
+                        onSelect={selectTask}
+                        onRerun={rerunTask}
+                        onDelete={deleteTask}
+                        lang={lang}
+                      />
+                    ))}
+                  </div>
+                  {selectedTask && <TaskOutputPreview task={selectedTask} providers={providers} lang={lang} />}
+                </div>
+              ) : inspectorPanel === 'context' ? (
+                <ContextInspector
+                  contextData={contextData}
+                  loading={contextLoading}
+                  error={contextError}
+                  onRefresh={() => loadContext(characterId)}
+                  characterName={selectedContextCharacterName}
+                  lang={lang}
+                />
+              ) : (
+                <div className="mcp-lab-inspector-scroll">
+                  <div className="mcp-lab-provider-list is-inspector">
+                    {providers.map(renderProviderSummary)}
+                  </div>
+                </div>
+              )}
+            </aside>
+          )}
         </div>
       </div>
+
+      <footer className="mcp-lab-statusbar">
+        <span>{tx('Current provider', '当前搜索源')}: <strong>{providerLabel(activeProvider, providers)}</strong></span>
+        <span>{tx('Tasks', '任务')}: <strong>{taskItems.length}</strong></span>
+        <span>{tx('Done', '完成')}: <strong>{completedTaskCount}</strong></span>
+        <span>{tx('Errors', '错误')}: <strong>{erroredTaskCount}</strong></span>
+        <span>{tx('Docs', '资料')}: <strong>{docCount}</strong></span>
+        <span>{tx('Keys', 'Key')}: <strong>{savedKeyCount}</strong></span>
+      </footer>
     </div>
   );
 }

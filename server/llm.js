@@ -1,7 +1,7 @@
 // Native fetch is available in Node 18+ (no require needed)
 const crypto = require('crypto');
 const { getTokenCount } = require('./utils/tokenizer');
-const { buildOpenAiCompatibleUrlResolved } = require('./httpGuards');
+const { buildOpenAiCompatibleUrlResolved, normalizeServerFetchUrlResolved } = require('./httpGuards');
 
 const PRE_INPUT_CHAIN_CACHE_TYPES = new Set([
     'context_module_router',
@@ -208,6 +208,62 @@ function buildRequestBody({ model, messages, maxTokens, temperature, presencePen
     return body;
 }
 
+function isLocalOllamaEndpoint(endpoint) {
+    try {
+        const parsed = new URL(String(endpoint || '').trim());
+        const host = parsed.hostname.toLowerCase();
+        const isLoopback = ['127.0.0.1', 'localhost', '::1'].includes(host);
+        return isLoopback && (!parsed.port || parsed.port === '11434');
+    } catch (_) {
+        return false;
+    }
+}
+
+async function buildOllamaNativeChatUrlResolved(endpoint) {
+    const parsed = await normalizeServerFetchUrlResolved(endpoint, 'LLM endpoint');
+    parsed.pathname = '/api/chat';
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+}
+
+function buildOllamaNativeRequestBody({ model, messages, maxTokens, temperature, presencePenalty = 0, frequencyPenalty = 0, responseFormat = null }) {
+    const options = {
+        ...(maxTokens == null ? {} : { num_predict: maxTokens }),
+        ...(temperature == null ? {} : { temperature }),
+        ...(Number(presencePenalty || 0) ? { presence_penalty: Number(presencePenalty || 0) } : {}),
+        ...(Number(frequencyPenalty || 0) ? { frequency_penalty: Number(frequencyPenalty || 0) } : {})
+    };
+    return {
+        model,
+        messages,
+        stream: false,
+        think: false,
+        ...(responseFormat ? { format: 'json' } : {}),
+        ...(Object.keys(options).length ? { options } : {})
+    };
+}
+
+function normalizeOllamaNativeResponse(data) {
+    const content = String(data?.message?.content ?? data?.response ?? '');
+    const promptTokens = Number(data?.prompt_eval_count || 0);
+    const completionTokens = Number(data?.eval_count || 0);
+    const finishReason = String(data?.done_reason || (data?.done ? 'stop' : 'unknown')) || 'unknown';
+    const usage = {
+        prompt_tokens: promptTokens,
+        completion_tokens: completionTokens,
+        total_tokens: promptTokens + completionTokens,
+        native_ollama: true
+    };
+    return {
+        choices: [{
+            message: { content },
+            finish_reason: finishReason
+        }],
+        usage
+    };
+}
+
 function getRelayBucketKey(endpoint, key) {
     const normalizedEndpoint = String(endpoint || '').trim().replace(/\/+$/, '');
     const keyHash = crypto.createHash('sha1').update(String(key || '')).digest('hex').slice(0, 12);
@@ -358,7 +414,10 @@ async function callLLM({
         }
     }
 
-    const url = await buildOpenAiCompatibleUrlResolved(endpoint, 'chat/completions', { label: 'LLM endpoint' });
+    const useOllamaNativeChat = isLocalOllamaEndpoint(endpoint);
+    const url = useOllamaNativeChat
+        ? await buildOllamaNativeChatUrlResolved(endpoint)
+        : await buildOpenAiCompatibleUrlResolved(endpoint, 'chat/completions', { label: 'LLM endpoint' });
 
     const safeMaxAttempts = Math.max(1, Math.min(5, Number(maxAttempts || 2) || 2));
     const safeRequestTimeoutMs = Math.max(0, Number(requestTimeoutMs || process.env.CP_LLM_REQUEST_TIMEOUT_MS || 0) || 0);
@@ -381,7 +440,8 @@ async function callLLM({
             }
 
             const requestVariants = [];
-            const uncachedDebugRequestBody = buildRequestBody({
+            const requestBodyBuilder = useOllamaNativeChat ? buildOllamaNativeRequestBody : buildRequestBody;
+            const uncachedDebugRequestBody = requestBodyBuilder({
                 model,
                 messages: Array.isArray(uncachedMessages) && uncachedMessages.length ? uncachedMessages : finalMessages,
                 maxTokens,
@@ -419,7 +479,7 @@ async function callLLM({
 
             for (const variant of expandedRequestVariants) {
                 const attemptStartedAt = Date.now();
-                const requestBody = buildRequestBody({
+                const requestBody = requestBodyBuilder({
                     model,
                     messages: variant.messages,
                     maxTokens,
@@ -473,7 +533,7 @@ async function callLLM({
                         redirect: 'manual',
                         headers: {
                             'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${key}`,
+                            ...(useOllamaNativeChat ? {} : { 'Authorization': `Bearer ${key}` }),
                             ...variant.headers,
                         },
                         body: JSON.stringify(requestBody),
@@ -540,7 +600,8 @@ async function callLLM({
                     throw lastVariantError;
                 }
 
-                data = await parseLlmResponse(response);
+                const rawData = await parseLlmResponse(response);
+                data = useOllamaNativeChat ? normalizeOllamaNativeResponse(rawData) : rawData;
                 try {
                     if (typeof debugAttempt === 'function') {
                         debugAttempt({

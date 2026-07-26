@@ -391,10 +391,14 @@ module.exports = function initCityDb(db) {
     // Migration: add stock to city_items for existing users
     addColumnIfMissing('city_items', 'stock', 'INTEGER DEFAULT -1');
 
-    // Migration: delete deprecated clock settings that pollute the UI
-    db.prepare("DELETE FROM city_config WHERE key IN ('tick_label', 'tick_interval_minutes')").run();
+    // Migration: remove deprecated course tables and virtual clock settings.
+    db.exec(`
+        DROP TABLE IF EXISTS city_character_courses;
+        DROP TABLE IF EXISTS city_school_courses;
+    `);
+    db.prepare("DELETE FROM city_config WHERE key IN ('tick_label', 'tick_interval_minutes', 'city_time_offset_days', 'city_time_offset_hours')").run();
 
-    console.log('[City DB] 已添加并清理过时配置');
+    console.log('[City DB] 已添加库存字段，并清理过时课程/时钟配置');
 
     // Call seedDefaults on boot
     seedDefaults(db);
@@ -449,7 +453,6 @@ module.exports = function initCityDb(db) {
         'EVENT',
         'QUEST',
         'ANNOUNCE',
-        'TIMESKIP',
         'BUY',
         'EAT',
         'STARVE',

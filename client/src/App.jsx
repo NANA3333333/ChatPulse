@@ -173,6 +173,8 @@ const MODULE_LOAD_RETRY_LIMIT = 3;
 const MODULE_LOAD_AUTO_RETRY_DELAY_MS = 500;
 const MODULE_LOAD_AUTO_RETRY_PREFIX = 'chatpulse:auto-module-retry:';
 
+const normalizeChatSearchText = (value) => String(value || '').trim().toLowerCase();
+
 const RETIRED_THEME_STORAGE_KEYS = ['cp_theme', 'cp_theme_config', 'cp_custom_css'];
 const RETIRED_THEME_CSS_VARS = [
   '--accent-color',
@@ -918,6 +920,7 @@ function App() {
   const [activeTab, setActiveTab] = useState('desktop'); // 'desktop', 'chats', 'contacts', 'settings'
   const [activeContactId, setActiveContactId] = useState(null);
   const [contacts, setContacts] = useState([]);
+  const [chatSearch, setChatSearch] = useState('');
   const [contactsLoadError, setContactsLoadError] = useState('');
   const [activeContactSnapshot, setActiveContactSnapshot] = useState(null);
 
@@ -930,6 +933,7 @@ function App() {
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
   const [groups, setGroups] = useState([]);
   const [activeGroupId, setActiveGroupId] = useState(null);
+  const [conversationJumpTarget, setConversationJumpTarget] = useState(null);
   const [incomingGroupMessageQueue, setIncomingGroupMessageQueue] = useState([]);
   const [groupUnreadCounts, setGroupUnreadCounts] = useState({});
   const [desktopEventNotifications, setDesktopEventNotifications] = useState([]);
@@ -1045,7 +1049,43 @@ function App() {
   const browserWindowGeometrySwitchTimerRef = useRef(null);
   const suppressBrowserWindowClickRef = useRef(null);
 
+  const normalizeConversationJumpTarget = useCallback((target = null) => {
+    const scope = String(target?.scope || '').trim();
+    const messageId = Number(target?.messageId || target?.message_id || 0);
+    if (!Number.isSafeInteger(messageId) || messageId <= 0) return null;
+    if (scope === 'group') {
+      const groupId = String(target?.groupId || target?.group_id || '').trim();
+      if (!groupId) return null;
+      return {
+        scope: 'group',
+        messageId,
+        groupId,
+        token: target?.token || `group:${groupId}:${messageId}`
+      };
+    }
+    const characterId = String(target?.characterId || target?.character_id || '').trim();
+    if (!characterId) return null;
+    return {
+      scope: 'private',
+      messageId,
+      characterId,
+      token: target?.token || `private:${characterId}:${messageId}`
+    };
+  }, []);
+
+  const buildConversationJumpTarget = useCallback((result = {}) => {
+    const scope = result.scope === 'group' ? 'group' : 'private';
+    return normalizeConversationJumpTarget({
+      scope,
+      messageId: result.message_id || result.messageId,
+      characterId: result.character_id || result.characterId || result.conversation_id,
+      groupId: result.group_id || result.groupId || result.conversation_id,
+      token: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    });
+  }, [normalizeConversationJumpTarget]);
+
   const normalizeBrowserWindowSocialState = useCallback((socialState = {}) => {
+    const searchJumpTarget = normalizeConversationJumpTarget(socialState?.searchJumpTarget);
     const requestedGroupId = socialState?.activeGroupId;
     const selectedGroup = requestedGroupId
       ? groups.find(group => String(group.id) === String(requestedGroupId))
@@ -1055,6 +1095,7 @@ function App() {
         activeContactId: null,
         activeGroupId: selectedGroup.id,
         activeDrawer: socialState?.activeDrawer || null,
+        searchJumpTarget: searchJumpTarget?.scope === 'group' && searchJumpTarget.groupId === selectedGroup.id ? searchJumpTarget : null,
       };
     }
 
@@ -1067,8 +1108,9 @@ function App() {
       activeContactId: fallbackContact?.id || null,
       activeGroupId: null,
       activeDrawer: socialState?.activeDrawer || null,
+      searchJumpTarget: searchJumpTarget?.scope === 'private' && searchJumpTarget.characterId === fallbackContact?.id ? searchJumpTarget : null,
     };
-  }, [contacts, groups]);
+  }, [contacts, groups, normalizeConversationJumpTarget]);
 
   const applyBrowserWindowSocialState = useCallback((windowItem) => {
     const socialState = normalizeBrowserWindowSocialState(windowItem?.social || {});
@@ -1082,6 +1124,7 @@ function App() {
     setActiveContactSnapshot(selectedContact || null);
     activeContactRef.current = socialState.activeContactId;
     setActiveDrawer(socialState.activeDrawer || null);
+    setConversationJumpTarget(socialState.searchJumpTarget || null);
   }, [contacts, normalizeBrowserWindowSocialState]);
 
   const updateBrowserWindowSocialState = useCallback((windowId, patch = {}) => {
@@ -1097,6 +1140,7 @@ function App() {
         previousSocial.activeContactId === nextSocial.activeContactId
         && previousSocial.activeGroupId === nextSocial.activeGroupId
         && previousSocial.activeDrawer === nextSocial.activeDrawer
+        && previousSocial.searchJumpTarget === nextSocial.searchJumpTarget
       ) {
         return windowItem;
       }
@@ -2707,6 +2751,7 @@ function App() {
       activeContactId,
       activeGroupId,
       activeDrawer,
+      searchJumpTarget: conversationJumpTarget,
     });
   }, [
     activeBrowserWindowId,
@@ -2714,6 +2759,7 @@ function App() {
     activeDrawer,
     activeGroupId,
     activeTab,
+    conversationJumpTarget,
     updateBrowserWindowSocialState,
   ]);
   useEffect(() => () => {
@@ -2743,6 +2789,68 @@ function App() {
   useEffect(() => { langRef.current = lang; }, [lang]);
   const desktopToastTimersRef = useRef(new Map());
   const openCreatedCharacterInChatRef = useRef(false);
+
+  const clearConversationJumpTarget = useCallback((handledTarget = null) => {
+    const handledToken = String(handledTarget?.token || '');
+    setConversationJumpTarget((current) => {
+      if (!current) return current;
+      if (handledToken && String(current.token || '') !== handledToken) return current;
+      return null;
+    });
+    const currentWindowId = activeBrowserWindowIdRef.current;
+    if (currentWindowId) {
+      updateBrowserWindowSocialState(currentWindowId, { searchJumpTarget: null });
+    }
+  }, [updateBrowserWindowSocialState]);
+
+  const handleConversationSearchResultSelect = useCallback((result) => {
+    const target = buildConversationJumpTarget(result);
+    if (!target) return;
+    setConversationJumpTarget(target);
+    setActiveTab('chats');
+    setActiveDrawer(null);
+
+    if (target.scope === 'group') {
+      setActiveContactId(null);
+      setActiveContactSnapshot(null);
+      activeContactRef.current = null;
+      setActiveGroupId(target.groupId);
+      activeGroupRef.current = target.groupId;
+      setGroupUnreadCounts((current) => {
+        if (!current[target.groupId]) return current;
+        const next = { ...current };
+        delete next[target.groupId];
+        return next;
+      });
+      return;
+    }
+
+    const selected = contacts.find(contact => String(contact.id) === String(target.characterId));
+    setActiveGroupId(null);
+    activeGroupRef.current = null;
+    setActiveContactId(target.characterId);
+    setActiveContactSnapshot(selected || {
+      id: target.characterId,
+      name: result?.conversation_name || result?.sender_name || (lang === 'en' ? 'Conversation' : '对话')
+    });
+    activeContactRef.current = target.characterId;
+    setContacts(prev => prev.map(contact => (
+      String(contact.id) === String(target.characterId) ? { ...contact, unread: 0 } : contact
+    )));
+  }, [buildConversationJumpTarget, contacts, lang]);
+
+  useEffect(() => {
+    if (!conversationJumpTarget) return;
+    if (conversationJumpTarget.scope === 'group') {
+      if (String(activeGroupId || '') !== String(conversationJumpTarget.groupId || '')) {
+        setConversationJumpTarget(null);
+      }
+      return;
+    }
+    if (String(activeContactId || '') !== String(conversationJumpTarget.characterId || '')) {
+      setConversationJumpTarget(null);
+    }
+  }, [activeContactId, activeGroupId, conversationJumpTarget]);
 
   useEffect(() => () => {
     desktopToastTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
@@ -2837,9 +2945,6 @@ function App() {
       ? {
         schedule_updated: 'Schedule updated',
         REROLL: 'Activity rerolled',
-        TIMESKIP: 'Time-skip activity',
-        'time-skip-start': 'Time-skip started',
-        'time-skip-end': 'Time-skip completed',
         'rent-settled': 'Rent settled',
         'social-housing-rental-chain': 'Housing recommendation updated',
         'social-housing-assigned': 'Housing assignment updated',
@@ -2848,9 +2953,6 @@ function App() {
       : {
         schedule_updated: '行程已更新',
         REROLL: '活动已重 roll',
-        TIMESKIP: '时间飞逝活动',
-        'time-skip-start': '时间飞逝开始',
-        'time-skip-end': '时间飞逝完成',
         'rent-settled': '房租已结算',
         'social-housing-rental-chain': '房源推荐有新进展',
         'social-housing-assigned': '住房指派已更新',
@@ -3156,8 +3258,9 @@ function App() {
 
   const toggleChatDrawer = useCallback((drawer) => {
     preloadChatDrawer(drawer);
+    clearConversationJumpTarget();
     setActiveDrawer((current) => (current === drawer ? null : drawer));
-  }, [preloadChatDrawer]);
+  }, [clearConversationJumpTarget, preloadChatDrawer]);
 
   const updateGroupInState = useCallback((updatedGroup) => {
     if (!updatedGroup?.id) return;
@@ -3697,6 +3800,7 @@ function App() {
 
   const isViewingList = (activeTab === 'contacts' || (activeTab === 'chats' && !activeContactId && !activeGroupId));
   const isPrivateChatView = activeTab === 'chats' && !!activeContactId;
+  const isGroupChatView = activeTab === 'chats' && !!activeGroupId;
   const isChatSceneView = activeTab === 'chats' && (!!activeContactId || !!activeGroupId);
   const isContactsSceneView = activeTab === 'contacts';
   const isStaticPixelSceneView = activeTab === 'memory_library' || activeTab === 'mcp_lab' || activeTab === 'settings' || activeTab === 'housing_social';
@@ -3704,6 +3808,34 @@ function App() {
   const activeGroup = activeGroupId
     ? groups.find(group => String(group.id) === String(activeGroupId))
     : null;
+  const chatSearchNeedle = useMemo(() => normalizeChatSearchText(chatSearch), [chatSearch]);
+  const filteredContacts = useMemo(() => {
+    if (!chatSearchNeedle) return contacts;
+    return contacts.filter((contact) => [
+      contact.id,
+      contact.name,
+      contact.lastMessage,
+      contact.model_name,
+      contact.city_status,
+      contact.location,
+    ].some((value) => normalizeChatSearchText(value).includes(chatSearchNeedle)));
+  }, [chatSearchNeedle, contacts]);
+  const filteredGroups = useMemo(() => {
+    if (!chatSearchNeedle) return groups;
+    return groups.filter((group) => {
+      const memberNames = (group.members || []).map((memberObj) => {
+        const memberId = typeof memberObj === 'object' ? memberObj.member_id : memberObj;
+        if (memberId === 'user') return userProfile?.name || 'User';
+        return contacts.find((contact) => String(contact.id) === String(memberId))?.name || memberId || '';
+      });
+      return [
+        group.id,
+        group.name,
+        group.description,
+        ...memberNames,
+      ].some((value) => normalizeChatSearchText(value).includes(chatSearchNeedle));
+    });
+  }, [chatSearchNeedle, contacts, groups, userProfile?.name]);
   const shouldShowSocialWindowLoading = activeTab === 'chats' && (
     (!activeContactId && !activeGroupId && contacts.length === 0 && !contactsLoadError)
     || (!!activeContactId && !activeChatContact)
@@ -3764,14 +3896,21 @@ function App() {
       ? groups.find(group => String(group.id) === String(socialState.activeGroupId))
       : null;
     const liveDrawer = socialState.activeDrawer || null;
+    const liveJumpTarget = socialState.searchJumpTarget || null;
     const liveWindowId = windowItem?.id;
+    const liveForegroundLayoutLifted = Boolean(liveGroup && privateChatForegroundEnabled && !windowItem?.maximized);
 
     const updateLiveSocial = (patch) => {
       updateBrowserWindowSocialState(liveWindowId, patch);
     };
+    const clearLiveConversationJumpTarget = (handledTarget = null) => {
+      const handledToken = String(handledTarget?.token || '');
+      if (handledToken && liveJumpTarget?.token && String(liveJumpTarget.token) !== handledToken) return;
+      updateLiveSocial({ searchJumpTarget: null });
+    };
     const toggleLiveDrawer = (drawer) => {
       preloadChatDrawer(drawer);
-      updateLiveSocial({ activeDrawer: liveDrawer === drawer ? null : drawer });
+      updateLiveSocial({ activeDrawer: liveDrawer === drawer ? null : drawer, searchJumpTarget: null });
     };
     const handleLiveContactSelect = (id) => {
       const selected = contacts.find(contact => String(contact.id) === String(id));
@@ -3779,6 +3918,7 @@ function App() {
         activeContactId: selected?.id || id,
         activeGroupId: null,
         activeDrawer: liveDrawer,
+        searchJumpTarget: null,
       });
       setContacts(prev => prev.map(contact => String(contact.id) === String(id) ? { ...contact, unread: 0 } : contact));
     };
@@ -3787,6 +3927,7 @@ function App() {
         activeContactId: null,
         activeGroupId: groupId,
         activeDrawer: null,
+        searchJumpTarget: null,
       });
       setGroupUnreadCounts((current) => {
         if (!current[groupId]) return current;
@@ -3794,6 +3935,34 @@ function App() {
         delete next[groupId];
         return next;
       });
+    };
+    const handleLiveConversationSearchResultSelect = (result) => {
+      const target = buildConversationJumpTarget(result);
+      if (!target) return;
+      if (target.scope === 'group') {
+        updateLiveSocial({
+          activeContactId: null,
+          activeGroupId: target.groupId,
+          activeDrawer: null,
+          searchJumpTarget: target,
+        });
+        setGroupUnreadCounts((current) => {
+          if (!current[target.groupId]) return current;
+          const next = { ...current };
+          delete next[target.groupId];
+          return next;
+        });
+        return;
+      }
+      updateLiveSocial({
+        activeContactId: target.characterId,
+        activeGroupId: null,
+        activeDrawer: liveDrawer,
+        searchJumpTarget: target,
+      });
+      setContacts(prev => prev.map(contact => (
+        String(contact.id) === String(target.characterId) ? { ...contact, unread: 0 } : contact
+      )));
     };
     const handleLiveSwitchTab = (nextTab) => {
       if (!liveWindowId) return;
@@ -3832,22 +4001,28 @@ function App() {
             </div>
           </div>
           <div className="search-bar-container">
-            <input type="text" className="search-bar" placeholder={t('Search') || 'Search'} />
+            <input
+              type="text"
+              className="search-bar"
+              value={chatSearch}
+              onChange={(event) => setChatSearch(event.target.value)}
+              placeholder={t('Search') || 'Search'}
+            />
           </div>
           <div className="list-container">
             <ContactList
               apiUrl={API_URL}
-              contacts={contacts}
+              contacts={filteredContacts}
               activeId={liveContact?.id || null}
               engineState={engineState}
               onSelect={handleLiveContactSelect}
             />
-            {groupChatEnabled && groups.length > 0 && (
+            {groupChatEnabled && filteredGroups.length > 0 && (
               <div style={{ borderTop: '1px solid #eee' }}>
                 <div style={{ padding: '5px 15px', color: 'var(--text-secondary)', fontSize: '11px' }}>
                   {lang === 'en' ? 'Group Chats' : '群聊'}
                 </div>
-                {groups.map(group => {
+                {filteredGroups.map(group => {
                   const memberCount = group.members?.length || 0;
                   const groupAvatarSize = memberCount <= 1 ? 58 : 46;
                   const groupAvatarOverlap = memberCount <= 1 ? 0 : -18;
@@ -3901,6 +4076,12 @@ function App() {
                 })}
               </div>
             )}
+            {chatSearchNeedle && filteredContacts.length === 0 && filteredGroups.length === 0 && (
+              <div className="empty-chat-state empty-chat-state--compact">
+                <Search size={28} className="empty-icon" />
+                <p>{lang === 'en' ? 'No conversations found' : '没有找到会话'}</p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -3922,12 +4103,15 @@ function App() {
                   onPreloadMemo={() => preloadChatDrawer('memo')}
                   onPreloadDiary={() => preloadChatDrawer('diary')}
                   onPreloadSettings={() => preloadChatDrawer('settings')}
-                  onBack={() => updateLiveSocial({ activeContactId: null, activeGroupId: null })}
+                  onBack={() => updateLiveSocial({ activeContactId: null, activeGroupId: null, searchJumpTarget: null })}
                   onSwitchTab={handleLiveSwitchTab}
                   isGeneratingSchedule={generatingSchedules[liveContact.id]}
                   onMessagesChange={setHiddenMessagesCount}
                   isPrivateChatForegroundEnabled={privateChatForegroundEnabled}
                   chatLayoutKey={liveDrawer || 'journal'}
+                  jumpTarget={liveJumpTarget}
+                  onSearchResultSelect={handleLiveConversationSearchResultSelect}
+                  onJumpHandled={clearLiveConversationJumpTarget}
                 />
               </div>
               <div className="private-chat-side-slot" data-slot-view={liveDrawer || 'journal'}>
@@ -4014,11 +4198,15 @@ function App() {
                 incomingGroupMessageQueue={incomingGroupMessageQueue}
                 typingIndicators={groupTyping[liveGroup.id] || []}
                 redpacketClaimEvent={redpacketClaimEvent}
-                onBack={() => updateLiveSocial({ activeContactId: null, activeGroupId: null, activeDrawer: null })}
+                onBack={() => updateLiveSocial({ activeContactId: null, activeGroupId: null, activeDrawer: null, searchJumpTarget: null })}
                 onGroupUpdated={updateGroupInState}
                 isManageOpen={liveDrawer === 'group-manage'}
                 onToggleManage={() => toggleLiveDrawer('group-manage')}
                 onCloseManage={() => updateLiveSocial({ activeDrawer: null })}
+                isForegroundLayoutLifted={liveForegroundLayoutLifted}
+                jumpTarget={liveJumpTarget}
+                onSearchResultSelect={handleLiveConversationSearchResultSelect}
+                onJumpHandled={clearLiveConversationJumpTarget}
               />
               {renderGroupSideSlot({
                 group: liveGroup,
@@ -4037,10 +4225,15 @@ function App() {
     );
   }, [
     API_URL,
+    buildConversationJumpTarget,
+    chatSearch,
+    chatSearchNeedle,
     contacts,
     effectiveUser,
     engineState,
     fetchContacts,
+    filteredContacts,
+    filteredGroups,
     formatBadge,
     generatingSchedules,
     groupChatEnabled,
@@ -4156,10 +4349,10 @@ function App() {
   ]);
   const hasPixelSceneView = isChatSceneView || isContactsSceneView || isStaticPixelSceneView;
   const hasPixelSkinView = hasPixelSceneView || isBarePixelSceneView || activeTab === 'chats';
-  const hasForegroundSceneView = isPrivateChatView && privateChatForegroundEnabled && !shouldShowSocialWindowLoading;
-  const isForegroundExitingSceneView = isPrivateChatView && !privateChatForegroundEnabled && privateChatForegroundExiting && !shouldShowSocialWindowLoading;
+  const hasForegroundSceneView = isChatSceneView && privateChatForegroundEnabled && !shouldShowSocialWindowLoading;
+  const isForegroundExitingSceneView = isChatSceneView && !privateChatForegroundEnabled && privateChatForegroundExiting && !shouldShowSocialWindowLoading;
   const shouldRenderForegroundScene = hasForegroundSceneView || isForegroundExitingSceneView;
-  const isForegroundLayoutLifted = shouldRenderForegroundScene;
+  const isForegroundLayoutLifted = shouldRenderForegroundScene && !(isGroupChatView && browserWindowMaximized);
   const shouldEnableForegroundPersonControl = false;
   const appWallpaperKey = normalizeDesktopWallpaper(desktopWallpaper);
   const appWallpaperImageSrc = DESKTOP_WALLPAPER_IMAGE_URLS[appWallpaperKey];
@@ -4441,7 +4634,7 @@ function App() {
           <Live2DDesktopWallpaper src={appWallpaperImageSrc} animated={appWallpaperAnimated} />
         </div>
       )}
-      {activeTab !== 'desktop' && (!browserWindowMaximized || isPrivateChatView || isForegroundExitingSceneView) && (
+      {activeTab !== 'desktop' && !browserWindowMaximized && (
         <div className="desktop-home-underlay" aria-hidden="true">
           <ChatPulseDesktop
             lang={lang}
@@ -4477,7 +4670,8 @@ function App() {
             || !liveHasBoundContact
             || !liveHasBoundGroup
           );
-          const liveHasForegroundScene = liveIsPrivateChat && privateChatForegroundEnabled && !liveIsSocialLoading;
+          const liveHasForegroundScene = (liveIsPrivateChat || liveIsGroupChat) && privateChatForegroundEnabled && !liveIsSocialLoading;
+          const liveIsForegroundLayoutLifted = liveHasForegroundScene && !(liveIsGroupChat && liveIsMaximized);
           const liveIsStaticPixel = windowItem.activeTab === 'memory_library'
             || windowItem.activeTab === 'mcp_lab'
             || windowItem.activeTab === 'settings'
@@ -4493,7 +4687,7 @@ function App() {
             liveIsGroupChat ? 'is-group-chat-scene' : '',
             liveIsStaticPixel ? 'is-static-pixel-scene' : '',
             liveIsBarePixel ? 'is-bare-pixel-scene' : '',
-            liveHasForegroundScene ? 'is-foreground-enabled is-foreground-lifted' : 'is-foreground-disabled',
+            liveHasForegroundScene ? `is-foreground-enabled ${liveIsForegroundLayoutLifted ? 'is-foreground-lifted' : ''}` : 'is-foreground-disabled',
           ].filter(Boolean).join(' ');
           return (
             <div
@@ -4883,7 +5077,13 @@ function App() {
           </div>
         )}
         <div className="search-bar-container">
-          <input type="text" className="search-bar" placeholder={t('Search') || 'Search'} />
+          <input
+            type="text"
+            className="search-bar"
+            value={chatSearch}
+            onChange={(event) => setChatSearch(event.target.value)}
+            placeholder={t('Search') || 'Search'}
+          />
         </div>
         <div className="list-container">
           {activeTab === 'chats' && (
@@ -4895,11 +5095,12 @@ function App() {
               )}
               <ContactList
                 apiUrl={API_URL}
-                contacts={contacts}
+                contacts={filteredContacts}
                 activeId={activeContactId}
                 engineState={engineState}
                 onSelect={(id) => {
                   const selected = contacts.find(c => c.id === id);
+                  setConversationJumpTarget(null);
                   setActiveContactId(id);
                   if (selected) setActiveContactSnapshot(selected);
                   activeContactRef.current = id;
@@ -4911,12 +5112,12 @@ function App() {
               />
             </>
           )}
-          {activeTab === 'chats' && groupChatEnabled && groups.length > 0 && (
+          {activeTab === 'chats' && groupChatEnabled && filteredGroups.length > 0 && (
             <div style={{ borderTop: '1px solid #eee' }}>
               <div style={{ padding: '5px 15px', color: 'var(--text-secondary)', fontSize: '11px' }}>
                 {lang === 'en' ? 'Group Chats' : '群聊'}
               </div>
-              {groups.map(g => {
+              {filteredGroups.map(g => {
                 const memberCount = g.members?.length || 0;
                 const groupAvatarSize = memberCount <= 1 ? 58 : 46;
                 const groupAvatarOverlap = memberCount <= 1 ? 0 : -18;
@@ -4929,6 +5130,7 @@ function App() {
                   title={g.name}
                   aria-label={lang === 'en' ? `${g.name}, group chat` : `${g.name}，群聊`}
                   onClick={() => {
+                    setConversationJumpTarget(null);
                     setActiveGroupId(g.id);
                     activeGroupRef.current = g.id;
                     setActiveContactId(null);
@@ -4976,6 +5178,12 @@ function App() {
                 </div>
                 );
               })}
+            </div>
+          )}
+          {activeTab === 'chats' && chatSearchNeedle && filteredContacts.length === 0 && filteredGroups.length === 0 && (
+            <div className="empty-chat-state empty-chat-state--compact">
+              <Search size={28} className="empty-icon" />
+              <p>{lang === 'en' ? 'No conversations found' : '没有找到会话'}</p>
             </div>
           )}
           {activeTab === 'contacts' && (
@@ -5159,12 +5367,15 @@ function App() {
                       onPreloadMemo={() => preloadChatDrawer('memo')}
                       onPreloadDiary={() => preloadChatDrawer('diary')}
                       onPreloadSettings={() => preloadChatDrawer('settings')}
-                      onBack={() => { setActiveContactId(null); setActiveContactSnapshot(null); activeContactRef.current = null; }}
+                      onBack={() => { setActiveContactId(null); setActiveContactSnapshot(null); activeContactRef.current = null; setConversationJumpTarget(null); }}
                       onSwitchTab={setActiveTab}
                       isGeneratingSchedule={generatingSchedules[activeContactId]}
                       onMessagesChange={setHiddenMessagesCount}
                       isPrivateChatForegroundEnabled={isForegroundLayoutLifted}
                       chatLayoutKey={activeDrawer || 'journal'}
+                      jumpTarget={conversationJumpTarget}
+                      onSearchResultSelect={handleConversationSearchResultSelect}
+                      onJumpHandled={clearConversationJumpTarget}
                     />
                   </div>
                   <div className="private-chat-side-slot" data-slot-view={activeDrawer || 'journal'}>
@@ -5251,11 +5462,15 @@ function App() {
                     incomingGroupMessageQueue={incomingGroupMessageQueue}
                     typingIndicators={groupTyping[activeGroupId] || []}
                     redpacketClaimEvent={redpacketClaimEvent}
-                    onBack={() => { setActiveGroupId(null); setActiveDrawer(null); }}
+                    onBack={() => { setActiveGroupId(null); setActiveDrawer(null); setConversationJumpTarget(null); }}
                     onGroupUpdated={updateGroupInState}
                     isManageOpen={activeDrawer === 'group-manage'}
                     onToggleManage={() => toggleChatDrawer('group-manage')}
                     onCloseManage={() => setActiveDrawer(null)}
+                    isForegroundLayoutLifted={isForegroundLayoutLifted}
+                    jumpTarget={conversationJumpTarget}
+                    onSearchResultSelect={handleConversationSearchResultSelect}
+                    onJumpHandled={clearConversationJumpTarget}
                   />
                   {renderGroupSideSlot({
                     group: activeGroup,

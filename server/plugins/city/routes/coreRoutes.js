@@ -2,12 +2,9 @@ const {
     normalizeCityGoldAmount,
     normalizeCityCalories,
     normalizeCityItemQuantity,
-    normalizeCityTimeSkipMinutes,
     normalizeCityConfigValue,
     normalizeCityRowId,
     normalizeCityListLimit,
-    normalizeStoredCityOffsetDays,
-    normalizeStoredCityOffsetHours,
     MAX_CITY_LOG_QUERY_LIMIT,
     MAX_CITY_ANNOUNCEMENT_QUERY_LIMIT
 } = require('../utils/inputGuards');
@@ -19,8 +16,6 @@ function registerCoreCityRoutes(app, deps) {
         deriveEmotion,
         normalizeDistrictPayload,
         normalizeItemPayload,
-        getCityDate,
-        runTimeSkipBackfill,
         triggerAdminGrantChat,
         getWsClients,
         getEngine,
@@ -199,6 +194,35 @@ function registerCoreCityRoutes(app, deps) {
         catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    app.patch('/api/city/districts/status', authMiddleware, (req, res) => {
+        try {
+            ensureCityDb(req.db);
+            const ids = Array.isArray(req.body?.ids)
+                ? [...new Set(req.body.ids.map((id) => String(id || '').trim()).filter(Boolean))]
+                : [];
+            const rawStatus = req.body?.is_enabled;
+            const statusText = String(rawStatus ?? '').trim().toLowerCase();
+            const validStatus = rawStatus === true || rawStatus === false || rawStatus === 1 || rawStatus === 0
+                || ['1', '0', 'true', 'false', 'yes', 'no', 'on', 'off'].includes(statusText);
+            if (!ids.length) return res.status(400).json({ error: '缺少分区 ID' });
+            if (!validStatus) return res.status(400).json({ error: '缺少启用状态' });
+
+            const nextStatus = rawStatus === true || rawStatus === 1 || ['1', 'true', 'yes', 'on'].includes(statusText) ? 1 : 0;
+            const missing = [];
+            let updated = 0;
+            ids.slice(0, 100).forEach((id) => {
+                const district = req.db.city.getDistrict(id);
+                if (!district) {
+                    missing.push(id);
+                    return;
+                }
+                req.db.city.upsertDistrict({ ...district, is_enabled: nextStatus });
+                updated += 1;
+            });
+            res.json({ success: true, updated, missing, districts: req.db.city.getDistricts() });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     app.patch('/api/city/districts/:id/toggle', authMiddleware, (req, res) => {
         try {
             ensureCityDb(req.db);
@@ -224,35 +248,6 @@ function registerCoreCityRoutes(app, deps) {
             req.db.city.setConfig(key, value);
             res.json({ success: true, config: req.db.city.getConfig() });
         } catch (e) { res.status(500).json({ error: e.message }); }
-    });
-
-    app.post('/api/city/time-skip', authMiddleware, async (req, res) => {
-        try {
-            ensureCityDb(req.db);
-            const minutes = normalizeCityTimeSkipMinutes(req.body?.minutes);
-            if (!minutes) return res.status(400).json({ error: '无效的时间跳跃分钟数' });
-
-            const config = req.db.city.getConfig();
-            const oldCityDate = getCityDate(config);
-            const oldDays = normalizeStoredCityOffsetDays(config.city_time_offset_days);
-            const oldHours = normalizeStoredCityOffsetHours(config.city_time_offset_hours);
-
-            let totalOffsetHoursDisplay = oldHours + (minutes / 60);
-            let addedDays = Math.floor(totalOffsetHoursDisplay / 24);
-            let remainingHours = totalOffsetHoursDisplay % 24;
-            if (remainingHours < 0) {
-                addedDays -= 1;
-                remainingHours += 24;
-            }
-
-            const newCityDate = new Date(oldCityDate.getTime() + minutes * 60 * 1000);
-            const processedTasks = await runTimeSkipBackfill(req.db, oldCityDate, newCityDate, req.user.id);
-
-            req.db.city.setConfig('city_time_offset_days', oldDays + addedDays);
-            req.db.city.setConfig('city_time_offset_hours', remainingHours);
-
-            res.json({ success: true, processedTasks });
-        } catch (e) { res.status(e.status || 500).json({ error: e.message, canRetry: !!e.canRetry }); }
     });
 
     app.get('/api/city/economy', authMiddleware, (req, res) => {

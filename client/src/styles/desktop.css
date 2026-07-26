@@ -1976,6 +1976,38 @@
   color: #4b5563;
 }
 
+.desktop-album-window .desktop-folder-window__tab svg {
+  color: #cc8a12;
+}
+
+.desktop-album-photo-file__icon {
+  overflow: hidden;
+  border: 1px solid rgba(210, 216, 225, 0.84);
+  border-radius: 3px;
+  background: #f6f8fb;
+}
+
+.desktop-album-photo-file__icon img,
+.desktop-album-photo-file__details-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.desktop-album-photo-file__details-icon {
+  width: 92px;
+  height: 64px;
+  overflow: hidden;
+  border: 1px solid rgba(210, 216, 225, 0.92);
+  border-radius: 4px;
+  background: #ffffff;
+}
+
+.desktop-folder-window--details .desktop-album-photo-file__icon {
+  width: 28px;
+  height: 28px;
+}
+
 .desktop-text-window {
   left: 50%;
   top: 72px;
@@ -2377,6 +2409,7 @@
   .desktop-folder-window__sidebar {
     display: none;
   }
+
 }
 
 .desktop-context-menu {
@@ -9543,6 +9576,25 @@
   border-bottom-left-radius: var(--desktop-window-radius, 14px);
 }
 
+.app-container.tab-housing_social > .right-column,
+.app-container.tab-housing_social .desktop-app-surface--housing_social {
+  scrollbar-gutter: auto !important;
+}
+
+.app-container.tab-housing_social .desktop-app-surface--housing_social {
+  overflow: hidden !important;
+}
+
+.app-container.tab-housing_social #housing-core-loop-redesign .housing-story-launcher,
+.app-container.tab-housing_social #housing-core-loop-redesign .housing-story-stage,
+.app-container.tab-housing_social #housing-core-loop-redesign .housing-agency-heading,
+.app-container.tab-housing_social #housing-core-loop-redesign .housing-agency-studios,
+.app-container.tab-housing_social #housing-core-loop-redesign .housing-agency-history,
+.app-container.tab-housing_social #housing-core-loop-redesign .housing-agency-teaser {
+  max-width: none !important;
+  margin-inline: 0 !important;
+}
+
 .app-container.tab-memory_library .desktop-app-surface--polished,
 .app-container.tab-mcp_lab .desktop-app-surface--polished,
 .app-container.tab-settings .desktop-app-surface--polished,
@@ -13354,6 +13406,591 @@
   display: inline !important;
 }
 
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) {
+  --private-chat-side-column-width: clamp(176px, calc(var(--real-window-width, 100vw) * 0.19), 340px);
+  --private-chat-list-width: var(--private-chat-side-column-width) !important;
+  --private-chat-side-slot-width: var(--private-chat-side-column-width) !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) > .middle-column,
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot {
+  flex: 0 0 var(--private-chat-side-column-width) !important;
+  flex-basis: var(--private-chat-side-column-width) !important;
+  width: var(--private-chat-side-column-width) !important;
+  min-width: var(--private-chat-side-column-width) !important;
+  max-width: var(--private-chat-side-column-width) !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-workspace,
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .group-chat-workspace {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  gap: 0 !important;
+  padding-right: 0 !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-main,
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .group-chat-main {
+  flex: 1 1 0 !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .chat-history {
+  padding-left: clamp(20px, 3vw, 48px) !important;
+  padding-right: clamp(20px, 3vw, 48px) !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) > .middle-column {
+  padding-right: 0 !important;
+  overflow: hidden !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .list-container {
+  margin-right: 0 !important;
+  padding-right: 0 !important;
+  scrollbar-gutter: stable !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) {
+  --private-chat-journal-head-top: clamp(28px, 7dvh, 104px);
+  --private-chat-journal-content-top: calc(var(--private-chat-journal-head-top) + clamp(52px, 6dvh, 68px));
+  --private-chat-drawer-top: var(--private-chat-journal-head-top);
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot {
+  display: flex !important;
+  flex-direction: column !important;
+  align-self: stretch !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  box-sizing: border-box !important;
+  isolation: isolate !important;
+  overflow: hidden !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot > .private-chat-journal {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  flex: 1 1 auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: clamp(10px, 1.5dvh, 18px) !important;
+  position: relative !important;
+  box-sizing: border-box !important;
+  padding: var(--private-chat-journal-content-top) clamp(10px, 1vw, 14px) 128px !important;
+  color: var(--private-chat-ink-strong, #c95879) !important;
+  overflow: hidden auto !important;
+  scrollbar-width: none !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot > .private-chat-journal::-webkit-scrollbar {
+  display: none !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__head {
+  position: absolute !important;
+  top: var(--private-chat-journal-head-top) !important;
+  left: clamp(10px, 1vw, 14px) !important;
+  right: clamp(10px, 1vw, 14px) !important;
+  display: grid !important;
+  grid-template-columns: 30px minmax(0, 1fr) auto !important;
+  align-items: center !important;
+  gap: clamp(8px, 0.9vw, 12px) !important;
+  min-width: 0 !important;
+  color: var(--private-chat-ink, #d56780) !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__head > div {
+  min-width: 0 !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__icon,
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__weather {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex: 0 0 auto !important;
+  color: var(--private-chat-pink, #dd6d90) !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__icon {
+  width: 30px !important;
+  height: 30px !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.62) !important;
+  box-shadow: 0 10px 24px rgba(92, 66, 72, 0.07) !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__head h3 {
+  margin: 0 !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  color: var(--private-chat-ink-strong, #c95879) !important;
+  font-size: clamp(15px, 1.4vw, 18px) !important;
+  line-height: 1.22 !important;
+  font-weight: 850 !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__head p {
+  margin: 3px 0 0 !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  color: var(--private-chat-ink-soft, #9e88a3) !important;
+  font-size: 12px !important;
+  font-weight: 680 !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__section,
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__note,
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot .memory-card,
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot .diary-entry {
+  position: relative !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+  border: 0 !important;
+  border-radius: clamp(14px, 1.3vw, 18px) !important;
+  background: rgba(255, 255, 255, 0.58) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.52),
+    0 14px 28px rgba(86, 60, 66, 0.06) !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__section,
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__note {
+  padding: clamp(11px, 1.2vw, 16px) !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__section::before,
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__note::before,
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot .diary-entry::before {
+  content: none !important;
+  display: none !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__section-title {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  min-width: 0 !important;
+  color: var(--private-chat-ink-strong, #c95879) !important;
+  font-size: 13px !important;
+  font-weight: 850 !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__section-title span {
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__tasks {
+  display: grid !important;
+  gap: 8px !important;
+  margin: 12px 0 0 !important;
+  padding: 0 !important;
+  list-style: none !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__tasks li {
+  position: relative !important;
+  padding-left: 16px !important;
+  color: var(--private-chat-ink-strong, #c95879) !important;
+  font-size: 13px !important;
+  line-height: 1.45 !important;
+  font-weight: 720 !important;
+  overflow-wrap: anywhere !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__tasks li::before {
+  content: '' !important;
+  position: absolute !important;
+  left: 0 !important;
+  top: 0.62em !important;
+  width: 6px !important;
+  height: 6px !important;
+  border-radius: 999px !important;
+  background: var(--private-chat-blue-strong, #72b8f0) !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__note span {
+  display: block !important;
+  color: var(--private-chat-ink-strong, #c95879) !important;
+  font-size: 13px !important;
+  font-weight: 850 !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__note p,
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .group-chat-placeholder__copy {
+  margin: 8px 0 0 !important;
+  color: var(--private-chat-ink-strong, #c95879) !important;
+  font-size: 13px !important;
+  line-height: 1.65 !important;
+  font-weight: 720 !important;
+  overflow-wrap: anywhere !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__note--soft {
+  background: rgba(255, 239, 244, 0.58) !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .group-chat-placeholder {
+  opacity: 0.92 !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .group-chat-placeholder__section {
+  min-height: clamp(92px, 14dvh, 118px) !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-journal__button {
+  min-height: 40px !important;
+  height: auto !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 9px !important;
+  padding: 0 14px !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  color: var(--private-chat-pink, #dd6d90) !important;
+  background: rgba(255, 255, 255, 0.54) !important;
+  font-size: 13px !important;
+  font-weight: 820 !important;
+  cursor: pointer !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.58),
+    0 14px 26px rgba(86, 60, 66, 0.07) !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-drawer-shell,
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-drawer-shell__content {
+  display: flex !important;
+  flex: 1 1 auto !important;
+  flex-direction: column !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot .memory-drawer,
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot .diary-drawer,
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot .chat-settings-drawer {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  margin-top: var(--private-chat-drawer-top) !important;
+  padding: 0 clamp(8px, 1vw, 14px) 128px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: clamp(12px, 1.6dvh, 24px) !important;
+  box-sizing: border-box !important;
+  border-left: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--private-chat-ink, #d56780) !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  scrollbar-width: thin !important;
+  scrollbar-color: rgba(239, 95, 131, 0.18) transparent !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot .memory-header {
+  position: static !important;
+  min-height: 0 !important;
+  height: auto !important;
+  flex: 0 0 auto !important;
+  align-items: flex-start !important;
+  gap: 10px !important;
+  padding: 0 0 8px !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot .memory-header h3 {
+  white-space: normal !important;
+  color: var(--private-chat-ink-strong, #c95879) !important;
+  font-size: clamp(14px, 1.4vw, 16px) !important;
+  line-height: 1.25 !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot .memory-header-actions {
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot .memory-action-btn,
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot .icon-btn {
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.54) !important;
+  color: var(--private-chat-pink, #dd6d90) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.58),
+    0 10px 22px rgba(86, 60, 66, 0.06) !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot .memory-content,
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot .memory-list {
+  flex: 0 0 auto !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  min-height: auto !important;
+  box-sizing: border-box !important;
+  padding: 0 !important;
+  background: transparent !important;
+  overflow: visible !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot .memory-card,
+.app-container.tab-chats.has-active-chat.has-private-chat:not(.is-window-narrow) .private-chat-side-slot .diary-entry {
+  margin-bottom: 8px !important;
+  padding: clamp(11px, 1.2vw, 16px) !important;
+  color: var(--private-chat-ink, #d56780) !important;
+  overflow-wrap: anywhere !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene:not(.is-window-narrow) .chat-header {
+  --private-rag-left-bound: -1px;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene.is-window-maximized:not(.is-window-narrow) .chat-header {
+  --private-rag-left-bound: 0px;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene.is-window-tight:not(.is-window-narrow) .chat-header {
+  min-height: clamp(206px, 33dvh, 240px) !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene:not(.is-window-narrow) .chat-header-main {
+  position: static !important;
+  transform: none !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene:not(.is-window-narrow) .rag-header-rail {
+  --rag-dot-size: 6px;
+  --rag-line-height: 1px;
+  --rag-line-y: calc((var(--rag-dot-size) - var(--rag-line-height)) / 2);
+  position: absolute !important;
+  left: var(--private-rag-left-bound) !important;
+  right: 0 !important;
+  bottom: clamp(10px, 1.4dvh, 16px) !important;
+  width: auto !important;
+  max-width: none !important;
+  margin: 0 !important;
+  z-index: 1 !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene:not(.is-window-narrow) .rag-header-rail__summary {
+  display: grid !important;
+  grid-template-columns: auto auto 1fr !important;
+  align-items: center !important;
+  gap: 12px !important;
+  color: var(--private-chat-ink) !important;
+  font-size: 12px !important;
+  font-weight: 760 !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene:not(.is-window-narrow) .rag-header-rail__percent {
+  color: var(--private-chat-blue-strong) !important;
+  font-weight: 850 !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene:not(.is-window-narrow) .rag-header-rail__eta {
+  justify-self: end !important;
+  color: var(--private-chat-ink-soft) !important;
+  font-size: 11px !important;
+  font-weight: 680 !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene:not(.is-window-narrow) .rag-header-rail__track {
+  --rag-edge-segment: calc(100% / 8);
+  position: relative !important;
+  height: 26px !important;
+  overflow: visible !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene:not(.is-window-narrow) .rag-header-rail__steps {
+  position: absolute !important;
+  top: 0 !important;
+  left: var(--rag-edge-segment) !important;
+  right: var(--rag-edge-segment) !important;
+  width: auto !important;
+  height: 100% !important;
+  transform: none !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene:not(.is-window-narrow) .rag-header-rail__track::before {
+  content: '' !important;
+  position: absolute !important;
+  top: var(--rag-line-y) !important;
+  left: 0 !important;
+  width: var(--rag-edge-segment) !important;
+  height: var(--rag-line-height) !important;
+  border-radius: 999px !important;
+  background: linear-gradient(90deg, rgba(167, 152, 151, 0), rgba(167, 152, 151, 0.34)) !important;
+  pointer-events: none !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene:not(.is-window-narrow) .rag-header-rail__steps::before {
+  content: '' !important;
+  position: absolute !important;
+  top: var(--rag-line-y) !important;
+  left: 0 !important;
+  right: 0 !important;
+  height: var(--rag-line-height) !important;
+  border-radius: 999px !important;
+  background: linear-gradient(90deg, rgba(167, 152, 151, 0.28), rgba(167, 152, 151, 0.22), rgba(167, 152, 151, 0.28)) !important;
+  pointer-events: none !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene:not(.is-window-narrow) .rag-header-rail__track::after {
+  content: '' !important;
+  position: absolute !important;
+  top: var(--rag-line-y) !important;
+  right: 0 !important;
+  width: var(--rag-edge-segment) !important;
+  height: var(--rag-line-height) !important;
+  border-radius: 999px !important;
+  background: linear-gradient(90deg, rgba(167, 152, 151, 0.34), rgba(167, 152, 151, 0)) !important;
+  pointer-events: none !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene:not(.is-window-narrow) .rag-header-rail__bar {
+  position: absolute !important;
+  top: var(--rag-line-y) !important;
+  left: var(--rag-active-position, 0%) !important;
+  width: min(132px, calc(var(--rag-active-segment, 16.66%) * 1.15)) !important;
+  height: var(--rag-line-height) !important;
+  border-radius: 999px !important;
+  background: linear-gradient(
+    90deg,
+    rgba(103, 173, 232, 0) 0%,
+    rgba(103, 173, 232, 0.24) 18%,
+    rgba(103, 173, 232, 0.9) 50%,
+    rgba(103, 173, 232, 0.24) 82%,
+    rgba(103, 173, 232, 0) 100%
+  ) !important;
+  box-shadow:
+    0 0 7px rgba(103, 173, 232, 0.52),
+    0 0 16px rgba(103, 173, 232, 0.30) !important;
+  pointer-events: none !important;
+  transform: translateX(-50%) !important;
+  transition: left 260ms ease !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene:not(.is-window-narrow) .rag-header-rail__step {
+  position: absolute !important;
+  top: 0 !important;
+  min-width: 46px !important;
+  display: grid !important;
+  justify-items: center !important;
+  gap: 6px !important;
+  color: rgba(167, 152, 151, 0.72) !important;
+  font-size: 10px !important;
+  font-weight: 720 !important;
+  transform: translateX(-50%) !important;
+  white-space: nowrap !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene:not(.is-window-narrow) .rag-header-rail__dot {
+  display: block !important;
+  position: relative !important;
+  width: var(--rag-dot-size) !important;
+  height: var(--rag-dot-size) !important;
+  border-radius: 999px !important;
+  background: rgba(167, 152, 151, 0.34) !important;
+  box-shadow: none !important;
+  transition: background 220ms ease, box-shadow 220ms ease, transform 220ms ease !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene:not(.is-window-narrow) .rag-header-rail__step.is-complete .rag-header-rail__dot {
+  background: rgba(167, 152, 151, 0.34) !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene:not(.is-window-narrow) .rag-header-rail__step.is-active .rag-header-rail__dot {
+  background: var(--private-chat-blue) !important;
+  box-shadow:
+    0 0 7px rgba(103, 173, 232, 0.72),
+    0 0 15px rgba(103, 173, 232, 0.34) !important;
+  transform: scale(1.08) !important;
+}
+
+.app-container.tab-chats.has-active-chat.has-private-chat.is-private-chat-scene:not(.is-window-narrow) .rag-header-rail__step.is-active {
+  color: var(--private-chat-blue-strong) !important;
+  font-weight: 850 !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-window-floating:not(.is-window-maximized) .chat-header-actions,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-window-floating:not(.is-window-maximized) .chat-header-actions {
+  position: absolute !important;
+  top: clamp(10px, 1.8dvh, 18px) !important;
+  right: clamp(8px, 1.2vw, 14px) !important;
+  width: auto !important;
+  max-width: 100% !important;
+  flex: 0 1 auto !important;
+  flex-wrap: nowrap !important;
+  justify-content: flex-end !important;
+  gap: clamp(5px, 0.8vw, 10px) !important;
+  margin-left: auto !important;
+  padding-top: 0 !important;
+  transform: none !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-window-floating:not(.is-window-maximized) .chat-header-actions button,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-window-floating:not(.is-window-maximized) .chat-header-actions button {
+  width: clamp(36px, 4.2vw, 46px) !important;
+  min-width: clamp(36px, 4.2vw, 46px) !important;
+  min-height: clamp(40px, 5vw, 48px) !important;
+  gap: 0 !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-window-floating:not(.is-window-maximized) .chat-header-actions button svg,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-window-floating:not(.is-window-maximized) .chat-header-actions button svg {
+  width: clamp(32px, 3.6vw, 38px) !important;
+  height: clamp(32px, 3.6vw, 38px) !important;
+  padding: clamp(7px, 0.8vw, 9px) !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-window-floating:not(.is-window-maximized) .chat-header-actions button span,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-window-floating:not(.is-window-maximized) .chat-header-actions button span {
+  display: none !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-window-maximized .chat-header-actions,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-window-maximized .chat-header-actions {
+  position: relative !important;
+  top: auto !important;
+  right: auto !important;
+  width: auto !important;
+  flex: 0 0 auto !important;
+  justify-content: flex-end !important;
+  gap: clamp(12px, 1.4vw, 20px) !important;
+  margin-left: auto !important;
+  padding-top: 0 !important;
+  transform: none !important;
+}
+
 .app-container:is(.tab-commercial_street, .tab-pixel_cottage).is-window-floating .desktop-app-surface--raw {
   overflow: hidden !important;
 }
@@ -13455,6 +14092,19 @@
 .app-container.tab-city .city-log-activity-panel {
   min-height: 0 !important;
   box-sizing: border-box !important;
+}
+
+.app-container.tab-city > .right-column,
+.app-container.tab-city .desktop-app-surface--polished {
+  scrollbar-gutter: auto !important;
+}
+
+.app-container.tab-city .desktop-app-surface--polished {
+  overflow: hidden !important;
+}
+
+.app-container.tab-city .desktop-app-surface--polished > .city-log-panel {
+  padding: 0 !important;
 }
 
 /* Frozen background windows: move the frame, do not let cloned content relayout or animate. */
@@ -14415,12 +15065,15 @@
   }
 }
 
-/* Private-chat foreground layer contract:
-   input > foreground floor/decor/person > normal chat UI. */
+/* Private/group chat foreground layer contract:
+   input > foreground decor > foreground person/pet > foreground floor
+   > readable chat UI > floating-window fill/border > base panels. */
 .app-container.tab-chats.has-private-chat.is-private-chat-scene.is-foreground-lifted {
+  --private-layer-chat-ui: 320;
+  --private-layer-header-fade: 325;
   --private-layer-floor: 330;
-  --private-layer-decor: 335;
-  --private-layer-person: 338;
+  --private-layer-person: 335;
+  --private-layer-decor: 340;
   --private-layer-input: 360;
 }
 
@@ -14453,7 +15106,16 @@
   z-index: 0 !important;
 }
 
-.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-window-floating.is-foreground-lifted::after {
+.app-container.tab-chats.has-private-chat.is-window-maximized.is-private-chat-scene > .desktop-home-underlay,
+.app-container.tab-chats.has-private-chat.is-window-maximized.is-group-chat-scene > .desktop-home-underlay {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-window-floating.is-foreground-lifted::after,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-floating.is-foreground-lifted::after {
   content: '' !important;
   position: fixed !important;
   left: var(--real-window-left, 0px) !important;
@@ -14478,10 +15140,14 @@
 
 .app-container.tab-chats.has-private-chat.is-private-chat-scene.is-foreground-lifted .private-chat-workspace,
 .app-container.tab-chats.has-private-chat.is-private-chat-scene.is-foreground-lifted .private-chat-main,
-.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-foreground-lifted .private-chat-side-slot,
 .app-container.tab-chats.has-private-chat.is-private-chat-scene.is-foreground-lifted .chat-history {
   position: relative !important;
   z-index: auto !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-foreground-lifted .private-chat-side-slot {
+  position: relative !important;
+  z-index: var(--private-layer-chat-ui, 320) !important;
 }
 
 .app-container.tab-chats.has-private-chat.is-private-chat-scene.is-foreground-lifted .private-chat-floor-decor,
@@ -14662,9 +15328,11 @@
    The stage fills the current window content area; decor variables are the only
    position offsets, so resizing clips the scene without distorting it. */
 .app-container.tab-chats.has-private-chat.is-private-chat-scene.is-foreground-lifted {
+  --private-layer-chat-ui: 320 !important;
+  --private-layer-header-fade: 325 !important;
   --private-layer-floor: 330 !important;
-  --private-layer-decor: 335 !important;
-  --private-layer-person: 338 !important;
+  --private-layer-person: 335 !important;
+  --private-layer-decor: 340 !important;
   --private-layer-input: 360 !important;
   --private-chat-stage-x: 0px !important;
   --private-chat-stage-y: 0px !important;
@@ -14751,9 +15419,11 @@
 }
 
 .desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-foreground-lifted {
+  --private-layer-chat-ui: 320 !important;
+  --private-layer-header-fade: 325 !important;
   --private-layer-floor: 330 !important;
-  --private-layer-decor: 335 !important;
-  --private-layer-person: 338 !important;
+  --private-layer-person: 335 !important;
+  --private-layer-decor: 340 !important;
   --private-layer-input: 360 !important;
 }
 
@@ -14800,7 +15470,7 @@
 .desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene .input-area,
 .desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene .private-select-action-bar {
   position: relative !important;
-  z-index: var(--private-layer-input, 340) !important;
+  z-index: var(--private-layer-input, 360) !important;
 }
 
 .app-container.tab-chats.has-private-chat.is-private-chat-scene.is-foreground-lifted.is-social-window-loading .private-chat-floor-decor,
@@ -14818,60 +15488,60 @@
   display: none !important;
 }
 
-.app-container.tab-chats.has-private-chat.is-private-chat-scene .middle-column,
-.app-container.tab-chats.has-private-chat.is-private-chat-scene .list-container,
-.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene .desktop-live-social-window > .middle-column,
-.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene .list-container {
+.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .middle-column,
+.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .list-container,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .desktop-live-social-window > .middle-column,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .list-container {
   scrollbar-width: thin;
-  scrollbar-color: rgba(239, 95, 131, 0.28) transparent;
+  scrollbar-color: rgba(239, 95, 131, 0.16) transparent;
 }
 
-.app-container.tab-chats.has-private-chat.is-private-chat-scene .middle-column::-webkit-scrollbar,
-.app-container.tab-chats.has-private-chat.is-private-chat-scene .list-container::-webkit-scrollbar,
-.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene .desktop-live-social-window > .middle-column::-webkit-scrollbar,
-.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene .list-container::-webkit-scrollbar {
+.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .middle-column::-webkit-scrollbar,
+.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .list-container::-webkit-scrollbar,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .desktop-live-social-window > .middle-column::-webkit-scrollbar,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .list-container::-webkit-scrollbar {
   width: 6px !important;
   height: 6px !important;
 }
 
-.app-container.tab-chats.has-private-chat.is-private-chat-scene .middle-column::-webkit-scrollbar-track,
-.app-container.tab-chats.has-private-chat.is-private-chat-scene .list-container::-webkit-scrollbar-track,
-.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene .desktop-live-social-window > .middle-column::-webkit-scrollbar-track,
-.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene .list-container::-webkit-scrollbar-track {
+.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .middle-column::-webkit-scrollbar-track,
+.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .list-container::-webkit-scrollbar-track,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .desktop-live-social-window > .middle-column::-webkit-scrollbar-track,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .list-container::-webkit-scrollbar-track {
   background: transparent !important;
 }
 
-.app-container.tab-chats.has-private-chat.is-private-chat-scene .middle-column::-webkit-scrollbar-thumb,
-.app-container.tab-chats.has-private-chat.is-private-chat-scene .list-container::-webkit-scrollbar-thumb,
-.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene .desktop-live-social-window > .middle-column::-webkit-scrollbar-thumb,
-.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene .list-container::-webkit-scrollbar-thumb {
+.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .middle-column::-webkit-scrollbar-thumb,
+.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .list-container::-webkit-scrollbar-thumb,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .desktop-live-social-window > .middle-column::-webkit-scrollbar-thumb,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .list-container::-webkit-scrollbar-thumb {
   border: 2px solid transparent !important;
   border-radius: 999px !important;
-  background: rgba(239, 95, 131, 0.34) !important;
+  background: rgba(239, 95, 131, 0.18) !important;
   background-clip: content-box !important;
 }
 
-.app-container.tab-chats.has-private-chat.is-private-chat-scene .middle-column::-webkit-scrollbar-thumb:hover,
-.app-container.tab-chats.has-private-chat.is-private-chat-scene .list-container::-webkit-scrollbar-thumb:hover,
-.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene .desktop-live-social-window > .middle-column::-webkit-scrollbar-thumb:hover,
-.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene .list-container::-webkit-scrollbar-thumb:hover {
-  background: rgba(239, 95, 131, 0.50) !important;
+.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .middle-column::-webkit-scrollbar-thumb:hover,
+.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .list-container::-webkit-scrollbar-thumb:hover,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .desktop-live-social-window > .middle-column::-webkit-scrollbar-thumb:hover,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .list-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(239, 95, 131, 0.30) !important;
   background-clip: content-box !important;
 }
 
-.app-container.tab-chats.has-private-chat.is-private-chat-scene .middle-column::-webkit-scrollbar-button,
-.app-container.tab-chats.has-private-chat.is-private-chat-scene .list-container::-webkit-scrollbar-button,
-.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene .desktop-live-social-window > .middle-column::-webkit-scrollbar-button,
-.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene .list-container::-webkit-scrollbar-button {
+.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .middle-column::-webkit-scrollbar-button,
+.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .list-container::-webkit-scrollbar-button,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .desktop-live-social-window > .middle-column::-webkit-scrollbar-button,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .list-container::-webkit-scrollbar-button {
   display: none !important;
   width: 0 !important;
   height: 0 !important;
 }
 
-.app-container.tab-chats.has-private-chat.is-private-chat-scene .middle-column::-webkit-scrollbar-corner,
-.app-container.tab-chats.has-private-chat.is-private-chat-scene .list-container::-webkit-scrollbar-corner,
-.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene .desktop-live-social-window > .middle-column::-webkit-scrollbar-corner,
-.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene .list-container::-webkit-scrollbar-corner {
+.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .middle-column::-webkit-scrollbar-corner,
+.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .list-container::-webkit-scrollbar-corner,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .desktop-live-social-window > .middle-column::-webkit-scrollbar-corner,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat:is(.is-private-chat-scene, .is-group-chat-scene) .list-container::-webkit-scrollbar-corner {
   background: transparent !important;
 }
 
@@ -14932,20 +15602,443 @@
   background: var(--private-chat-stage-surface) !important;
 }
 
-.app-container.tab-chats.has-private-chat.is-group-chat-scene .private-chat-floor-decor,
-.app-container.tab-chats.has-private-chat.is-group-chat-scene .private-chat-scene-decor,
-.app-container.tab-chats.has-private-chat.is-group-chat-scene .private-chat-pet-lane,
-.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene .private-chat-floor-decor,
-.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene .private-chat-scene-decor,
-.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene .private-chat-pet-lane {
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-disabled:not(.is-foreground-exiting) .private-chat-floor-decor,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-disabled:not(.is-foreground-exiting) .private-chat-scene-decor,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-disabled:not(.is-foreground-exiting) .private-chat-pet-lane,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-disabled:not(.is-foreground-exiting) .private-chat-floor-decor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-disabled:not(.is-foreground-exiting) .private-chat-scene-decor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-disabled:not(.is-foreground-exiting) .private-chat-pet-lane {
   display: none !important;
   opacity: 0 !important;
   visibility: hidden !important;
   pointer-events: none !important;
 }
 
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting {
+  --private-layer-chat-ui: 320 !important;
+  --private-layer-header-fade: 325 !important;
+  --private-layer-floor: 330 !important;
+  --private-layer-person: 335 !important;
+  --private-layer-decor: 340 !important;
+  --private-layer-input: 360 !important;
+  --private-chat-stage-x: 0px !important;
+  --private-chat-stage-y: 0px !important;
+  --private-chat-stage-scale: 1 !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .group-chat-workspace,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .group-chat-workspace,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .group-chat-workspace,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .group-chat-workspace {
+  position: relative !important;
+  z-index: auto !important;
+  isolation: auto !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-floor-decor,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-scene-decor,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-floor-decor,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-scene-decor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-floor-decor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-scene-decor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-floor-decor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-scene-decor {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  position: fixed !important;
+  inset: auto !important;
+  left: var(--real-window-left, 0px) !important;
+  top: calc(var(--real-window-top, 0px) + var(--desktop-browser-chrome-height, 92px)) !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: var(--real-window-width, 100vw) !important;
+  height: var(--real-window-content-height, calc(100dvh - var(--desktop-browser-chrome-height, 92px) - var(--desktop-taskbar-height, 56px))) !important;
+  max-width: none !important;
+  max-height: none !important;
+  overflow: hidden !important;
+  contain: layout paint style !important;
+  pointer-events: none !important;
+  transform: none !important;
+  transform-origin: 0 0 !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-floor-decor,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-floor-decor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-floor-decor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-floor-decor {
+  z-index: var(--private-layer-floor) !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-maximized.is-foreground-enabled .private-chat-floor-decor,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-maximized.is-foreground-enabled .private-chat-scene-decor,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-maximized.is-foreground-enabled .private-chat-pet-lane,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-maximized.is-foreground-exiting .private-chat-floor-decor,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-maximized.is-foreground-exiting .private-chat-scene-decor,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-maximized.is-foreground-exiting .private-chat-pet-lane,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-maximized.is-foreground-enabled .private-chat-floor-decor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-maximized.is-foreground-enabled .private-chat-scene-decor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-maximized.is-foreground-enabled .private-chat-pet-lane,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-maximized.is-foreground-exiting .private-chat-floor-decor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-maximized.is-foreground-exiting .private-chat-scene-decor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-maximized.is-foreground-exiting .private-chat-pet-lane {
+  top: var(--desktop-browser-chrome-height, 92px) !important;
+  height: calc(100dvh - var(--desktop-browser-chrome-height, 92px)) !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-scene-decor,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-scene-decor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-scene-decor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-scene-decor {
+  z-index: var(--private-layer-decor) !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-stage-layer,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-stage-layer,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-stage-layer,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-stage-layer {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  transform-origin: 0 0 !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-scene-decor__floor,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-scene-decor__left,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-scene-decor__right,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-scene-decor__floor,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-scene-decor__left,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-scene-decor__right,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-scene-decor__floor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-scene-decor__left,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-scene-decor__right,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-scene-decor__floor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-scene-decor__left,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-scene-decor__right {
+  position: absolute !important;
+  display: block !important;
+  max-width: none !important;
+  user-select: none !important;
+  -webkit-user-drag: none !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-scene-decor__floor,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-scene-decor__floor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-scene-decor__floor,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-scene-decor__floor {
+  left: -40px !important;
+  right: -40px !important;
+  bottom: 0 !important;
+  width: calc(100% + 80px) !important;
+  height: auto !important;
+  transform-origin: bottom center !important;
+  transform: translate3d(var(--decor-x), calc(var(--decor-y) - var(--desktop-taskbar-height, 56px)), 0) scale(var(--decor-scale)) !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-scene-decor__left,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-scene-decor__left,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-scene-decor__left,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-scene-decor__left {
+  left: -18px !important;
+  bottom: 48px !important;
+  width: clamp(240px, calc(var(--real-window-width, 100vw) * 0.24), 440px) !important;
+  transform-origin: bottom left !important;
+  transform: translate3d(var(--decor-x), var(--decor-y), 0) scale(var(--decor-scale)) !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-scene-decor__right,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-scene-decor__right,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .private-chat-scene-decor__right,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .private-chat-scene-decor__right {
+  right: -10px !important;
+  bottom: 52px !important;
+  width: clamp(220px, calc(var(--real-window-width, 100vw) * 0.20), 390px) !important;
+  transform-origin: bottom right !important;
+  transform: translate3d(var(--decor-x), var(--decor-y), 0) scale(var(--decor-scale)) !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .input-area,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .group-select-action-bar,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .input-area,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .group-select-action-bar,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .input-area,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-enabled .group-select-action-bar,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .input-area,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-exiting .group-select-action-bar {
+  position: relative !important;
+  z-index: var(--private-layer-input) !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-floating.is-foreground-lifted .input-area,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-floating.is-foreground-lifted .group-select-action-bar,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-floating.is-foreground-lifted .input-area,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-floating.is-foreground-lifted .group-select-action-bar {
+  --private-input-lift-y: -16px !important;
+  --private-select-lift-y: -16px !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-maximized.is-foreground-enabled .input-area,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-maximized.is-foreground-enabled .group-select-action-bar,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-maximized.is-foreground-enabled .input-area,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-maximized.is-foreground-enabled .group-select-action-bar {
+  --private-input-lift-y: 0px !important;
+  --private-select-lift-y: 0px !important;
+}
+
+/* Keep the chat composer above the foreground layer without lifting the whole chat UI. */
+.app-container.tab-chats.has-private-chat.is-foreground-enabled > .middle-column,
+.app-container.tab-chats.has-private-chat.is-foreground-enabled > .right-column,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting > .middle-column,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting > .right-column,
+.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-foreground-lifted > .middle-column,
+.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-foreground-lifted > .right-column,
+.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-window-floating.is-foreground-lifted > .middle-column,
+.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-window-floating.is-foreground-lifted > .right-column,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-lifted > .middle-column,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-lifted > .right-column,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-floating.is-foreground-lifted > .middle-column,
+.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-window-floating.is-foreground-lifted > .right-column,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .desktop-live-social-window > .middle-column,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .desktop-live-social-window > .right-column,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .desktop-live-social-window > .middle-column,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .desktop-live-social-window > .right-column,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-foreground-lifted .desktop-live-social-window > .middle-column,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-private-chat-scene.is-foreground-lifted .desktop-live-social-window > .right-column,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-lifted .desktop-live-social-window > .middle-column,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-group-chat-scene.is-foreground-lifted .desktop-live-social-window > .right-column {
+  z-index: auto !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .private-chat-workspace,
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .private-chat-main,
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .group-chat-workspace,
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .group-chat-main,
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .chat-history,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .private-chat-workspace,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .private-chat-main,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .group-chat-workspace,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .group-chat-main,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .chat-history,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .private-chat-workspace,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .private-chat-main,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .group-chat-workspace,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .group-chat-main,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .chat-history,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .private-chat-workspace,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .private-chat-main,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .group-chat-workspace,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .group-chat-main,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .chat-history {
+  z-index: auto !important;
+  isolation: auto !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .middle-column-heading,
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .search-bar-container,
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .list-container,
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .chat-header,
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .chat-history > *,
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .private-chat-side-slot,
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .group-chat-side-slot,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .middle-column-heading,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .search-bar-container,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .list-container,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .chat-header,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .chat-history > *,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .private-chat-side-slot,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .group-chat-side-slot,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .middle-column-heading,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .search-bar-container,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .list-container,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .chat-header,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .chat-history > *,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .private-chat-side-slot,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .group-chat-side-slot,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .middle-column-heading,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .search-bar-container,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .list-container,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .chat-header,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .chat-history > *,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .private-chat-side-slot,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .group-chat-side-slot {
+  position: relative !important;
+  z-index: var(--private-layer-chat-ui, 320) !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .chat-header,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .chat-header,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .chat-header,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .chat-header {
+  isolation: isolate !important;
+  overflow: visible !important;
+  z-index: var(--private-layer-header-fade, 325) !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .chat-header::before,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .chat-header::before,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .chat-header::before,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .chat-header::before {
+  z-index: 0 !important;
+  pointer-events: none !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .input-area,
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .private-select-action-bar,
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .group-select-action-bar,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .input-area,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .private-select-action-bar,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .group-select-action-bar,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .input-area,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .private-select-action-bar,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .group-select-action-bar,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .input-area,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .private-select-action-bar,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .group-select-action-bar {
+  position: relative !important;
+  z-index: var(--private-layer-input, 360) !important;
+  transform: translate3d(0, var(--private-input-lift-y, var(--private-select-lift-y, 0px)), 0) !important;
+}
+
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .private-select-action-bar,
+.app-container.tab-chats.has-private-chat.is-foreground-enabled .group-select-action-bar,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .private-select-action-bar,
+.app-container.tab-chats.has-private-chat.is-foreground-exiting .group-select-action-bar,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .private-select-action-bar,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-enabled .group-select-action-bar,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .private-select-action-bar,
+.desktop-browser-live-window.app-container.tab-chats.has-private-chat.is-foreground-exiting .group-select-action-bar {
+  transform: translate3d(0, var(--private-select-lift-y, 0px), 0) !important;
+}
+
 .app-container.has-private-chat .group-chat-side-slot[data-slot-view="group-manage"] {
   background: var(--private-chat-stage-surface, #fff8fb) !important;
+}
+
+/* Commercial street corrected log/settings skin. Keep this after generic desktop-window sizing. */
+.app-container.tab-city .desktop-app-surface--polished,
+.desktop-browser-live-window.app-container.tab-city .desktop-app-surface--polished {
+  overflow: hidden !important;
+  scrollbar-gutter: auto !important;
+  background: #eef2f7 !important;
+}
+
+.app-container.tab-city .desktop-app-surface--polished > .city-log-panel,
+.desktop-browser-live-window.app-container.tab-city .desktop-app-surface--polished > .city-log-panel {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  background: #ffffff !important;
+}
+
+.app-container.tab-city .city-log-tabs,
+.desktop-browser-live-window.app-container.tab-city .city-log-tabs {
+  border-radius: 0 !important;
+  background: rgba(255, 255, 255, 0.98) !important;
+  box-shadow: none !important;
+}
+
+.app-container.tab-city .city-log-overview,
+.desktop-browser-live-window.app-container.tab-city .city-log-overview {
+  border: 0 !important;
+  border-bottom: 1px solid #dce3ec !important;
+  border-radius: 0 !important;
+  background: #fbfcfe !important;
+  box-shadow: none !important;
+}
+
+.app-container.tab-city .city-log-main-panel,
+.app-container.tab-city .city-log-population-panel,
+.app-container.tab-city .city-log-announcement-panel,
+.app-container.tab-city .city-log-activity-panel,
+.desktop-browser-live-window.app-container.tab-city .city-log-main-panel,
+.desktop-browser-live-window.app-container.tab-city .city-log-population-panel,
+.desktop-browser-live-window.app-container.tab-city .city-log-announcement-panel,
+.desktop-browser-live-window.app-container.tab-city .city-log-activity-panel {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.app-container.tab-city .city-log-main-panel,
+.app-container.tab-city .city-log-activity-panel,
+.desktop-browser-live-window.app-container.tab-city .city-log-main-panel,
+.desktop-browser-live-window.app-container.tab-city .city-log-activity-panel {
+  background: #ffffff !important;
+}
+
+.app-container.tab-city .city-log-population-panel,
+.app-container.tab-city .city-log-announcement-panel,
+.desktop-browser-live-window.app-container.tab-city .city-log-population-panel,
+.desktop-browser-live-window.app-container.tab-city .city-log-announcement-panel {
+  background: #fbfcfe !important;
+}
+
+@container app-window (max-width: 1180px) {
+  .app-container.tab-city .city-log-feed-layout,
+  .desktop-browser-live-window.app-container.tab-city .city-log-feed-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+    overflow: auto !important;
+  }
+
+  .app-container.tab-city .city-log-main-panel,
+  .desktop-browser-live-window.app-container.tab-city .city-log-main-panel {
+    min-height: 560px !important;
+    border-right: 0 !important;
+    border-bottom: 1px solid #dce3ec !important;
+  }
+
+  .app-container.tab-city .city-log-workbench,
+  .desktop-browser-live-window.app-container.tab-city .city-log-workbench {
+    grid-template-columns: minmax(0, 1fr) clamp(300px, 32%, 360px) !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+    overflow: hidden !important;
+  }
+
+  .app-container.tab-city .city-log-announcement-panel,
+  .desktop-browser-live-window.app-container.tab-city .city-log-announcement-panel {
+    min-height: 0 !important;
+    border-top: 0 !important;
+  }
+
+  .app-container.tab-city .city-log-population-panel,
+  .desktop-browser-live-window.app-container.tab-city .city-log-population-panel {
+    min-height: 420px !important;
+    border-top: 1px solid #dce3ec !important;
+  }
+}
+
+@container app-window (max-width: 860px) {
+  .app-container.tab-city .city-log-workbench,
+  .desktop-browser-live-window.app-container.tab-city .city-log-workbench {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: minmax(430px, auto) minmax(320px, auto) !important;
+    overflow: auto !important;
+  }
+
+  .app-container.tab-city .city-log-announcement-panel,
+  .desktop-browser-live-window.app-container.tab-city .city-log-announcement-panel {
+    min-height: 320px !important;
+    border-top: 1px solid #dce3ec !important;
+  }
+}
+
+.desktop-browser-live-window.app-container.tab-city.is-window-floating > .desktop-browser-live-window__content .desktop-app-surface--polished > .city-log-panel,
+.desktop-browser-live-window.app-container.tab-city.is-window-maximized > .desktop-browser-live-window__content .desktop-app-surface--polished > .city-log-panel {
+  overflow: hidden !important;
+}
+
+.app-container.tab-city:not(.tab-desktop).is-window-floating .desktop-app-surface.desktop-app-surface--city > .city-log-panel,
+.app-container.tab-city:not(.tab-desktop).is-window-maximized .desktop-app-surface.desktop-app-surface--city > .city-log-panel {
+  overflow: hidden !important;
 }
 
 .app-container.has-private-chat .group-chat-side-slot[data-slot-view="group-manage"] .group-manage-drawer {

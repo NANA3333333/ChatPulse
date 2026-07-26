@@ -12,8 +12,6 @@ function createActionService(deps = {}) {
         normalizeSurvivalState,
         districtsFallbackForExhaustion,
         getDistrictStateEffects,
-        ensureCityGrowthDb,
-        schoolLogic,
         buildGamblingOutcomeNarrations,
         broadcastCityToChat,
         buildCollapsedCityLog,
@@ -88,29 +86,8 @@ function createActionService(deps = {}) {
         let dCal = -(district.cal_cost || 0) + (district.cal_reward || 0);
         let dMoney = -districtMoneyCost * inflation + (district.money_reward || 0) * workBonus;
         let stateEffects = getDistrictStateEffects(district, richNarrations);
-        const growthDb = ensureCityGrowthDb(db);
-        const schoolProfile = schoolLogic.getCharacterSchoolProfile(growthDb, char.id);
-        stateEffects = schoolLogic.applySchoolPerksToState(district, stateEffects, schoolProfile, currentState);
         if (typeof applyHousingDistrictEffects === 'function') {
             stateEffects = applyHousingDistrictEffects(db, char, district, stateEffects);
-        }
-
-        if (district.type === 'work' && dMoney > 0 && schoolProfile.vocational > 0) {
-            const vocationalBonus = schoolProfile.vocational >= 70
-                ? 0.22
-                : schoolProfile.vocational >= 40
-                    ? 0.12
-                    : schoolProfile.vocational >= 20
-                        ? 0.06
-                        : 0;
-            if (vocationalBonus > 0) {
-                dMoney = Math.round(dMoney * (1 + vocationalBonus));
-                stateEffects = {
-                    ...stateEffects,
-                    stress: stateEffects.stress - (schoolProfile.vocational >= 70 ? 3 : 1),
-                    mood: stateEffects.mood + (schoolProfile.vocational >= 70 ? 2 : 1)
-                };
-            }
         }
 
         if (activeEvents && activeEvents.length > 0) {
@@ -311,24 +288,6 @@ function createActionService(deps = {}) {
             }
             let normalLog = getLogText(buildCollapsedCityLog(char, '行动文案生成失败', { district }));
             let hackerIntelPayload = '';
-            if (district.type === 'education') {
-                const studyResult = schoolLogic.getSchoolActionEffects(growthDb, char, district, currentState);
-                if (studyResult) {
-                    growthDb.addCharacterCourseMastery(char.id, studyResult.course.id, studyResult.gain);
-                    stateEffects = {
-                        ...stateEffects,
-                        mood: stateEffects.mood + 2,
-                        stress: stateEffects.stress - 1
-                    };
-                    const schoolProgressText = `课程=${studyResult.course.emoji}${studyResult.course.name} | 熟练度=+${studyResult.gain} | 当前=${studyResult.afterMastery}/100`;
-                    const schoolUnlockText = String(schoolLogic.describeSchoolUnlock(studyResult.course.id, studyResult.unlockedTier) || '').trim();
-                    if (isCollapsedCityLog(normalLog)) {
-                        normalLog = [normalLog, schoolProgressText, schoolUnlockText].filter(Boolean).join(' | ');
-                    } else {
-                        normalLog = `${normalLog} 这次主要上了 ${studyResult.course.emoji}${studyResult.course.name}，熟练度 +${studyResult.gain}，现在是 ${studyResult.afterMastery}/100。${schoolUnlockText}`.trim();
-                    }
-                }
-            }
             if (isHackerDistrict(district) && !isQuestAction) {
                 hackerIntelPayload = buildHackerIntelAppendix(db, char);
                 normalLog = `${normalLog}\n\n[黑客据点情报]\n${hackerIntelPayload}`.trim();

@@ -49,6 +49,7 @@ tools/qdrant/
 # Debug exports / local reports / local screenshots
 debug_exports/
 .codex-*
+.codex_tmp/
 .logs/
 tmp/
 QQ_*.png

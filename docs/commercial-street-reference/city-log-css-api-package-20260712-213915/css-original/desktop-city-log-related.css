@@ -1,0 +1,545 @@
+/* Extracted exact CSS rule blocks from client/src/styles/desktop.css that mention city-log or tab-city. */
+
+.app-container.tab-admin > .middle-column,
+.app-container.tab-housing_social > .middle-column,
+.app-container.tab-city > .middle-column {
+  display: none !important;
+}
+
+.app-container.tab-admin.is-window-floating > .right-column,
+.app-container.tab-housing_social.is-window-floating > .right-column,
+.app-container.tab-city.is-window-floating > .right-column {
+  border-bottom-left-radius: var(--desktop-window-radius);
+}
+
+.app-container.tab-memory_library .memory-library-page,
+.app-container.tab-mcp_lab .mcp-lab-panel,
+.app-container.tab-admin .admin-dashboard-page,
+.app-container.tab-housing_social .housing-panel,
+.app-container.tab-city .city-log-panel {
+  animation: desktopAppContentIn 520ms 120ms var(--desktop-window-ease) both;
+}
+
+.desktop-home-underlay,
+  .desktop-browser-chrome,
+  .desktop-browser-shadow-window,
+  .desktop-app-surface,
+  .app-container:not(.tab-desktop).is-window-floating > .middle-column,
+  .app-container:not(.tab-desktop).is-window-floating > .right-column,
+  .app-container.tab-memory_library .memory-library-page,
+  .app-container.tab-mcp_lab .mcp-lab-panel,
+  .app-container.tab-admin .admin-dashboard-page,
+  .app-container.tab-housing_social .housing-panel,
+  .app-container.tab-city .city-log-panel,
+  .desktop-browser-tab.is-active {
+    animation: none !important;
+  }
+
+/* Visible desktop-app page upgrade pass */
+.app-container.tab-memory_library > .middle-column,
+.app-container.tab-mcp_lab > .middle-column,
+.app-container.tab-settings > .middle-column,
+.app-container.tab-admin > .middle-column,
+.app-container.tab-housing_social > .middle-column,
+.app-container.tab-city > .middle-column {
+  display: none !important;
+}
+
+.app-container.tab-memory_library.is-window-floating > .right-column,
+.app-container.tab-mcp_lab.is-window-floating > .right-column,
+.app-container.tab-settings.is-window-floating > .right-column,
+.app-container.tab-admin.is-window-floating > .right-column,
+.app-container.tab-housing_social.is-window-floating > .right-column,
+.app-container.tab-city.is-window-floating > .right-column {
+  border-bottom-left-radius: var(--desktop-window-radius, 14px);
+}
+
+.app-container.tab-memory_library .desktop-app-surface--polished,
+.app-container.tab-mcp_lab .desktop-app-surface--polished,
+.app-container.tab-settings .desktop-app-surface--polished,
+.app-container.tab-admin .desktop-app-surface--polished,
+.app-container.tab-housing_social .desktop-app-surface--polished,
+.app-container.tab-city .desktop-app-surface--polished {
+  --app-ink: #1e293b;
+  --app-muted: #64748b;
+  --app-line: rgba(91, 117, 158, 0.16);
+  --app-soft-line: rgba(148, 163, 184, 0.20);
+  --app-card: rgba(255, 255, 255, 0.86);
+  --app-card-strong: rgba(255, 255, 255, 0.96);
+  --app-blue: #2563eb;
+  --app-teal: #0f9f8f;
+  --app-coral: #e65f6f;
+  --app-gold: #b98118;
+  --app-shadow: 0 18px 42px rgba(31, 48, 78, 0.11);
+  --app-shadow-lift: 0 24px 58px rgba(31, 48, 78, 0.16);
+  overflow: auto;
+  color: var(--app-ink);
+  background:
+    radial-gradient(circle at 18% 12%, rgba(47, 141, 232, 0.11), transparent 30%),
+    radial-gradient(circle at 82% 18%, rgba(15, 159, 143, 0.09), transparent 28%),
+    linear-gradient(90deg, rgba(34, 76, 126, 0.045) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(34, 76, 126, 0.038) 1px, transparent 1px),
+    linear-gradient(135deg, #f8fbff 0%, #fffafd 48%, #f4faf7 100%) !important;
+  background-size: auto, auto, 34px 34px, 34px 34px, auto !important;
+  scroll-behavior: smooth;
+}
+
+.app-container.tab-memory_library .memory-library-page,
+.app-container.tab-mcp_lab .mcp-lab-panel,
+.app-container.tab-settings .settings-command-center-page,
+.app-container.tab-admin .admin-dashboard-page,
+.app-container.tab-housing_social .housing-panel,
+.app-container.tab-city .city-log-panel {
+  width: 100% !important;
+  min-height: 100%;
+  color: var(--app-ink) !important;
+  background: transparent !important;
+  animation: desktopAppPageEnter 540ms cubic-bezier(0.19, 1, 0.22, 1) both !important;
+}
+
+.app-container.tab-memory_library .memory-library-page,
+.app-container.tab-admin .admin-dashboard-page,
+.app-container.tab-city .city-log-panel {
+  padding: clamp(18px, 2.3vw, 30px) !important;
+}
+
+.app-container.tab-memory_library .command-page-hero,
+.app-container.tab-mcp_lab .command-page-hero,
+.app-container.tab-admin .command-page-hero,
+.app-container.tab-settings .settings-command-profile-card,
+.app-container.tab-city .city-log-overview,
+.app-container.tab-housing_social .housing-section:first-child {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(120, 145, 184, 0.18) !important;
+  border-radius: 12px !important;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(246, 251, 255, 0.82)),
+    linear-gradient(90deg, rgba(37, 99, 235, 0.09), rgba(15, 159, 143, 0.08)) !important;
+  box-shadow: var(--app-shadow) !important;
+}
+
+.app-container.tab-memory_library .command-page-hero::after,
+.app-container.tab-mcp_lab .command-page-hero::after,
+.app-container.tab-admin .command-page-hero::after,
+.app-container.tab-settings .settings-command-profile-card::after,
+.app-container.tab-city .city-log-overview::after,
+.app-container.tab-housing_social .housing-section:first-child::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(110deg, transparent 0 35%, rgba(255, 255, 255, 0.42) 45%, transparent 56% 100%);
+  transform: translateX(-120%);
+  animation: appHeroSheen 3200ms 560ms cubic-bezier(0.19, 1, 0.22, 1) both;
+}
+
+.app-container.tab-memory_library .memory-lib-section,
+.app-container.tab-memory_library .memory-lib-grid.stats > *,
+.app-container.tab-mcp_lab .mcp-command-card,
+.app-container.tab-admin .command-card,
+.app-container.tab-settings .settings-card,
+.app-container.tab-settings .settings-command-characters-card,
+.app-container.tab-settings .settings-command-security-card,
+.app-container.tab-settings .settings-command-detail-card,
+.app-container.tab-housing_social .housing-command-card,
+.app-container.tab-housing_social .housing-chain-card,
+.app-container.tab-housing_social .housing-character-card,
+.app-container.tab-housing_social .housing-summary-card,
+.app-container.tab-housing_social .housing-stat-card,
+.app-container.tab-city .city-log-main-panel,
+.app-container.tab-city .city-log-population-panel,
+.app-container.tab-city .city-log-announcement-panel,
+.app-container.tab-city .city-log-activity-panel,
+.app-container.tab-city .city-log-stat-card {
+  border-color: var(--app-line) !important;
+  border-radius: 10px !important;
+  background:
+    linear-gradient(180deg, var(--app-card-strong), var(--app-card)),
+    rgba(255, 255, 255, 0.86) !important;
+  box-shadow: var(--app-shadow) !important;
+  transform: translateZ(0);
+  transition:
+    transform 220ms cubic-bezier(0.19, 1, 0.22, 1),
+    box-shadow 220ms ease,
+    border-color 180ms ease,
+    background 180ms ease;
+  animation: appCardRise 520ms cubic-bezier(0.19, 1, 0.22, 1) both;
+}
+
+.app-container.tab-memory_library .memory-lib-section:hover,
+.app-container.tab-memory_library .memory-lib-grid.stats > *:hover,
+.app-container.tab-mcp_lab .mcp-command-card:hover,
+.app-container.tab-admin .command-card:hover,
+.app-container.tab-settings .settings-card:hover,
+.app-container.tab-settings .settings-command-characters-card:hover,
+.app-container.tab-settings .settings-command-security-card:hover,
+.app-container.tab-settings .settings-command-detail-card:hover,
+.app-container.tab-housing_social .housing-command-card:hover,
+.app-container.tab-housing_social .housing-chain-card:hover,
+.app-container.tab-housing_social .housing-character-card:hover,
+.app-container.tab-housing_social .housing-summary-card:hover,
+.app-container.tab-housing_social .housing-stat-card:hover,
+.app-container.tab-city .city-log-main-panel:hover,
+.app-container.tab-city .city-log-population-panel:hover,
+.app-container.tab-city .city-log-announcement-panel:hover,
+.app-container.tab-city .city-log-activity-panel:hover,
+.app-container.tab-city .city-log-stat-card:hover {
+  border-color: rgba(37, 99, 235, 0.22) !important;
+  box-shadow: var(--app-shadow-lift) !important;
+  transform: translateY(-2px);
+}
+
+.app-container.tab-memory_library .memory-lib-section:nth-of-type(2),
+.app-container.tab-mcp_lab .mcp-command-card:nth-of-type(2),
+.app-container.tab-settings .settings-card:nth-of-type(2),
+.app-container.tab-housing_social .housing-chain-card:nth-of-type(2),
+.app-container.tab-city .city-log-stat-card:nth-child(2) {
+  animation-delay: 60ms;
+}
+
+.app-container.tab-memory_library .memory-lib-section:nth-of-type(3),
+.app-container.tab-mcp_lab .mcp-command-card:nth-of-type(3),
+.app-container.tab-settings .settings-card:nth-of-type(3),
+.app-container.tab-housing_social .housing-chain-card:nth-of-type(3),
+.app-container.tab-city .city-log-stat-card:nth-child(3) {
+  animation-delay: 110ms;
+}
+
+.app-container.tab-memory_library .memory-lib-section:nth-of-type(4),
+.app-container.tab-mcp_lab .mcp-command-card:nth-of-type(4),
+.app-container.tab-settings .settings-card:nth-of-type(4),
+.app-container.tab-housing_social .housing-chain-card:nth-of-type(4),
+.app-container.tab-city .city-log-stat-card:nth-child(4) {
+  animation-delay: 160ms;
+}
+
+.app-container.tab-memory_library .command-page-title h1,
+.app-container.tab-mcp_lab .command-page-title h1,
+.app-container.tab-admin .command-page-title h1,
+.app-container.tab-settings .settings-card-title h2,
+.app-container.tab-housing_social .housing-section-title,
+.app-container.tab-city .city-log-overview-title strong,
+.app-container.tab-city .city-log-main-header h3,
+.app-container.tab-city .city-log-population-header h3 {
+  color: var(--app-ink) !important;
+  letter-spacing: 0 !important;
+}
+
+.app-container.tab-memory_library .command-page-kicker,
+.app-container.tab-memory_library .memory-library-kicker,
+.app-container.tab-mcp_lab .command-page-kicker,
+.app-container.tab-admin .command-page-kicker,
+.app-container.tab-city .city-log-kicker,
+.app-container.tab-housing_social .housing-pill,
+.app-container.tab-settings .settings-wallet-pill {
+  border: 1px solid rgba(15, 159, 143, 0.18) !important;
+  color: #087f73 !important;
+  background: rgba(233, 250, 247, 0.78) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.app-container.tab-memory_library .memory-lib-button,
+.app-container.tab-mcp_lab .command-primary-button,
+.app-container.tab-mcp_lab .command-icon-button,
+.app-container.tab-admin .command-primary-button,
+.app-container.tab-admin .command-icon-button,
+.app-container.tab-settings .settings-primary-button,
+.app-container.tab-settings .settings-icon-button,
+.app-container.tab-settings .settings-security-save,
+.app-container.tab-housing_social .housing-action-btn,
+.app-container.tab-city .city-log-panel button {
+  border-radius: 8px !important;
+  transition:
+    transform 180ms cubic-bezier(0.19, 1, 0.22, 1),
+    box-shadow 180ms ease,
+    background 180ms ease,
+    border-color 180ms ease,
+    opacity 160ms ease !important;
+}
+
+.app-container.tab-memory_library .memory-lib-button:hover:not(:disabled),
+.app-container.tab-mcp_lab .command-primary-button:hover:not(:disabled),
+.app-container.tab-mcp_lab .command-icon-button:hover:not(:disabled),
+.app-container.tab-admin .command-primary-button:hover:not(:disabled),
+.app-container.tab-admin .command-icon-button:hover:not(:disabled),
+.app-container.tab-settings .settings-primary-button:hover:not(:disabled),
+.app-container.tab-settings .settings-icon-button:hover:not(:disabled),
+.app-container.tab-settings .settings-security-save:hover:not(:disabled),
+.app-container.tab-housing_social .housing-action-btn:hover:not(:disabled),
+.app-container.tab-city .city-log-panel button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px rgba(31, 48, 78, 0.12) !important;
+}
+
+.app-container.tab-memory_library .memory-lib-mode-tabs,
+.app-container.tab-city .city-log-tabs,
+.app-container.tab-mcp_lab .mcp-command-provider-strip,
+.app-container.tab-settings .settings-command-rail,
+.app-container.tab-housing_social .housing-command-grid {
+  border-radius: 10px !important;
+  background: rgba(255, 255, 255, 0.58) !important;
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.13);
+}
+
+.app-container.tab-memory_library .memory-lib-mode-tabs button,
+.app-container.tab-city .city-log-tabs button,
+.app-container.tab-settings .settings-command-rail-item {
+  transition:
+    transform 180ms cubic-bezier(0.19, 1, 0.22, 1),
+    background 180ms ease,
+    color 180ms ease,
+    box-shadow 180ms ease !important;
+}
+
+.app-container.tab-memory_library .memory-lib-mode-tabs button:hover,
+.app-container.tab-city .city-log-tabs button:hover,
+.app-container.tab-settings .settings-command-rail-item:hover {
+  transform: translateY(-1px);
+}
+
+.app-container.tab-memory_library .memory-lib-live-progress.running .memory-lib-live-bar span,
+.app-container.tab-housing_social .housing-score-track span,
+.app-container.tab-housing_social .housing-chain-step.is-current span,
+.app-container.tab-city .city-log-stat-card strong {
+  animation: appSoftPulse 1800ms ease-in-out infinite;
+}
+
+.app-container.tab-city .city-log-feed-layout,
+.app-container.tab-housing_social .housing-workbench,
+.app-container.tab-memory_library .memory-command-workspace,
+.app-container.tab-mcp_lab .mcp-command-workspace,
+.app-container.tab-admin .admin-command-workspace,
+.app-container.tab-settings .settings-command-workspace {
+  gap: clamp(14px, 1.6vw, 22px) !important;
+}
+
+.app-container.tab-city .city-log-entry,
+.app-container.tab-housing_social .housing-dialogue-line,
+.app-container.tab-memory_library .memory-card,
+.app-container.tab-settings .settings-character-row,
+.app-container.tab-mcp_lab .mcp-command-block,
+.app-container.tab-admin .admin-command-table tbody tr {
+  transition:
+    background 160ms ease,
+    transform 180ms cubic-bezier(0.19, 1, 0.22, 1),
+    box-shadow 180ms ease,
+    border-color 160ms ease !important;
+}
+
+.app-container.tab-city .city-log-entry:hover,
+.app-container.tab-housing_social .housing-dialogue-line:hover,
+.app-container.tab-memory_library .memory-card:hover,
+.app-container.tab-settings .settings-character-row:hover,
+.app-container.tab-mcp_lab .mcp-command-block:hover {
+  transform: translateX(3px);
+}
+
+.app-container.tab-memory_library .desktop-app-surface--polished::-webkit-scrollbar,
+.app-container.tab-mcp_lab .desktop-app-surface--polished::-webkit-scrollbar,
+.app-container.tab-settings .desktop-app-surface--polished::-webkit-scrollbar,
+.app-container.tab-admin .desktop-app-surface--polished::-webkit-scrollbar,
+.app-container.tab-housing_social .desktop-app-surface--polished::-webkit-scrollbar,
+.app-container.tab-city .desktop-app-surface--polished::-webkit-scrollbar {
+  width: 11px;
+}
+
+.app-container.tab-memory_library .desktop-app-surface--polished::-webkit-scrollbar-thumb,
+.app-container.tab-mcp_lab .desktop-app-surface--polished::-webkit-scrollbar-thumb,
+.app-container.tab-settings .desktop-app-surface--polished::-webkit-scrollbar-thumb,
+.app-container.tab-admin .desktop-app-surface--polished::-webkit-scrollbar-thumb,
+.app-container.tab-housing_social .desktop-app-surface--polished::-webkit-scrollbar-thumb,
+.app-container.tab-city .desktop-app-surface--polished::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: rgba(87, 108, 145, 0.32);
+  background-clip: padding-box;
+}
+
+.app-container.tab-memory_library .memory-library-page,
+  .app-container.tab-mcp_lab .mcp-lab-panel__body,
+  .app-container.tab-settings .settings-command-center-page,
+  .app-container.tab-admin .admin-dashboard-page,
+  .app-container.tab-housing_social .housing-panel,
+  .app-container.tab-city .city-log-panel {
+    padding: 14px !important;
+  }
+
+.app-container.tab-memory_library .memory-library-page,
+  .app-container.tab-mcp_lab .mcp-lab-panel,
+  .app-container.tab-settings .settings-command-center-page,
+  .app-container.tab-admin .admin-dashboard-page,
+  .app-container.tab-housing_social .housing-panel,
+  .app-container.tab-city .city-log-panel,
+  .app-container.tab-memory_library .memory-lib-section,
+  .app-container.tab-memory_library .memory-lib-grid.stats > *,
+  .app-container.tab-mcp_lab .mcp-command-card,
+  .app-container.tab-admin .command-card,
+  .app-container.tab-settings .settings-card,
+  .app-container.tab-settings .settings-command-characters-card,
+  .app-container.tab-settings .settings-command-security-card,
+  .app-container.tab-settings .settings-command-detail-card,
+  .app-container.tab-housing_social .housing-command-card,
+  .app-container.tab-housing_social .housing-chain-card,
+  .app-container.tab-housing_social .housing-character-card,
+  .app-container.tab-housing_social .housing-summary-card,
+  .app-container.tab-housing_social .housing-stat-card,
+  .app-container.tab-city .city-log-main-panel,
+  .app-container.tab-city .city-log-population-panel,
+  .app-container.tab-city .city-log-announcement-panel,
+  .app-container.tab-city .city-log-activity-panel,
+  .app-container.tab-city .city-log-stat-card,
+  .app-container.tab-memory_library .memory-lib-live-progress.running .memory-lib-live-bar span,
+  .app-container.tab-housing_social .housing-score-track span,
+  .app-container.tab-housing_social .housing-chain-step.is-current span,
+  .app-container.tab-city .city-log-stat-card strong {
+    animation: none !important;
+  }
+
+.desktop-browser-shadow-window .memory-library-page,
+.desktop-browser-shadow-window .mcp-lab-panel,
+.desktop-browser-shadow-window .settings-command-center-page,
+.desktop-browser-shadow-window .admin-dashboard-page,
+.desktop-browser-shadow-window .housing-panel,
+.desktop-browser-shadow-window .city-log-panel {
+  min-height: 100% !important;
+}
+
+.app-container.tab-admin.is-window-floating > .right-column,
+.app-container.tab-housing_social.is-window-floating > .right-column,
+.app-container.tab-city.is-window-floating > .right-column {
+  flex: 1 1 auto !important;
+  width: auto !important;
+  border-left: 1px solid rgba(114, 126, 151, 0.42) !important;
+  border-radius: 0 0 14px 14px !important;
+}
+
+.app-container.tab-admin.is-window-floating > .middle-column,
+.app-container.tab-housing_social.is-window-floating > .middle-column,
+.app-container.tab-city.is-window-floating > .middle-column {
+  display: none !important;
+}
+
+.app-container.tab-admin.is-window-floating > .right-column,
+.app-container.tab-housing_social.is-window-floating > .right-column,
+.app-container.tab-city.is-window-floating > .right-column {
+  flex: 1 1 auto !important;
+  width: auto !important;
+  border-left: 1px solid rgba(128, 139, 160, 0.62) !important;
+  border-radius: 0 0 var(--desktop-window-radius) var(--desktop-window-radius) !important;
+}
+
+.desktop-browser-shadow-window.tab-memory_library .memory-library-page,
+.desktop-browser-shadow-window.tab-mcp_lab .mcp-lab-panel,
+.desktop-browser-shadow-window.tab-settings .settings-command-center-page,
+.desktop-browser-shadow-window.tab-admin .admin-dashboard-page,
+.desktop-browser-shadow-window.tab-housing_social .housing-panel,
+.desktop-browser-shadow-window.tab-city .city-log-panel {
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 100% !important;
+  padding: clamp(18px, 2.3vw, 30px) !important;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(244, 248, 255, 0.86)),
+    radial-gradient(circle at 18% 14%, rgba(96, 165, 250, 0.18), transparent 34%),
+    radial-gradient(circle at 86% 12%, rgba(251, 207, 232, 0.2), transparent 30%) !important;
+}
+
+.desktop-browser-shadow-window.tab-commercial_street .plugin-content-shell > *,
+.desktop-browser-shadow-window.tab-pixel_cottage .plugin-content-shell > *,
+.desktop-browser-shadow-window.tab-memory_library .plugin-content-shell > *,
+.desktop-browser-shadow-window.tab-mcp_lab .plugin-content-shell > *,
+.desktop-browser-shadow-window.tab-settings .plugin-content-shell > *,
+.desktop-browser-shadow-window.tab-admin .plugin-content-shell > *,
+.desktop-browser-shadow-window.tab-housing_social .plugin-content-shell > *,
+.desktop-browser-shadow-window.tab-city .plugin-content-shell > * {
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+.command-page-hero,
+  .settings-command-profile-card,
+  .settings-command-workspace,
+  .memory-command-workspace,
+  .mcp-command-workspace,
+  .admin-command-workspace,
+  .housing-workbench,
+  .city-log-feed-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+.settings-command-profile-stats,
+  .settings-command-backup-card .settings-backup-actions,
+  .command-page-metrics,
+  .memory-lib-grid.stats,
+  .memory-lib-engine-grid,
+  .housing-command-grid,
+  .housing-summary-grid,
+  .city-log-stat-grid,
+  .admin-command-status-grid {
+    grid-template-columns: repeat(auto-fit, minmax(136px, 1fr)) !important;
+  }
+
+.memory-library-page,
+  .mcp-lab-panel__body,
+  .settings-command-center-page,
+  .admin-dashboard-page,
+  .housing-panel,
+  .city-log-panel {
+    padding: 14px !important;
+  }
+
+.command-page-metrics,
+  .settings-command-profile-stats,
+  .settings-command-backup-card .settings-backup-actions,
+  .memory-lib-grid.stats,
+  .memory-lib-engine-grid,
+  .housing-command-grid,
+  .housing-summary-grid,
+  .city-log-stat-grid,
+  .admin-command-status-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+.app-container:not(.tab-desktop).is-window-narrow .command-page-hero,
+.app-container:not(.tab-desktop).is-window-narrow .settings-command-profile-card,
+.app-container:not(.tab-desktop).is-window-narrow .settings-command-workspace,
+.app-container:not(.tab-desktop).is-window-narrow .memory-command-workspace,
+.app-container:not(.tab-desktop).is-window-narrow .mcp-command-workspace,
+.app-container:not(.tab-desktop).is-window-narrow .admin-command-workspace,
+.app-container:not(.tab-desktop).is-window-narrow .housing-workbench,
+.app-container:not(.tab-desktop).is-window-narrow .city-log-feed-layout,
+.app-container:not(.tab-desktop).is-window-narrow .memory-lib-rules,
+.app-container:not(.tab-desktop).is-window-narrow .memory-lib-columns,
+.app-container:not(.tab-desktop).is-window-narrow .memory-lib-buckets,
+.app-container:not(.tab-desktop).is-window-narrow .mcp-command-run-grid,
+.app-container:not(.tab-desktop).is-window-narrow .mcp-command-note-grid,
+.app-container:not(.tab-desktop).is-window-narrow .housing-command-grid,
+.app-container:not(.tab-desktop).is-window-narrow .housing-summary-grid,
+.app-container:not(.tab-desktop).is-window-narrow .city-log-stat-grid {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+.app-container.tab-city .city-log-panel {
+  height: 100% !important;
+  min-height: 0 !important;
+  box-sizing: border-box !important;
+}
+
+.app-container.tab-city .city-log-content,
+.app-container.tab-city .city-log-feed {
+  height: 100% !important;
+  min-height: 0 !important;
+  box-sizing: border-box !important;
+}
+
+.app-container.tab-city .city-log-feed-layout,
+.app-container.tab-city .city-log-main-panel,
+.app-container.tab-city .city-log-population-panel,
+.app-container.tab-city .city-log-announcement-panel,
+.app-container.tab-city .city-log-activity-panel {
+  min-height: 0 !important;
+  box-sizing: border-box !important;
+}
+

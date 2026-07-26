@@ -10,6 +10,7 @@ const LLM_DEBUG_DEFAULT_MAX_BYTES = 80 * 1024 * 1024;
 const LLM_DEBUG_DEFAULT_MAX_ROWS = 12000;
 const LLM_DEBUG_MIN_KEEP_ROWS = 1000;
 const LLM_DEBUG_PRUNE_INTERVAL_MS = 60 * 1000;
+const PIXEL_BEHAVIOR_TREE_STATE_MAX_BYTES = 1024 * 1024;
 const DB_STARTUP_VACUUM_MARKER_SUFFIX = '.vacuum-next';
 const DB_STARTUP_VACUUM_MIN_FREE_BYTES = 64 * 1024 * 1024;
 
@@ -141,7 +142,6 @@ function getUserDb(userId) {
         changes += runOptionalDelete('DELETE FROM private_context_summaries WHERE character_id = ?', id);
         changes += runOptionalDelete('DELETE FROM llm_cache WHERE character_id = ? OR cache_scope = ?', id, `character:${id}`);
         changes += runOptionalDelete('DELETE FROM scheduled_tasks WHERE character_id = ?', id);
-        changes += runOptionalDelete('DELETE FROM city_character_courses WHERE character_id = ?', id);
         changes += runOptionalDelete('DELETE FROM city_logs WHERE character_id = ?', id);
         changes += runOptionalDelete('DELETE FROM city_inventory WHERE character_id = ?', id);
         changes += runOptionalDelete('DELETE FROM city_schedules WHERE character_id = ?', id);
@@ -714,6 +714,13 @@ function getUserDb(userId) {
             payload TEXT NOT NULL,
             meta TEXT DEFAULT '{}',
             timestamp INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS pixel_behavior_tree_states (
+            scene_key TEXT PRIMARY KEY,
+            tree_json TEXT NOT NULL,
+            meta_json TEXT DEFAULT '{}',
+            updated_at INTEGER NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS reply_dispatch_logs (
@@ -1702,6 +1709,61 @@ function getUserDb(userId) {
             .all(characterId, safeLimit);
     }
 
+    function normalizePixelBehaviorTreeSceneKey(sceneKey) {
+        const safe = String(sceneKey || '').trim().slice(0, 80);
+        if (!safe || !/^[a-zA-Z0-9_.:-]+$/.test(safe)) return '';
+        return safe;
+    }
+
+    function getPixelBehaviorTreeState(sceneKey) {
+        const safeSceneKey = normalizePixelBehaviorTreeSceneKey(sceneKey);
+        if (!safeSceneKey) return null;
+        const row = db.prepare('SELECT * FROM pixel_behavior_tree_states WHERE scene_key = ?').get(safeSceneKey);
+        if (!row) return null;
+        return {
+            scene_key: row.scene_key,
+            tree: safeParseJson(row.tree_json, null),
+            meta: safeParseJson(row.meta_json, {}),
+            updated_at: row.updated_at
+        };
+    }
+
+    function upsertPixelBehaviorTreeState(sceneKey, treeState, meta = {}) {
+        const safeSceneKey = normalizePixelBehaviorTreeSceneKey(sceneKey);
+        if (!safeSceneKey) {
+            const error = new Error('Invalid pixel behavior tree scene key');
+            error.status = 400;
+            throw error;
+        }
+        if (!treeState || typeof treeState !== 'object' || Array.isArray(treeState)) {
+            const error = new Error('Invalid pixel behavior tree state');
+            error.status = 400;
+            throw error;
+        }
+        const treeJson = JSON.stringify(treeState);
+        if (treeJson.length > PIXEL_BEHAVIOR_TREE_STATE_MAX_BYTES) {
+            const error = new Error('Pixel behavior tree state is too large');
+            error.status = 413;
+            throw error;
+        }
+        const metaJson = JSON.stringify(meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {});
+        const updatedAt = Date.now();
+        db.prepare(`
+            INSERT INTO pixel_behavior_tree_states (scene_key, tree_json, meta_json, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(scene_key) DO UPDATE SET
+                tree_json = excluded.tree_json,
+                meta_json = excluded.meta_json,
+                updated_at = excluded.updated_at
+        `).run(safeSceneKey, treeJson, metaJson, updatedAt);
+        return {
+            scene_key: safeSceneKey,
+            tree: treeState,
+            meta: safeParseJson(metaJson, {}),
+            updated_at: updatedAt
+        };
+    }
+
     function addReplyDispatchLog(entry) {
         const stmt = db.prepare(`
             INSERT INTO reply_dispatch_logs (
@@ -1877,6 +1939,208 @@ function getUserDb(userId) {
             .all(characterId, beforeId, safeLimit)
             .reverse()
             .map(normalizeMessageRow);
+    }
+
+    function getMessagesAfter(characterId, afterId, limit = 100) {
+        const safeLimit = normalizeSqlLimit(limit, 100, 200);
+        return db.prepare('SELECT * FROM messages WHERE character_id = ? AND id > ? ORDER BY id ASC LIMIT ?')
+            .all(characterId, afterId, safeLimit)
+            .map(normalizeMessageRow);
+    }
+
+    function getMessagesAround(characterId, messageId, limit = 100) {
+        const safeLimit = normalizeSqlLimit(limit, 100, 200);
+        const safeMessageId = normalizePositiveRowId(messageId, 'message id');
+        const target = db.prepare('SELECT * FROM messages WHERE character_id = ? AND id = ?').get(characterId, safeMessageId);
+        if (!target) return getMessages(characterId, safeLimit);
+        const beforeLimit = Math.floor((safeLimit - 1) / 2);
+        const afterLimit = Math.max(0, safeLimit - 1 - beforeLimit);
+        const before = db.prepare('SELECT * FROM messages WHERE character_id = ? AND id < ? ORDER BY id DESC LIMIT ?')
+            .all(characterId, safeMessageId, beforeLimit)
+            .reverse();
+        const after = db.prepare('SELECT * FROM messages WHERE character_id = ? AND id > ? ORDER BY id ASC LIMIT ?')
+            .all(characterId, safeMessageId, afterLimit);
+        return [...before, target, ...after].map(normalizeMessageRow);
+    }
+
+    function escapeLikeSearchTerm(value = '') {
+        return String(value || '').replace(/[\\%_]/g, '\\$&');
+    }
+
+    function normalizeMessageSearchLimit(value, fallback = 80, max = 200) {
+        const parsed = Number(value);
+        if (!Number.isSafeInteger(parsed) || parsed <= 0) return fallback;
+        return Math.min(parsed, max);
+    }
+
+    function normalizeMessageSearchOffset(value) {
+        const parsed = Number(value);
+        if (!Number.isSafeInteger(parsed) || parsed < 0) return 0;
+        return Math.min(parsed, 100000);
+    }
+
+    function getPrivateSearchContextMessages(characterId, messageId, radius = 2) {
+        const safeMessageId = Number(messageId);
+        if (!characterId || !Number.isSafeInteger(safeMessageId) || safeMessageId <= 0) return [];
+        const profile = getUserProfile();
+        const character = getCharacter(characterId);
+        const before = db.prepare('SELECT id, role, content, timestamp FROM messages WHERE character_id = ? AND id < ? ORDER BY id DESC LIMIT ?')
+            .all(characterId, safeMessageId, radius)
+            .reverse();
+        const target = db.prepare('SELECT id, role, content, timestamp FROM messages WHERE character_id = ? AND id = ?')
+            .get(characterId, safeMessageId);
+        const after = db.prepare('SELECT id, role, content, timestamp FROM messages WHERE character_id = ? AND id > ? ORDER BY id ASC LIMIT ?')
+            .all(characterId, safeMessageId, radius);
+        return [...before, target, ...after]
+            .filter(Boolean)
+            .map(row => ({
+                message_id: Number(row.id || 0),
+                sender_role: row.role || '',
+                sender_name: row.role === 'user'
+                    ? (profile?.name || 'User')
+                    : (row.role === 'system' ? 'System' : (character?.name || 'Character')),
+                content: row.content || '',
+                timestamp: Number(row.timestamp || 0),
+                is_match: Number(row.id || 0) === safeMessageId
+            }));
+    }
+
+    function getGroupSearchContextMessages(groupId, messageId, radius = 2) {
+        const safeMessageId = Number(messageId);
+        if (!groupId || !Number.isSafeInteger(safeMessageId) || safeMessageId <= 0) return [];
+        const before = db.prepare('SELECT id, sender_id, sender_name, content, timestamp FROM group_messages WHERE group_id = ? AND id < ? ORDER BY id DESC LIMIT ?')
+            .all(groupId, safeMessageId, radius)
+            .reverse();
+        const target = db.prepare('SELECT id, sender_id, sender_name, content, timestamp FROM group_messages WHERE group_id = ? AND id = ?')
+            .get(groupId, safeMessageId);
+        const after = db.prepare('SELECT id, sender_id, sender_name, content, timestamp FROM group_messages WHERE group_id = ? AND id > ? ORDER BY id ASC LIMIT ?')
+            .all(groupId, safeMessageId, radius);
+        const profile = getUserProfile();
+        return [...before, target, ...after]
+            .filter(Boolean)
+            .map(row => {
+                const senderId = String(row.sender_id || '').trim();
+                const character = senderId && senderId !== 'user' && senderId !== 'system' ? getCharacter(senderId) : null;
+                return {
+                    message_id: Number(row.id || 0),
+                    sender_role: senderId,
+                    sender_name: senderId === 'user'
+                        ? (row.sender_name || profile?.name || 'User')
+                        : (senderId === 'system' ? 'System' : (row.sender_name || character?.name || senderId || 'Character')),
+                    content: row.content || '',
+                    timestamp: Number(row.timestamp || 0),
+                    is_match: Number(row.id || 0) === safeMessageId
+                };
+            });
+    }
+
+    function searchMessages(query, options = {}) {
+        const cleanQuery = String(query || '').trim();
+        if (!cleanQuery) return { results: [], has_more: false, next_offset: null, offset: 0, limit: 10 };
+        const scope = ['all', 'private', 'group'].includes(String(options.scope || '').trim())
+            ? String(options.scope || '').trim()
+            : 'all';
+        const limit = normalizeMessageSearchLimit(options.limit, 10, 10);
+        const offset = normalizeMessageSearchOffset(options.offset);
+        const pattern = `%${escapeLikeSearchTerm(cleanQuery)}%`;
+        const queryParts = [];
+        const params = [];
+
+        if (scope === 'all' || scope === 'private') {
+            queryParts.push(`
+                SELECT
+                    'private' AS scope,
+                    m.id AS message_id,
+                    m.character_id AS conversation_id,
+                    m.character_id AS character_id,
+                    NULL AS group_id,
+                    COALESCE(c.name, m.character_id) AS conversation_name,
+                    CASE
+                        WHEN m.role = 'user' THEN COALESCE(up.name, 'User')
+                        WHEN m.role IN ('character', 'assistant') THEN COALESCE(c.name, m.role)
+                        ELSE 'System'
+                    END AS sender_name,
+                    CASE
+                        WHEN m.role = 'user' THEN COALESCE(up.avatar, '')
+                        ELSE COALESCE(c.avatar, '')
+                    END AS sender_avatar,
+                    m.role AS sender_role,
+                    m.content AS content,
+                    m.timestamp AS timestamp
+                FROM messages m
+                JOIN characters c ON c.id = m.character_id
+                LEFT JOIN user_profile up ON up.id = 'default'
+                WHERE m.role IN ('user', 'character', 'assistant')
+                  AND m.content LIKE ? ESCAPE '\\'
+            `);
+            params.push(pattern);
+        }
+
+        if (scope === 'all' || scope === 'group') {
+            queryParts.push(`
+                SELECT
+                    'group' AS scope,
+                    gm.id AS message_id,
+                    gm.group_id AS conversation_id,
+                    NULL AS character_id,
+                    gm.group_id AS group_id,
+                    COALESCE(gc.name, gm.group_id) AS conversation_name,
+                    CASE
+                        WHEN gm.sender_id = 'user' THEN COALESCE(gm.sender_name, up.name, 'User')
+                        WHEN gm.sender_id = 'system' THEN 'System'
+                        ELSE COALESCE(gm.sender_name, c.name, gm.sender_id)
+                    END AS sender_name,
+                    CASE
+                        WHEN gm.sender_id = 'user' THEN COALESCE(gm.sender_avatar, up.avatar, '')
+                        ELSE COALESCE(gm.sender_avatar, c.avatar, '')
+                    END AS sender_avatar,
+                    gm.sender_id AS sender_role,
+                    gm.content AS content,
+                    gm.timestamp AS timestamp
+                FROM group_messages gm
+                JOIN group_chats gc ON gc.id = gm.group_id
+                LEFT JOIN user_profile up ON up.id = 'default'
+                LEFT JOIN characters c ON c.id = gm.sender_id
+                WHERE gm.sender_id != 'system'
+                  AND gm.content LIKE ? ESCAPE '\\'
+            `);
+            params.push(pattern);
+        }
+
+        const rows = db.prepare(`
+            SELECT *
+            FROM (
+                ${queryParts.join('\nUNION ALL\n')}
+            )
+            ORDER BY timestamp DESC, message_id DESC, scope ASC
+            LIMIT ? OFFSET ?
+        `).all(...params, limit + 1, offset);
+        const hasMore = rows.length > limit;
+        const pageRows = rows.slice(0, limit);
+
+        return {
+            results: pageRows.map(row => ({
+                id: `${row.scope}:${row.message_id}`,
+                scope: row.scope,
+                message_id: Number(row.message_id || 0),
+                conversation_id: row.conversation_id,
+                character_id: row.character_id,
+                group_id: row.group_id,
+                conversation_name: row.conversation_name || '',
+                sender_name: row.sender_name || '',
+                sender_avatar: row.sender_avatar || '',
+                sender_role: row.sender_role || '',
+                content: row.content || '',
+                timestamp: Number(row.timestamp || 0),
+                context_messages: row.scope === 'group'
+                    ? getGroupSearchContextMessages(row.group_id, row.message_id)
+                    : getPrivateSearchContextMessages(row.character_id, row.message_id)
+            })),
+            has_more: hasMore,
+            next_offset: hasMore ? offset + pageRows.length : null,
+            offset,
+            limit
+        };
     }
 
     function getLatestUserMessage(characterId) {
@@ -2791,6 +3055,32 @@ function getUserDb(userId) {
         if (!targetGroupId) return [];
         const safeLimit = normalizeGroupMessageQueryLimit(limit, 100, 200);
         return db.prepare('SELECT * FROM group_messages WHERE group_id = ? ORDER BY timestamp DESC LIMIT ?').all(targetGroupId, safeLimit).reverse();
+    }
+
+    function getGroupMessagesAround(groupId, messageId, limit = 100) {
+        const targetGroupId = String(groupId || '').trim();
+        if (!targetGroupId) return [];
+        const safeLimit = normalizeGroupMessageQueryLimit(limit, 100, 200);
+        const safeMessageId = normalizePositiveRowId(messageId, 'group message id');
+        const target = db.prepare('SELECT * FROM group_messages WHERE group_id = ? AND id = ?')
+            .get(targetGroupId, safeMessageId);
+        if (!target) return getGroupMessages(targetGroupId, safeLimit);
+        const beforeLimit = Math.floor((safeLimit - 1) / 2);
+        const afterLimit = Math.max(0, safeLimit - 1 - beforeLimit);
+        const before = db.prepare('SELECT * FROM group_messages WHERE group_id = ? AND id < ? ORDER BY id DESC LIMIT ?')
+            .all(targetGroupId, safeMessageId, beforeLimit)
+            .reverse();
+        const after = db.prepare('SELECT * FROM group_messages WHERE group_id = ? AND id > ? ORDER BY id ASC LIMIT ?')
+            .all(targetGroupId, safeMessageId, afterLimit);
+        return [...before, target, ...after];
+    }
+
+    function getGroupMessagesAfter(groupId, afterId, limit = 100) {
+        const targetGroupId = String(groupId || '').trim();
+        if (!targetGroupId) return [];
+        const safeLimit = normalizeGroupMessageQueryLimit(limit, 100, 200);
+        return db.prepare('SELECT * FROM group_messages WHERE group_id = ? AND id > ? ORDER BY id ASC LIMIT ?')
+            .all(targetGroupId, afterId, safeLimit);
     }
 
     function getVisibleGroupMessages(groupId, limit = 50, sinceTimestamp = 0) {
@@ -4017,6 +4307,8 @@ function getUserDb(userId) {
         addReplyDispatchLog,
         getEmotionLogs,
         getLlmDebugLogs,
+        getPixelBehaviorTreeState,
+        upsertPixelBehaviorTreeState,
         getLlmDebugLogStats,
         enforceLlmDebugLogRetention,
         getReplyDispatchLogs,
@@ -4026,6 +4318,9 @@ function getUserDb(userId) {
         deleteCharacter,
         getMessages,
         getMessagesBefore,
+        getMessagesAfter,
+        getMessagesAround,
+        searchMessages,
         getLatestUserMessage,
         getVisibleMessages,
         getVisibleMessagesSince,
@@ -4086,6 +4381,8 @@ function getUserDb(userId) {
         getGroup,
         deleteGroup,
         getGroupMessages,
+        getGroupMessagesAfter,
+        getGroupMessagesAround,
         addGroupMessage,
         clearGroupMessages,
         deleteGroupMessages,

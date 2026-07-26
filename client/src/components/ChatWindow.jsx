@@ -4,7 +4,8 @@ import InputBar from './InputBar';
 import TransferModal from './TransferModal';
 import RecommendModal from './RecommendModal';
 import AvatarWithFrame from './AvatarWithFrame';
-import { Send, Smile, Paperclip, Bell, Users, ShieldBan, Trash, BookOpen, Brain, MoreHorizontal, UserPlus, Gift, Heart, UserMinus, ShieldAlert, BadgeInfo, ChevronLeft } from 'lucide-react';
+import ConversationSearchPanel from './ConversationSearchPanel';
+import { Send, Smile, Paperclip, Bell, Users, ShieldBan, Trash, BookOpen, Brain, MoreHorizontal, UserPlus, Gift, Heart, UserMinus, ShieldAlert, BadgeInfo, ChevronLeft, Search } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 import { deriveEmotion, derivePhysicalState, getStateDisplayLabel } from '../utils/emotion';
@@ -127,11 +128,15 @@ function RagHeaderProgress({ progress, lang }) {
         Math.max(0, currentKeyIndex >= 0 ? currentKeyIndex : Number(displayStep || 1) - 1)
     );
     const railPercent = pipelineSteps.length > 1
-        ? Math.round((activeIndex / (pipelineSteps.length - 1)) * 100)
+        ? Math.round((Math.max(activeIndex, 0) / (pipelineSteps.length - 1)) * 100)
         : percent;
     const activeSegment = pipelineSteps.length > 1
         ? Math.round((100 / (pipelineSteps.length - 1)) * 100) / 100
         : 100;
+    const railStyle = {
+        '--rag-active-position': `${railPercent}%`,
+        '--rag-active-segment': `${activeSegment}%`
+    };
     const statusText = progress?.status === 'completed'
         ? (lang === 'en' ? 'Completed' : '\u5DF2\u5B8C\u6210')
         : progress?.status === 'error'
@@ -143,10 +148,7 @@ function RagHeaderProgress({ progress, lang }) {
     return (
         <div
             className="rag-header-rail"
-            style={{
-                '--rag-active-position': `${railPercent}%`,
-                '--rag-active-segment': `${activeSegment}%`
-            }}
+            style={railStyle}
             title={`${lang === 'en' ? 'RAG Pipeline' : 'RAG \u6D41\u7A0B'}: ${percent}% - ${statusText}`}
         >
             <div className="rag-header-rail__summary">
@@ -155,22 +157,24 @@ function RagHeaderProgress({ progress, lang }) {
                 <span className="rag-header-rail__eta">{lang === 'en' ? 'about 2-3s' : '\u9884\u8BA1 2-3 \u79D2'}</span>
             </div>
             <div className="rag-header-rail__track">
-                <span
-                    className="rag-header-rail__bar"
-                    style={{
-                        animation: displayStep > 0 && progress?.status !== 'completed' ? 'ragPulse 1.8s ease-in-out infinite' : 'none'
-                    }}
-                />
-                {pipelineSteps.map((step, index) => (
+                <div className="rag-header-rail__steps">
                     <span
-                        key={step.key}
-                        className={`rag-header-rail__step ${index < activeIndex ? 'is-complete' : ''} ${index === activeIndex ? 'is-active' : ''}`}
-                        style={{ left: `${(index / (pipelineSteps.length - 1)) * 100}%` }}
-                    >
-                        <span className="rag-header-rail__dot" />
-                        <span className="rag-header-rail__step-label">{lang === 'en' ? step.en : step.zh}</span>
-                    </span>
-                ))}
+                        className="rag-header-rail__bar"
+                        style={{
+                            animation: displayStep > 0 && progress?.status !== 'completed' ? 'ragPulse 1.8s ease-in-out infinite' : 'none'
+                        }}
+                    />
+                    {pipelineSteps.map((step, index) => (
+                        <span
+                            key={step.key}
+                            className={`rag-header-rail__step ${index < activeIndex ? 'is-complete' : ''} ${index === activeIndex ? 'is-active' : ''}`}
+                            style={{ left: `${(index / (pipelineSteps.length - 1)) * 100}%` }}
+                        >
+                            <span className="rag-header-rail__dot" />
+                            <span className="rag-header-rail__step-label">{lang === 'en' ? step.en : step.zh}</span>
+                        </span>
+                    ))}
+                </div>
             </div>
         </div>
     );
@@ -180,7 +184,8 @@ function ChatWindow({
     contact, allContacts, apiUrl, incomingMessageQueue, engineState,
     onToggleMemo, onToggleDiary, onToggleSettings,
     onPreloadMemo, onPreloadDiary, onPreloadSettings,
-    userAvatar, userAvatarFrame, onBack, isPrivateChatForegroundEnabled = false, chatLayoutKey = 'closed'
+    userAvatar, userAvatarFrame, onBack, isPrivateChatForegroundEnabled = false, chatLayoutKey = 'closed',
+    jumpTarget, onSearchResultSelect, onJumpHandled
 }) {
     const { t, lang } = useLanguage();
     const [messages, setMessages] = useState([]);
@@ -188,6 +193,11 @@ function ChatWindow({
     const [isRecommendModalOpen, setIsRecommendModalOpen] = useState(false);
     const [hasMore, setHasMore] = useState(false);
     const [loadingMore, setLoadingMore] = useState(false);
+    const [showConversationSearch, setShowConversationSearch] = useState(false);
+    const [highlightedMessageId, setHighlightedMessageId] = useState(null);
+    const [isSearchContextWindow, setIsSearchContextWindow] = useState(false);
+    const [hasNewer, setHasNewer] = useState(false);
+    const [loadingNewer, setLoadingNewer] = useState(false);
 
     const [selectMode, setSelectMode] = useState(false);
     const [selectedIds, setSelectedIds] = useState(new Set());
@@ -196,10 +206,15 @@ function ChatWindow({
     const processedIncomingMessageIdsRef = useRef(new Set());
     const deletedMessageIdsRef = useRef(new Set());
     const messagesEndRef = useRef(null);
+    const messageElementsRef = useRef(new Map());
+    const pendingJumpMessageIdRef = useRef(null);
+    const searchHighlightTimerRef = useRef(null);
     const isConversationPinnedToBottomRef = useRef(true);
+    const onJumpHandledRef = useRef(onJumpHandled);
     // contactRef keeps the current contact ID stable inside async callbacks
     const contactRef = useRef(contact);
     useEffect(() => { contactRef.current = contact; }, [contact]);
+    useEffect(() => { onJumpHandledRef.current = onJumpHandled; }, [onJumpHandled]);
 
     const isCurrentlyBlocked = engineState?.[contact?.id]?.isBlocked === 1;
     const ragProgress = engineState?.[contact?.id]?.ragProgress || {
@@ -214,10 +229,48 @@ function ChatWindow({
     const physical = derivePhysicalState(contact || {});
     const isModelOnline = hasPrimaryModelConfig(contact);
     const displayMessages = useMemo(() => collapseRepeatedApiErrors(messages), [messages]);
+    const jumpToken = String(jumpTarget?.token || '');
+    const jumpMessageId = useMemo(() => {
+        const targetMessageId = Number(jumpTarget?.messageId || jumpTarget?.message_id || 0);
+        const targetCharacterId = String(jumpTarget?.characterId || jumpTarget?.character_id || '').trim();
+        if (!Number.isSafeInteger(targetMessageId) || targetMessageId <= 0) return 0;
+        if (String(jumpTarget?.scope || 'private') !== 'private') return 0;
+        if (!contact?.id || targetCharacterId !== String(contact.id)) return 0;
+        return targetMessageId;
+    }, [contact?.id, jumpTarget]);
+    const jumpMessageIdRef = useRef(jumpMessageId);
+    useEffect(() => { jumpMessageIdRef.current = jumpMessageId; }, [jumpMessageId]);
 
     const getConversationScroller = useCallback(() => {
         const marker = messagesEndRef.current;
         return marker?.closest?.('.chat-history') || marker?.parentElement || null;
+    }, []);
+
+    const setMessageElement = useCallback((messageId, node) => {
+        const key = String(messageId || '');
+        if (!key) return;
+        if (node) {
+            messageElementsRef.current.set(key, node);
+        } else {
+            messageElementsRef.current.delete(key);
+        }
+    }, []);
+
+    const scrollToMessage = useCallback((messageId) => {
+        const key = String(messageId || '');
+        if (!key) return false;
+        const node = messageElementsRef.current.get(key);
+        if (!node) return false;
+        const shouldReduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+        node.scrollIntoView({ behavior: shouldReduceMotion ? 'auto' : 'smooth', block: 'center' });
+        isConversationPinnedToBottomRef.current = false;
+        setHighlightedMessageId(key);
+        if (searchHighlightTimerRef.current) window.clearTimeout(searchHighlightTimerRef.current);
+        searchHighlightTimerRef.current = window.setTimeout(() => {
+            setHighlightedMessageId((current) => (current === key ? null : current));
+            searchHighlightTimerRef.current = null;
+        }, 2600);
+        return true;
     }, []);
 
     const updateConversationPinnedState = useCallback(() => {
@@ -266,11 +319,16 @@ function ChatWindow({
         if (options.clear) {
             setMessages([]);
             setHasMore(false);
+            setIsSearchContextWindow(false);
+            setHasNewer(false);
+            isConversationPinnedToBottomRef.current = true;
         }
         return fetch(`${apiUrl}/messages/${contactRef.current.id}?limit=${PAGE_SIZE}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } })
             .then(res => res.json())
             .then(data => {
                 setMessages(normalizeMessages(data));
+                setIsSearchContextWindow(false);
+                setHasNewer(false);
                 // If we got a full page, there are probably more older messages
                 setHasMore(data.length >= PAGE_SIZE);
             })
@@ -280,13 +338,62 @@ function ChatWindow({
     // Fetch most recent messages when contact changes
     useEffect(() => {
         if (!contact?.id) return;
+        setShowConversationSearch(false);
+        if (jumpMessageIdRef.current) {
+            setMessages([]);
+            setHasMore(false);
+            setHasNewer(false);
+            return;
+        }
         fetchLatestMessages({ clear: true });
     }, [contact?.id, fetchLatestMessages]);
+
+    useEffect(() => () => {
+        if (searchHighlightTimerRef.current) window.clearTimeout(searchHighlightTimerRef.current);
+    }, []);
+
+    useEffect(() => {
+        if (!jumpMessageId || !contact?.id || !jumpToken) return undefined;
+        let cancelled = false;
+        const handledTarget = {
+            scope: 'private',
+            messageId: jumpMessageId,
+            characterId: contact.id,
+            token: jumpToken
+        };
+        pendingJumpMessageIdRef.current = jumpMessageId;
+        isConversationPinnedToBottomRef.current = false;
+        setShowConversationSearch(false);
+        setIsSearchContextWindow(true);
+        setHasNewer(false);
+        setLoadingMore(false);
+        fetch(`${apiUrl}/messages/${contact.id}?limit=${PAGE_SIZE}&around=${jumpMessageId}`, {
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` }
+        })
+            .then(res => res.json())
+            .then(data => {
+                if (cancelled || contactRef.current?.id !== contact.id) return;
+                const list = Array.isArray(data) ? data : [];
+                setMessages(normalizeMessages(list));
+                setHasMore(list.length >= PAGE_SIZE);
+                setHasNewer(list.length > 0);
+            })
+            .catch(err => {
+                if (!cancelled) console.error('Failed to jump to searched message:', err);
+            })
+            .finally(() => {
+                if (!cancelled) onJumpHandledRef.current?.(handledTarget);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [apiUrl, contact?.id, jumpMessageId, jumpToken]);
 
     useEffect(() => {
         const refreshActiveMessages = (event) => {
             const characterId = event?.detail?.characterId || event?.detail?.charId || event?.detail?.data?.character_id || '';
             if (characterId && characterId !== contactRef.current?.id) return;
+            if (!isConversationPinnedToBottomRef.current) return;
             fetchLatestMessages();
         };
         window.addEventListener('city_update', refreshActiveMessages);
@@ -330,6 +437,8 @@ function ChatWindow({
             if (event.detail?.characterId !== contactRef.current?.id) return;
             setMessages([]);
             setHasMore(false);
+            setIsSearchContextWindow(false);
+            setHasNewer(false);
             setSelectedIds(new Set());
             setSelectMode(false);
         };
@@ -357,6 +466,50 @@ function ChatWindow({
         }
         setLoadingMore(false);
     };
+
+    const loadNewerMessages = useCallback(async () => {
+        if (loadingNewer || messages.length === 0 || !contactRef.current?.id) return;
+        const newestId = messages.reduce((maxId, msg) => {
+            const id = Number(msg?.id);
+            return Number.isSafeInteger(id) && id > maxId ? id : maxId;
+        }, 0);
+        if (!newestId) {
+            setHasNewer(false);
+            return;
+        }
+        setLoadingNewer(true);
+        try {
+            const data = await fetch(
+                `${apiUrl}/messages/${contactRef.current.id}?limit=${PAGE_SIZE}&after=${newestId}`,
+                { headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } }
+            ).then(r => r.json());
+            const list = Array.isArray(data) ? data : [];
+            if (list.length > 0) {
+                isConversationPinnedToBottomRef.current = false;
+                setMessages(prev => {
+                    const seen = new Set(prev.map(msg => String(msg.id)));
+                    const fresh = list.filter(msg => !seen.has(String(msg.id)));
+                    return fresh.length > 0 ? normalizeMessages([...prev, ...fresh]) : prev;
+                });
+            }
+            setHasNewer(list.length >= PAGE_SIZE);
+        } catch (e) {
+            console.error('Failed to load newer messages:', e);
+        } finally {
+            setLoadingNewer(false);
+        }
+    }, [apiUrl, loadingNewer, messages]);
+
+    const handleConversationScroll = useCallback(() => {
+        updateConversationPinnedState();
+        if (!isSearchContextWindow || !hasNewer || loadingNewer) return;
+        const scroller = getConversationScroller();
+        if (!scroller) return;
+        const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+        if (distanceFromBottom <= 80) {
+            loadNewerMessages();
+        }
+    }, [getConversationScroller, hasNewer, isSearchContextWindow, loadingNewer, loadNewerMessages, updateConversationPinnedState]);
 
     // Handle new incoming WS messages Queue
     useEffect(() => {
@@ -391,20 +544,49 @@ function ChatWindow({
     }, [engineState, contact?.id, contact?.name]);
 
     useEffect(() => {
+        if (pendingJumpMessageIdRef.current) return;
+        if (!isConversationPinnedToBottomRef.current) return;
         scrollToConversationEnd('smooth');
     }, [messages, scrollToConversationEnd]);
 
     useEffect(() => {
+        const targetMessageId = pendingJumpMessageIdRef.current;
+        if (!targetMessageId) return undefined;
+        let secondFrame = null;
+        const timeoutIds = [];
+        const tryScroll = () => {
+            if (scrollToMessage(targetMessageId)) {
+                pendingJumpMessageIdRef.current = null;
+            }
+        };
+        const firstFrame = window.requestAnimationFrame(() => {
+            tryScroll();
+            secondFrame = window.requestAnimationFrame(tryScroll);
+        });
+        [120, 280, 520].forEach((delay) => {
+            timeoutIds.push(window.setTimeout(tryScroll, delay));
+        });
+        return () => {
+            window.cancelAnimationFrame(firstFrame);
+            if (secondFrame !== null) window.cancelAnimationFrame(secondFrame);
+            timeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
+        };
+    }, [messages, scrollToMessage]);
+
+    useEffect(() => {
         if (!isPrivateChatForegroundEnabled) return undefined;
+        if (pendingJumpMessageIdRef.current || !isConversationPinnedToBottomRef.current) return undefined;
 
         return scrollToConversationEndAfterLayout('smooth');
     }, [isPrivateChatForegroundEnabled, scrollToConversationEndAfterLayout]);
 
     useEffect(() => {
+        if (pendingJumpMessageIdRef.current || !isConversationPinnedToBottomRef.current) return undefined;
         return scrollToConversationEndAfterLayout('smooth');
     }, [selectMode, scrollToConversationEndAfterLayout]);
 
     useEffect(() => {
+        if (pendingJumpMessageIdRef.current || !isConversationPinnedToBottomRef.current) return undefined;
         return scrollToConversationEndAfterLayout('smooth', [60, 160, 320, 620]);
     }, [chatLayoutKey, scrollToConversationEndAfterLayout]);
 
@@ -414,6 +596,7 @@ function ChatWindow({
 
         let cancelPendingScroll = null;
         const observer = new ResizeObserver(() => {
+            if (pendingJumpMessageIdRef.current) return;
             if (!isConversationPinnedToBottomRef.current) return;
             if (cancelPendingScroll) cancelPendingScroll();
             cancelPendingScroll = scrollToConversationEndAfterLayout('auto', [90, 220]);
@@ -443,6 +626,9 @@ function ChatWindow({
             timestamp: Date.now()
         };
 
+        isConversationPinnedToBottomRef.current = true;
+        setIsSearchContextWindow(false);
+        setHasNewer(false);
         setMessages(prev => normalizeMessages([...prev, optimisticMessage]));
 
         try {
@@ -521,6 +707,8 @@ function ChatWindow({
             if (data.success && contactRef.current?.id === currentContactId) {
                 // Refresh messages to pick up the new transfer message with tid
                 const updated = await fetch(`${apiUrl}/messages/${currentContactId}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } }).then(r => r.json());
+                setIsSearchContextWindow(false);
+                setHasNewer(false);
                 setMessages(normalizeMessages(updated));
             }
         } catch (e) {
@@ -539,6 +727,8 @@ function ChatWindow({
             const data = await res.json();
             if (data.success) {
                 const updated = await fetch(`${apiUrl}/messages/${contactRef.current?.id}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` } }).then(r => r.json());
+                setIsSearchContextWindow(false);
+                setHasNewer(false);
                 setMessages(normalizeMessages(updated));
             } else {
                 alert(lang === 'en' ? 'Failed to recommend contact: ' + data.error : '推荐联系人失败: ' + data.error);
@@ -601,6 +791,11 @@ function ChatWindow({
                     </div>
                 </div>
                 <div className="chat-header-actions">
+                    <button onClick={() => setShowConversationSearch(value => !value)} title={lang === 'en' ? 'Search all conversations' : '搜索全部对话'}
+                        style={showConversationSearch ? { color: 'var(--accent-color)', background: 'rgba(var(--accent-rgb, 74,144,226), 0.12)', borderRadius: '8px' } : {}}>
+                        <Search size={20} />
+                        <span>{lang === 'en' ? 'Search' : '搜索'}</span>
+                    </button>
                     <button onClick={() => { setSelectMode(m => !m); setSelectedIds(new Set()); }} title={lang === 'en' ? 'Select Messages' : '选择消息'}
                         style={selectMode ? { color: 'var(--accent-color)', background: 'rgba(var(--accent-rgb, 74,144,226), 0.12)', borderRadius: '8px' } : {}}>
                         <Trash size={20} />
@@ -625,13 +820,20 @@ function ChatWindow({
                 </div>
             </div>
 
+            <ConversationSearchPanel
+                apiUrl={apiUrl}
+                isOpen={showConversationSearch}
+                onClose={() => setShowConversationSearch(false)}
+                onResultSelect={onSearchResultSelect}
+            />
+
             {isCurrentlyBlocked && (
                 <div style={{ textAlign: 'center', padding: '8px', background: '#ffebeb', color: 'var(--danger)', fontSize: '14px', fontWeight: 'bold', borderBottom: '1px solid #ffcccc' }}>
                     {lang === 'en' ? `You are blocked by ${contact.name}. You cannot send messages.` : `你已被 ${contact.name} 拉黑，暂时无法发送消息。`}
                 </div>
             )}
 
-            <div className="chat-history" onScroll={updateConversationPinnedState}>
+            <div className="chat-history" onScroll={handleConversationScroll}>
                 {hasMore && (
                     <div style={{ textAlign: 'center', padding: '10px' }}>
                         <button
@@ -649,7 +851,7 @@ function ChatWindow({
                 )}
                 {displayMessages.map((msg, idx) => {
                     const currentLimit = contact?.context_msg_limit || 60;
-                    const isBoundary = idx === Math.max(0, displayMessages.length - currentLimit) && displayMessages.length > currentLimit;
+                    const isBoundary = !isSearchContextWindow && idx === Math.max(0, displayMessages.length - currentLimit) && displayMessages.length > currentLimit;
                     const boundaryElement = isBoundary ? (
                         <div key={`boundary-${msg.id}`} style={{ textAlign: 'center', margin: '30px 0', position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                             <div style={{ borderBottom: '1px dashed #ccc', position: 'absolute', top: '20px', left: '10%', right: '10%' }}></div>
@@ -666,7 +868,10 @@ function ChatWindow({
                     return (
                         <React.Fragment key={msg.id}>
                             {boundaryElement}
-                            <div style={{
+                            <div
+                            ref={(node) => setMessageElement(msg.id, node)}
+                            className={`conversation-message-anchor ${String(highlightedMessageId || '') === String(msg.id) ? 'is-search-target' : ''}`}
+                            style={{
                                 display: 'flex', alignItems: 'flex-start', gap: '0px',
                                 ...(isSelected ? { backgroundColor: 'rgba(var(--accent-rgb, 74,144,226), 0.08)', borderRadius: '8px' } : {})
                             }}
@@ -710,6 +915,21 @@ function ChatWindow({
                         </React.Fragment>
                     );
                 })}
+                {isSearchContextWindow && hasNewer && (
+                    <div style={{ textAlign: 'center', padding: '10px' }}>
+                        <button
+                            onClick={loadNewerMessages}
+                            disabled={loadingNewer}
+                            style={{
+                                fontSize: '12px', color: 'var(--text-secondary)', background: 'rgba(255, 247, 250, 0.92)',
+                                border: '1px solid #ddd', borderRadius: '12px',
+                                padding: '5px 16px', cursor: loadingNewer ? 'default' : 'pointer'
+                            }}
+                        >
+                            {loadingNewer ? t('Loading') : (lang === 'en' ? '↓ Load newer messages' : '↓ 加载更新的消息')}
+                        </button>
+                    </div>
+                )}
                 <div ref={messagesEndRef} />
             </div>
 

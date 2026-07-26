@@ -2,30 +2,56 @@
 
 import {
   AlertTriangle,
+  Armchair,
+  ArrowLeft,
+  ArrowRight,
   BadgeDollarSign,
+  BadgeCent,
   BedDouble,
+  Brain,
   Building2,
   ChevronDown,
   ChevronRight,
+  Check,
   CheckCircle2,
+  Circle,
   CircleDashed,
   Clock3,
   Edit3,
+  Eye,
+  Flower2,
+  HeartHandshake,
   Home,
+  HouseHeart,
   KeyRound,
+  Megaphone,
   MessageSquareText,
+  MessagesSquare,
+  NotebookText,
   Play,
   Plus,
+  RotateCw,
   Save,
+  Scale,
+  ScrollText,
   Send,
+  Settings2,
+  SlidersHorizontal,
   Sparkles,
+  Store,
   Trash2,
   UserRound,
+  Users,
   WalletCards,
   WandSparkles,
   X
 } from 'lucide-react';
 import { useLanguage } from '../../LanguageContext';
+import {
+  getRoomEditorItemRenderZIndex,
+  roomEditorAsset,
+  roomEditorAssetCatalog
+} from '../pixelWorld/roomEditorCore';
 import './HousingSocialPanel.css';
 
 const textZh = {
@@ -78,6 +104,19 @@ const textZh = {
   manual: '手动',
   auto: '自动',
   agencyFailed: '中介所 AI 执行失败：',
+  classProfiles: '阶层与租客画像',
+  classProfilesHint: '这些画像会影响租房偏好、消费倾向和社交门槛。',
+  addClass: '保存阶层',
+  className: '阶层名称',
+  classEmoji: '图标',
+  classDescription: '画像描述',
+  workBias: '工作倾向',
+  consumptionBias: '消费倾向',
+  prestigeBias: '体面倾向',
+  socialBarrier: '社交门槛',
+  commonLocations: '常见地点',
+  emptyClasses: '还没有阶层画像。',
+  walletRefreshed: '已刷新付款角色钱包。',
   officeName: '门店名称',
   agentName: '顾问名称',
   officeDistrict: '门店分区',
@@ -150,7 +189,12 @@ const textZh = {
   payRent: '交房租',
   saving: '保存中...',
   untriggered: '未触发',
-  agencyPlaceholder: '商业街'
+  agencyPlaceholder: '商业街',
+  assignedHome: '已指派住房',
+  signed: '已签约',
+  declined: '已拒绝',
+  rejectedInsufficientFunds: '余额不足被拒',
+  completed: '已完成'
 };
 
 const textEn = {
@@ -203,6 +247,19 @@ const textEn = {
   manual: 'Manual',
   auto: 'Auto',
   agencyFailed: 'Agency AI failed:',
+  classProfiles: 'Class & Tenant Profiles',
+  classProfilesHint: 'These profiles influence rent preference, spending bias, and social barriers.',
+  addClass: 'Save Class',
+  className: 'Class Name',
+  classEmoji: 'Icon',
+  classDescription: 'Profile Description',
+  workBias: 'Work Bias',
+  consumptionBias: 'Consumption Bias',
+  prestigeBias: 'Prestige Bias',
+  socialBarrier: 'Social Barrier',
+  commonLocations: 'Common Locations',
+  emptyClasses: 'No class profiles yet.',
+  walletRefreshed: 'Payer wallet refreshed.',
   officeName: 'Office Name',
   agentName: 'Agent Name',
   officeDistrict: 'Office District',
@@ -297,7 +354,7 @@ const text = new Proxy(textZh, {
 
 const homePresets = [
   { key: 'old_apartment_chunheli', title: '老破小', subtitle: '春和里 4栋302', values: { id: 'old_apartment_chunheli_4_302', name: '春和里小区 4栋302', emoji: '🏚️', weekly_rent: 22, deposit: 40, sale_price: 380, comfort: 8, prestige: 2, privacy: 4, description: '一室一厅，老式水泥楼，五楼步梯，屋里采光一般但通风还行。家具旧，墙皮有点起鼓，厨房很小，卫生间是老式布局。优点是便宜、离便利店近、对刚落脚的人压力最小；缺点是压抑、隔音差、夏天闷、体面感很弱。' } },
-  { key: 'shared_room_xinyuan', title: '合租单间', subtitle: '欣园公寓 2单元801-A室', values: { id: 'shared_room_xinyuan_2_801', name: '欣园公寓 2单元801-A室', emoji: '🛏️', weekly_rent: 28, deposit: 60, sale_price: 0, comfort: 12, prestige: 6, privacy: 8, description: '三室一厅里的朝南次卧，简约出租房风格，床、衣柜、书桌都有，公共区域和另外两位租客共用。优点是预算友好、生活机能方便、房间基本齐全；缺点是要看室友脸色，做饭和洗澡高峰期会挤，真正的私人空间有限。' } },
+  { key: 'shared_room_xinyuan', title: '合租单间', subtitle: '欣园公寓 2单元801-A室', values: { id: 'shared_room_xinyuan_2_801', name: '欣园公寓 2单元801-A室', emoji: '🛏️', weekly_rent: 28, deposit: 60, sale_price: 0, comfort: 12, prestige: 6, privacy: 8, description: '三室一厅里的朝南次卧，简约出租房风格，床、衣柜、书架都有，公共区域和另外两位租客共用。优点是预算友好、生活机能方便、房间基本齐全；缺点是要看室友脸色，做饭和洗澡高峰期会挤，真正的私人空间有限。' } },
   { key: 'shared_flat_jingan', title: '普通合租', subtitle: '静安新村 6栋502', values: { id: 'shared_flat_jingan_6_502', name: '静安新村 6栋502', emoji: '🏠', weekly_rent: 35, deposit: 80, sale_price: 0, comfort: 18, prestige: 10, privacy: 14, description: '两室一厅标准合租，日常居住氛围比较稳定，客厅和厨房都能正常使用，装修是普通白墙木地板风格。优点是住法最常见、性价比稳、位置不偏；缺点是没什么惊喜，房子本身偏普通，谈不上特别舒服或特别有面子。' } },
   { key: 'studio_yuecheng', title: '独立公寓', subtitle: '悦城公馆 11楼1107', values: { id: 'studio_yuecheng_11_1107', name: '悦城公馆 11楼1107', emoji: '🏢', weekly_rent: 58, deposit: 120, sale_price: 980, comfort: 28, prestige: 22, privacy: 24, description: '一室户带独立卫浴和小厨房，现代简装，采光不错，晚上回家会有比较完整的个人空间。优点是安静、独处感强、适合想把生活收回自己手里的人；缺点是租金明显更高，空间不算大，长期住会开始在意收纳。' } },
   { key: 'riverside_lanwan', title: '江景公寓', subtitle: '澜湾国际 17楼1703', values: { id: 'riverside_lanwan_17_1703', name: '澜湾国际 17楼1703', emoji: '🌉', weekly_rent: 95, deposit: 220, sale_price: 1680, comfort: 40, prestige: 38, privacy: 32, description: '两室一厅带大落地窗，偏现代轻奢风，客厅能看到江景，白天和夜景都很能撑场面。优点是舒适、体面、很适合约人来家里坐；缺点是贵，生活成本会被整体抬高，住进去之后很难再接受太差的房子。' } },
@@ -366,31 +423,57 @@ const shell = {
 };
 
 const emptyHome = { id: '', name: '', emoji: '', description: '', weekly_rent: 0, deposit: 0, sale_price: 0, comfort: 0, prestige: 0, privacy: 0, is_enabled: 1, sort_order: 0 };
+const emptySocialClass = {
+  id: '',
+  name: '',
+  emoji: '🧩',
+  description: '',
+  work_bias: 0,
+  consumption_bias: 0,
+  prestige_bias: 0,
+  social_barrier: 0,
+  common_locations: '',
+  is_enabled: 1,
+  sort_order: 0
+};
 const emptyAgency = { enabled: 1, agency_name: '', agent_name: '', office_district: 'street', business_scope: '', persona_prompt: '', decision_interval_hours: 6, model_char_id: 'auto', next_ad_at: 0, last_ad_at: 0, last_error: '', last_error_at: 0 };
 const roomEditorStorageKey = 'pixelWorld.room.layout';
 const roomEditorCanvasStorageKey = 'pixelWorld.room.canvas';
 const roomEditorSizeProfileStorageKey = 'pixelWorld.room.sizeProfile';
 const roomEditorAssemblyStorageKey = 'pixelWorld.room.assemblyExperiment';
+const roomEditorAssemblyPreviewStorageKey = 'pixelWorld.room.assemblyPreview';
 const roomEditorLayoutUpdatedEvent = 'pixel-world-room-layout-updated';
+const roomEditorFurnitureScaleVersion = 'large-furniture-no-desk-v1';
+const roomEditorSizeProfileVersion = `${roomEditorFurnitureScaleVersion}:kind-size-v1`;
+const roomEditorMaxStorageBytes = 200000;
 const roomEditorStageSize = { width: 1254, height: 1254 };
 const roomEditorBackdrop = '/assets/pixel-world/generated-rooms/backgrounds/empty-square-room-v1.png';
+const roomAssemblyPreviewVersion = 'social-housing-room-assembly-preview-v3-upper-room';
+const roomAssemblyPreviewImageSize = roomEditorStageSize.width;
+const roomAssemblyPreviewSourceCrop = {
+  x: 0,
+  y: Math.round(roomEditorStageSize.height * 0.06),
+  w: roomEditorStageSize.width,
+  h: Math.round(roomEditorStageSize.height * 0.5)
+};
+const roomAssemblyPreviewMaxStorageBytes = 4000000;
 const roomAssemblyWallArtVisualBounds = { minY: -48, maxBottomY: 273 };
 const roomAssemblyBedTopBaselineY = 79;
 const roomAssemblyCalibratedSizeProfile = {
-  bed: { w: 268, h: 289, sourceAssetId: 'room_front_bed_mint_garden_v1' },
-  nightstand: { w: 96, h: 114, sourceAssetId: 'room_front_ocean_nightstand_v1' },
-  wardrobe: { w: 193, h: 271, sourceAssetId: 'room_front_ocean_wardrobe_v1' },
-  vanity: { w: 213, h: 265, sourceAssetId: 'room_front_ocean_vanity_v1' },
-  desk: { w: 430, h: 337, sourceAssetId: 'room_front_peach_desk_v1' },
+  bed: { w: 343, h: 370, sourceAssetId: 'room_front_bed_scandinavian_blue_v1' },
+  nightstand: { w: 185, h: 220, sourceAssetId: 'room_front_ocean_nightstand_v1' },
+  wardrobe: { w: 235, h: 330, sourceAssetId: 'room_front_ocean_wardrobe_v1' },
+  vanity: { w: 271, h: 340, sourceAssetId: 'room_front_ocean_vanity_v1' },
   bookshelf: { w: 291, h: 444, sourceAssetId: 'room_front_mint_bookshelf_v1' },
   sofa: { w: 526, h: 362, sourceAssetId: 'room_front_mint_sofa_v1' },
-  rug: { w: 310, h: 187, sourceAssetId: 'room_decor_mint_rug_v1' },
-  floorLamp: { w: 145, h: 258, sourceAssetId: 'room_decor_mint_table_lamp_v1' },
-  wallArt: { w: 257, h: 155, sourceAssetId: 'room_decor_mint_wall_art_v1' }
+  rug: { w: 430, h: 260, sourceAssetId: 'room_decor_mint_rug_v1' },
+  floorLamp: { w: 230, h: 410, sourceAssetId: 'room_decor_mint_table_lamp_v1' },
+  wallArt: { w: 390, h: 235, sourceAssetId: 'room_decor_mint_wall_art_v1' }
 };
 const roomAssemblyPalettes = {
   budget: {
     label: '蜜桃基础套装',
+    style: '蜜桃柠檬',
     bedGroup: 'bed_peach_lemon',
     nightstandGroup: 'ocean_nightstand',
     wardrobeGroup: 'ocean_wardrobe',
@@ -399,6 +482,7 @@ const roomAssemblyPalettes = {
   },
   standard: {
     label: '薄荷日常套装',
+    style: '薄荷花园',
     bedGroup: 'bed_mint_garden',
     nightstandGroup: 'ocean_nightstand',
     wardrobeGroup: 'ocean_wardrobe',
@@ -438,13 +522,12 @@ const roomAssemblyDirectionLabels = {
 };
 const roomAssemblyGridSize = { cols: 16, rows: 16 };
 const roomAssemblyCoreKinds = ['wardrobe', 'vanity', 'bed', 'nightstand'];
-const roomAssemblyKinds = ['wardrobe', 'vanity', 'bed', 'nightstand', 'desk', 'bookshelf', 'sofa', 'rug', 'floorLamp', 'wallArt'];
+const roomAssemblyKinds = ['wardrobe', 'vanity', 'bed', 'nightstand', 'bookshelf', 'sofa', 'rug', 'floorLamp', 'wallArt'];
 const roomAssemblyKindLabels = {
   wardrobe: '衣柜',
   vanity: '梳妆台',
   bed: '床',
   nightstand: '床头柜',
-  desk: '书桌',
   bookshelf: '书架',
   sofa: '沙发',
   rug: '地毯',
@@ -452,7 +535,7 @@ const roomAssemblyKindLabels = {
   wallArt: '墙面装饰'
 };
 const roomAssemblyAllowedDirections = new Set(['front', 'back', 'left', 'right']);
-const roomAssemblyDirectionalKinds = new Set(['bed', 'nightstand', 'wardrobe', 'vanity', 'desk', 'bookshelf', 'sofa']);
+const roomAssemblyDirectionalKinds = new Set(['bed', 'nightstand', 'wardrobe', 'vanity', 'bookshelf', 'sofa']);
 const roomAssemblyWallBufferCells = 2;
 const roomAssemblyVisualFloorLineOffsetCells = 0.5;
 const roomAssemblyBedTopBaselineMinGridY = Math.max(0, Math.ceil(
@@ -464,7 +547,6 @@ const roomAssemblyDefaultScaleByKind = {
   bed: 0.78,
   nightstand: 0.52,
   wardrobe: 0.82,
-  desk: 0.72,
   vanity: 0.78,
   bookshelf: 0.78,
   sofa: 0.68,
@@ -512,7 +594,6 @@ function makeRoomAssemblyShopItem(assetId, name, kind, style, price, box, option
 const roomAssemblyShopItems = [
   makeRoomAssemblyShopItem('room_front_bed_scandinavian_blue_v1', '北欧蓝白床', 'bed', '北欧蓝白', 115, { x: 82, y: 754, w: 343, h: 370 }),
   makeRoomAssemblyShopItem('room_front_scandinavian_wardrobe_v1', '北欧衣柜', 'wardrobe', '北欧蓝白', 85, { x: 88, y: 412, w: 235, h: 330 }),
-  makeRoomAssemblyShopItem('room_front_scandinavian_desk_v1', '北欧书桌', 'desk', '北欧蓝白', 80, { x: 438, y: 630, w: 350, h: 275 }),
   makeRoomAssemblyShopItem('room_front_scandinavian_bookshelf_v1', '北欧书柜', 'bookshelf', '北欧蓝白', 75, { x: 840, y: 352, w: 300, h: 390 }),
   makeRoomAssemblyShopItem('room_front_scandinavian_sofa_v1', '北欧沙发', 'sofa', '北欧蓝白', 110, { x: 660, y: 750, w: 420, h: 290 }),
   makeRoomAssemblyShopItem('room_decor_scandinavian_rug_v1', '北欧雪纹地毯', 'rug', '北欧蓝白', 38, { x: 420, y: 882, w: 430, h: 260 }, { directional: false, groundLayer: true, collision: { enabled: false, x: 0, y: 0, w: 1, h: 1 } }),
@@ -520,7 +601,6 @@ const roomAssemblyShopItems = [
   makeRoomAssemblyShopItem('room_decor_scandinavian_wall_art_v1', '北欧雪山挂画', 'wallArt', '北欧蓝白', 30, { x: 500, y: 302, w: 390, h: 235 }, { directional: false, collision: { enabled: false, x: 0, y: 0, w: 1, h: 1 } }),
 
   makeRoomAssemblyShopItem('room_front_bed_peach_lemon_v1', '蜜桃柠檬床', 'bed', '蜜桃柠檬', 70, { x: 82, y: 754, w: 343, h: 370 }),
-  makeRoomAssemblyShopItem('room_front_peach_desk_v1', '蜜桃书桌', 'desk', '蜜桃柠檬', 50, { x: 438, y: 630, w: 350, h: 275 }),
   makeRoomAssemblyShopItem('room_front_peach_bookshelf_v1', '蜜桃书柜', 'bookshelf', '蜜桃柠檬', 45, { x: 840, y: 352, w: 300, h: 390 }),
   makeRoomAssemblyShopItem('room_front_peach_sofa_v1', '蜜桃沙发', 'sofa', '蜜桃柠檬', 65, { x: 660, y: 750, w: 420, h: 290 }),
   makeRoomAssemblyShopItem('room_decor_peach_rug_v1', '蜜桃柠檬地毯', 'rug', '蜜桃柠檬', 20, { x: 420, y: 882, w: 430, h: 260 }, { directional: false, groundLayer: true, collision: { enabled: false, x: 0, y: 0, w: 1, h: 1 } }),
@@ -538,7 +618,6 @@ const roomAssemblyShopItems = [
   makeRoomAssemblyShopItem('room_front_ocean_nightstand_v1', '贝壳床头柜', 'nightstand', '海洋贝壳', 40, { x: 414, y: 887, w: 185, h: 220 }),
   makeRoomAssemblyShopItem('room_front_ocean_wardrobe_v1', '贝壳衣柜', 'wardrobe', '海洋贝壳', 100, { x: 88, y: 412, w: 235, h: 330 }),
   makeRoomAssemblyShopItem('room_front_ocean_vanity_v1', '贝壳梳妆台', 'vanity', '海洋贝壳', 95, { x: 476, y: 506, w: 271, h: 340 }),
-  makeRoomAssemblyShopItem('room_front_ocean_desk_v1', '贝壳书桌', 'desk', '海洋贝壳', 100, { x: 438, y: 630, w: 350, h: 275 }),
   makeRoomAssemblyShopItem('room_front_ocean_sofa_v1', '贝壳沙发', 'sofa', '海洋贝壳', 130, { x: 660, y: 750, w: 420, h: 290 }),
   makeRoomAssemblyShopItem('room_decor_ocean_rug_v1', '贝壳华毯', 'rug', '海洋贝壳', 45, { x: 420, y: 882, w: 430, h: 260 }, { directional: false, groundLayer: true, collision: { enabled: false, x: 0, y: 0, w: 1, h: 1 } }),
   makeRoomAssemblyShopItem('room_decor_ocean_floor_lamp_v1', '贝壳落地灯', 'floorLamp', '海洋贝壳', 45, { x: 906, y: 526, w: 230, h: 410 }, { directional: false, collision: { enabled: true, x: 0.34, y: 0.78, w: 0.32, h: 0.18 } }),
@@ -548,7 +627,6 @@ const roomAssemblyShopItems = [
   makeRoomAssemblyShopItem('room_front_cloud_nightstand_v1', '云朵床头柜', 'nightstand', '云朵梦幻', 55, { x: 414, y: 887, w: 185, h: 220 }),
   makeRoomAssemblyShopItem('room_front_cloud_wardrobe_v1', '云朵衣柜', 'wardrobe', '云朵梦幻', 135, { x: 88, y: 412, w: 235, h: 330 }),
   makeRoomAssemblyShopItem('room_front_cloud_vanity_v1', '云朵梳妆台', 'vanity', '云朵梦幻', 130, { x: 476, y: 506, w: 260, h: 340 }),
-  makeRoomAssemblyShopItem('room_front_cloud_desk_v1', '云朵书桌', 'desk', '云朵梦幻', 130, { x: 438, y: 630, w: 350, h: 275 }),
   makeRoomAssemblyShopItem('room_front_cloud_bookshelf_v1', '云朵书架', 'bookshelf', '云朵梦幻', 120, { x: 840, y: 352, w: 300, h: 390 }),
   makeRoomAssemblyShopItem('room_front_cloud_sofa_v1', '云朵沙发', 'sofa', '云朵梦幻', 170, { x: 660, y: 750, w: 420, h: 290 }),
   makeRoomAssemblyShopItem('room_decor_cloud_rug_v1', '云月华毯', 'rug', '云朵梦幻', 60, { x: 420, y: 882, w: 430, h: 260 }, { directional: false, groundLayer: true, collision: { enabled: false, x: 0, y: 0, w: 1, h: 1 } }),
@@ -559,7 +637,6 @@ const roomAssemblyShopItems = [
   makeRoomAssemblyShopItem('room_front_candy_nightstand_v1', '糖果床头柜', 'nightstand', '糖果粉彩', 70, { x: 414, y: 887, w: 185, h: 220 }),
   makeRoomAssemblyShopItem('room_front_candy_wardrobe_v1', '糖果衣柜', 'wardrobe', '糖果粉彩', 175, { x: 88, y: 412, w: 235, h: 330 }),
   makeRoomAssemblyShopItem('room_front_candy_vanity_v1', '糖果梳妆台', 'vanity', '糖果粉彩', 165, { x: 476, y: 506, w: 273, h: 340 }),
-  makeRoomAssemblyShopItem('room_front_candy_desk_v1', '糖果书桌', 'desk', '糖果粉彩', 165, { x: 438, y: 630, w: 350, h: 275 }),
   makeRoomAssemblyShopItem('room_front_candy_bookshelf_v1', '糖果书架', 'bookshelf', '糖果粉彩', 155, { x: 840, y: 352, w: 300, h: 390 }),
   makeRoomAssemblyShopItem('room_front_candy_sofa_v1', '糖果沙发', 'sofa', '糖果粉彩', 220, { x: 660, y: 750, w: 420, h: 290 }),
   makeRoomAssemblyShopItem('room_decor_candy_rug_v1', '糖心华毯', 'rug', '糖果粉彩', 75, { x: 408, y: 872, w: 450, h: 270 }, { directional: false, groundLayer: true, collision: { enabled: false, x: 0, y: 0, w: 1, h: 1 } }),
@@ -567,6 +644,8 @@ const roomAssemblyShopItems = [
   makeRoomAssemblyShopItem('room_decor_candy_wall_art_v1', '糖果甜景画', 'wallArt', '糖果粉彩', 60, { x: 492, y: 300, w: 420, h: 245 }, { directional: false, collision: { enabled: false, x: 0, y: 0, w: 1, h: 1 } })
 ];
 const roomAssemblyShopByAssetId = new Map(roomAssemblyShopItems.map((item) => [item.assetId, item]));
+const roomAssemblyPreviewAssetById = new Map(roomEditorAssetCatalog.map((asset) => [asset.id, asset]));
+const roomAssemblyPreviewImageCache = new Map();
 
 function formatMoney(value) { const num = Number(value || 0); return Number.isFinite(num) ? num.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1') : '0'; }
 function formatTime(value) {
@@ -947,9 +1026,6 @@ function normalizeRoomAssemblyKind(value) {
     vanity: 'vanity',
     dresser: 'vanity',
     '梳妆台': 'vanity',
-    desk: 'desk',
-    table: 'desk',
-    '书桌': 'desk',
     bookshelf: 'bookshelf',
     bookcase: 'bookshelf',
     shelf: 'bookshelf',
@@ -990,66 +1066,268 @@ function getRoomAssemblyShopItemForAsset(assetId) {
   const baseAssetId = getRoomAssemblyBaseAssetId(assetId);
   return roomAssemblyShopByAssetId.get(baseAssetId) || null;
 }
-function getRoomAssemblyKindFromAssetId(assetId) {
-  const shopItem = getRoomAssemblyShopItemForAsset(assetId);
-  if (shopItem?.kind) return shopItem.kind;
-  const value = String(assetId || '').toLowerCase();
-  if (value.includes('nightstand')) return 'nightstand';
-  if (value.includes('wardrobe')) return 'wardrobe';
-  if (value.includes('vanity')) return 'vanity';
-  if (value.includes('bookshelf')) return 'bookshelf';
-  if (value.includes('sofa')) return 'sofa';
-  if (value.includes('desk')) return 'desk';
-  if (value.includes('floor_lamp') || value.includes('floor-lamp') || value.includes('table_lamp') || value.includes('table-lamp')) return 'floorLamp';
-  if (value.includes('wall_art') || value.includes('wall-art')) return 'wallArt';
-  if (value.includes('rug')) return 'rug';
-  if (value.includes('_bed_') || value.includes('front_bed') || value.includes('bed_')) return 'bed';
-  return '';
+
+function getRoomAssemblyPreviewAsset(assetId) {
+  const value = String(assetId || '').trim();
+  return roomAssemblyPreviewAssetById.get(value)
+    || roomAssemblyPreviewAssetById.get(getRoomAssemblyBaseAssetId(value))
+    || null;
 }
-function buildRoomAssemblySizeProfile(items = []) {
-  return (Array.isArray(items) ? items : []).reduce((profile, item) => {
-    const kind = normalizeRoomAssemblyKind(item?.assemblyKind) || getRoomAssemblyKindFromAssetId(item?.assetId);
-    const w = Math.round(toNum(item?.w, 0));
-    const h = Math.round(toNum(item?.h, 0));
-    if (!kind || w < 8 || h < 8) return profile;
-    const current = profile[kind];
-    const area = w * h;
-    if (!current || area > current.w * current.h) {
-      profile[kind] = { w, h, sourceAssetId: String(item?.assetId || '') };
+
+function getRoomAssemblyPreviewAssetSrc(assetId) {
+  const asset = getRoomAssemblyPreviewAsset(assetId);
+  return asset?.path ? roomEditorAsset(asset.path) : '';
+}
+
+function loadRoomAssemblyPreviewImage(src) {
+  const value = String(src || '');
+  if (!value || typeof window === 'undefined') return Promise.resolve(null);
+  const cached = roomAssemblyPreviewImageCache.get(value);
+  if (cached) return cached;
+  const promise = new Promise((resolve) => {
+    const image = new window.Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => {
+      roomAssemblyPreviewImageCache.delete(value);
+      resolve(null);
+    };
+    image.src = value;
+  });
+  roomAssemblyPreviewImageCache.set(value, promise);
+  return promise;
+}
+
+function getRoomAssemblyPreviewFallbackZIndex(item = {}, index = 0) {
+  if (item.groundLayer === true) return 100 + index;
+  return 60000 + Math.round((toNum(item.y) + toNum(item.h) * 0.92) * 10) + (index % 5);
+}
+
+function getRoomAssemblyPreviewZIndex(item = {}, index = 0) {
+  const asset = getRoomAssemblyPreviewAsset(item.assetId);
+  return asset
+    ? getRoomEditorItemRenderZIndex(item, asset, index)
+    : getRoomAssemblyPreviewFallbackZIndex(item, index);
+}
+
+function stripAgencyRoomAssemblyPreview(snapshot = {}) {
+  if (!snapshot || typeof snapshot !== 'object') return snapshot;
+  const { previewImage, ...rest } = snapshot;
+  return rest;
+}
+
+function doesRoomAssemblyPreviewMatchSnapshot(snapshot = {}, payload = {}) {
+  if (!payload?.previewImage?.dataUrl) return false;
+  const payloadSavedAt = toNum(payload.savedAt, 0);
+  const snapshotSavedAt = toNum(snapshot.savedAt, 0);
+  if (payloadSavedAt && snapshotSavedAt && payloadSavedAt !== snapshotSavedAt) return false;
+  const payloadSelectedId = String(payload.selectedId || '');
+  const snapshotSelectedId = String(snapshot.selectedId || '');
+  if (payloadSelectedId && snapshotSelectedId && payloadSelectedId !== snapshotSelectedId) return false;
+  return true;
+}
+
+function readAgencyRoomAssemblyPreview(snapshot = {}) {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    const raw = window.localStorage.getItem(roomEditorAssemblyPreviewStorageKey);
+    if (!raw || raw.length > roomAssemblyPreviewMaxStorageBytes + 20000) return null;
+    const payload = JSON.parse(raw);
+    return doesRoomAssemblyPreviewMatchSnapshot(snapshot, payload) ? payload.previewImage : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeAgencyRoomAssemblyPreview(snapshot = {}, previewImage = null) {
+  if (!previewImage?.dataUrl) {
+    localStorage.removeItem(roomEditorAssemblyPreviewStorageKey);
+    return null;
+  }
+  const payload = {
+    selectedId: String(snapshot.selectedId || ''),
+    savedAt: toNum(snapshot.savedAt, 0),
+    homeId: String(snapshot.home?.id || ''),
+    previewImage
+  };
+  localStorage.setItem(roomEditorAssemblyPreviewStorageKey, JSON.stringify(payload));
+  return previewImage;
+}
+
+function readAgencyRoomAssemblySnapshotFromRoomEditorLayout() {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    const rawLayout = window.localStorage.getItem(roomEditorStorageKey);
+    if (!rawLayout) return null;
+    const layout = JSON.parse(rawLayout);
+    if (!layout || !Array.isArray(layout.items) || layout.items.length === 0) return null;
+    const rawCanvas = window.localStorage.getItem(roomEditorCanvasStorageKey);
+    const canvas = rawCanvas ? JSON.parse(rawCanvas) : null;
+    const assembledBy = canvas?.assembledBy && typeof canvas.assembledBy === 'object'
+      ? canvas.assembledBy
+      : {};
+    const source = String(layout.source || assembledBy.source || '');
+    const isAgencyAssembly = source.includes('room-assembly')
+      || Array.isArray(assembledBy.purchases)
+      || Boolean(assembledBy.home?.id || assembledBy.home?.name);
+    if (!isAgencyAssembly) return null;
+    const snapshot = {
+      selectedId: String(layout.selectedId || layout.items[0]?.id || ''),
+      savedAt: toNum(layout.savedAt || assembledBy.savedAt, Date.now()),
+      source: source || 'social-housing-agency-room-assembly-recovered',
+      home: {
+        id: String(assembledBy.home?.id || ''),
+        name: String(assembledBy.home?.name || ''),
+        emoji: String(assembledBy.home?.emoji || ''),
+        weekly_rent: toNum(assembledBy.home?.weekly_rent),
+        comfort: toNum(assembledBy.home?.comfort),
+        prestige: toNum(assembledBy.home?.prestige),
+        privacy: toNum(assembledBy.home?.privacy)
+      },
+      palette: String(assembledBy.palette || ''),
+      budget: toNum(assembledBy.budget, 0),
+      spent: toNum(assembledBy.spent, 0),
+      purchases: Array.isArray(assembledBy.purchases) ? assembledBy.purchases : summarizeRoomAssemblyPurchases(layout.items),
+      furnitureScaleVersion: String(layout.furnitureScaleVersion || assembledBy.furnitureScaleVersion || roomEditorFurnitureScaleVersion),
+      sizeProfile: layout.sizeProfile || assembledBy.sizeProfile || getRoomAssemblyCurrentSizeProfile(),
+      directions: assembledBy.directions || {},
+      ai: assembledBy.ai || null,
+      items: layout.items
+    };
+    const previewImage = readAgencyRoomAssemblyPreview(snapshot);
+    return { ...snapshot, ...(previewImage ? { previewImage } : {}) };
+  } catch {
+    return null;
+  }
+}
+
+function readAgencyRoomAssemblySnapshot() {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    const raw = window.localStorage.getItem(roomEditorAssemblyStorageKey);
+    if (!raw) {
+      const recovered = readAgencyRoomAssemblySnapshotFromRoomEditorLayout();
+      if (recovered) writeAgencyRoomAssemblySnapshot(recovered);
+      return recovered;
     }
-    return profile;
-  }, {});
+    const snapshot = JSON.parse(raw);
+    if (!snapshot || !Array.isArray(snapshot.items)) {
+      const recovered = readAgencyRoomAssemblySnapshotFromRoomEditorLayout();
+      if (recovered) writeAgencyRoomAssemblySnapshot(recovered);
+      return recovered;
+    }
+    const cleanSnapshot = stripAgencyRoomAssemblyPreview(snapshot);
+    const previewImage = readAgencyRoomAssemblyPreview(cleanSnapshot) || snapshot.previewImage || null;
+    if (snapshot.previewImage || raw.length > roomEditorMaxStorageBytes) {
+      writeAgencyRoomAssemblySnapshot({ ...cleanSnapshot, ...(previewImage ? { previewImage } : {}) });
+    }
+    return { ...cleanSnapshot, ...(previewImage ? { previewImage } : {}) };
+  } catch {
+    const recovered = readAgencyRoomAssemblySnapshotFromRoomEditorLayout();
+    if (recovered) writeAgencyRoomAssemblySnapshot(recovered);
+    return recovered;
+  }
 }
+
+function writeAgencyRoomAssemblySnapshot(snapshot) {
+  const cleanSnapshot = stripAgencyRoomAssemblyPreview(snapshot);
+  localStorage.setItem(roomEditorAssemblyStorageKey, JSON.stringify(cleanSnapshot));
+  try {
+    writeAgencyRoomAssemblyPreview(cleanSnapshot, snapshot?.previewImage || null);
+  } catch (error) {
+    console.warn('Room assembly preview storage failed:', error);
+    try {
+      localStorage.removeItem(roomEditorAssemblyPreviewStorageKey);
+    } catch {
+      // Ignore cleanup failures; the room layout snapshot has already been saved.
+    }
+  }
+  return { ...cleanSnapshot, ...(snapshot?.previewImage ? { previewImage: snapshot.previewImage } : {}) };
+}
+
+function isRoomAssemblySnapshotPreviewCurrent(snapshot = {}) {
+  const preview = snapshot?.previewImage;
+  return Boolean(
+    preview?.dataUrl
+    && preview.version === roomAssemblyPreviewVersion
+    && toNum(preview.width, 0) >= roomAssemblyPreviewImageSize
+    && toNum(preview.crop?.y, -1) === roomAssemblyPreviewSourceCrop.y
+    && toNum(preview.crop?.h, -1) === roomAssemblyPreviewSourceCrop.h
+  );
+}
+
 function normalizeRoomAssemblySizeProfile(value = {}) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return Object.entries(value).reduce((profile, [kind, size]) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { version: roomEditorSizeProfileVersion, kindSizes: {} };
+  }
+  if (value.version !== roomEditorSizeProfileVersion || !value.kindSizes || typeof value.kindSizes !== 'object' || Array.isArray(value.kindSizes)) {
+    return { version: roomEditorSizeProfileVersion, kindSizes: {} };
+  }
+  const kindSizes = Object.entries(value.kindSizes).reduce((profile, [kind, size]) => {
     const safeKind = normalizeRoomAssemblyKind(kind);
     const w = Math.round(toNum(size?.w, 0));
     const h = Math.round(toNum(size?.h, 0));
-    if (!safeKind || w < 8 || h < 8) return profile;
+    if (!roomAssemblyCalibratedSizeProfile[safeKind] || w < 8 || h < 8) return profile;
     profile[safeKind] = {
       w,
       h,
-      sourceAssetId: String(size?.sourceAssetId || '')
+      sourceAssetId: getRoomAssemblyBaseAssetId(size?.sourceAssetId || ''),
+      updatedAt: Math.max(0, Math.round(toNum(size?.updatedAt, 0)))
     };
     return profile;
   }, {});
+  return { version: roomEditorSizeProfileVersion, kindSizes };
 }
-function getRoomAssemblyCurrentSizeProfile() {
-  if (typeof window === 'undefined') return { ...roomAssemblyCalibratedSizeProfile };
+
+function readRoomAssemblyUserSizeProfile() {
   try {
-    const storedLayout = JSON.parse(window.localStorage.getItem(roomEditorStorageKey) || '[]');
-    const storedLayoutItems = Array.isArray(storedLayout) ? storedLayout : storedLayout?.items;
-    const layoutProfile = buildRoomAssemblySizeProfile(storedLayoutItems);
-    const storedProfile = normalizeRoomAssemblySizeProfile(JSON.parse(window.localStorage.getItem(roomEditorSizeProfileStorageKey) || '{}'));
-    return { ...roomAssemblyCalibratedSizeProfile, ...layoutProfile, ...storedProfile };
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return { version: roomEditorSizeProfileVersion, kindSizes: {} };
+    }
+    const raw = window.localStorage.getItem(roomEditorSizeProfileStorageKey);
+    if (!raw || raw.length > roomEditorMaxStorageBytes) {
+      if (raw) window.localStorage.removeItem(roomEditorSizeProfileStorageKey);
+      return { version: roomEditorSizeProfileVersion, kindSizes: {} };
+    }
+    const normalized = normalizeRoomAssemblySizeProfile(JSON.parse(raw));
+    if (!Object.keys(normalized.kindSizes).length) {
+      window.localStorage.removeItem(roomEditorSizeProfileStorageKey);
+    }
+    return normalized;
   } catch {
-    return { ...roomAssemblyCalibratedSizeProfile };
+    try {
+      window.localStorage.removeItem(roomEditorSizeProfileStorageKey);
+    } catch {
+      // Ignore storage access failures; room assembly can fall back to code defaults.
+    }
+    return { version: roomEditorSizeProfileVersion, kindSizes: {} };
   }
 }
+
+function buildRoomAssemblySizeProfile() {
+  const userProfile = readRoomAssemblyUserSizeProfile();
+  return {
+    version: roomEditorSizeProfileVersion,
+    kindSizes: {
+      ...roomAssemblyCalibratedSizeProfile,
+      ...userProfile.kindSizes
+    }
+  };
+}
+
+function getRoomAssemblyCurrentSizeProfile() {
+  return buildRoomAssemblySizeProfile();
+}
+
+function getRoomAssemblySizeProfileKindCount(sizeProfile = {}) {
+  return Object.keys(normalizeRoomAssemblySizeProfile(sizeProfile).kindSizes).length;
+}
+
 function applyRoomAssemblySizeProfile(box = {}, kind = '', sizeProfile = {}) {
   const safeKind = normalizeRoomAssemblyKind(kind);
-  const size = safeKind ? sizeProfile?.[safeKind] : null;
+  const normalizedProfile = normalizeRoomAssemblySizeProfile(sizeProfile);
+  const size = safeKind
+    ? normalizedProfile.kindSizes[safeKind] || roomAssemblyCalibratedSizeProfile[safeKind]
+    : null;
   if (!size) return box;
   return {
     ...box,
@@ -1109,7 +1387,8 @@ function getRoomAssemblyItemSize(palette, kind, direction, sizeProfile = {}) {
         : kind === 'vanity'
           ? { w: palette.vanityW || 273, h: 340 }
           : { w: 120, h: 120 };
-  return applyRoomAssemblySizeProfile(baseSize, kind, sizeProfile);
+  const scaledBaseSize = scaleRoomAssemblyBoxByKind(baseSize, kind);
+  return applyRoomAssemblySizeProfile({ w: scaledBaseSize.w, h: scaledBaseSize.h }, kind, sizeProfile);
 }
 function clampRoomAssemblyBox(box, bounds = {}) {
   const w = Math.max(1, Math.round(box.w || 1));
@@ -1203,27 +1482,30 @@ function getRoomAssemblyPlacementGridBounds(kind) {
   return { minY: 4, fallbackY: 4 };
 }
 function getRoomAssemblyFurnitureContext(sizeProfile = {}) {
-  return roomAssemblyShopItems.map((item) => ({
-    assetId: item.assetId,
-    item: item.kind,
-    label: item.name,
-    style: item.style,
-    price: item.price,
-    maxQuantity: item.maxQuantity,
-    preferred_dir: item.preferred_dir,
-    directional: item.directional,
-    cells: {
-      front: getRoomAssemblyCellsForBox(applyRoomAssemblySizeProfile(item.box, item.kind, sizeProfile)),
-      side: item.directional ? 'directional variant may change width' : undefined
-    },
-    size_px: {
-      w: applyRoomAssemblySizeProfile(item.box, item.kind, sizeProfile).w,
-      h: applyRoomAssemblySizeProfile(item.box, item.kind, sizeProfile).h
-    },
-    ...(item.kind === 'bed'
-      ? { constraints: { top_baseline_y_px: roomAssemblyBedTopBaselineY, min_grid_y: roomAssemblyBedTopBaselineMinGridY } }
-      : {})
-  }));
+  return roomAssemblyShopItems.map((item) => {
+    const profiledBox = applyRoomAssemblySizeProfile(item.box, item.kind, sizeProfile);
+    return {
+      assetId: item.assetId,
+      item: item.kind,
+      label: item.name,
+      style: item.style,
+      price: item.price,
+      maxQuantity: item.maxQuantity,
+      preferred_dir: item.preferred_dir,
+      directional: item.directional,
+      cells: {
+        front: getRoomAssemblyCellsForBox(profiledBox),
+        side: item.directional ? 'directional variant may change width' : undefined
+      },
+      size_px: {
+        w: profiledBox.w,
+        h: profiledBox.h
+      },
+      ...(item.kind === 'bed'
+        ? { constraints: { top_baseline_y_px: roomAssemblyBedTopBaselineY, min_grid_y: roomAssemblyBedTopBaselineMinGridY } }
+        : {})
+    };
+  });
 }
 function getRoomAssemblyDirections(seed, home = {}) {
   return {
@@ -1245,7 +1527,11 @@ function getRoomAssemblyDirectionSummary(home = {}) {
   return `${labels.bed} ${directionLabels[directions.bed]} / ${labels.nightstand} ${directionLabels[directions.nightstand]} / ${labels.wardrobe} ${directionLabels[directions.wardrobe]} / ${labels.vanity} ${directionLabels[directions.vanity]}`;
 }
 function getRoomAssemblyFallbackShopItem(palette, kind) {
-  const style = roomAssemblyShopByAssetId.get(roomAssemblyAssetId(palette.bedGroup, 'front'))?.style || '';
+  if (kind === 'bed') {
+    const bedItem = roomAssemblyShopByAssetId.get(roomAssemblyAssetId(palette.bedGroup, 'front'));
+    if (bedItem) return bedItem;
+  }
+  const style = palette.style || roomAssemblyShopByAssetId.get(roomAssemblyAssetId(palette.bedGroup, 'front'))?.style || '';
   return roomAssemblyShopItems.find((item) => item.kind === kind && item.style === style)
     || roomAssemblyShopItems.find((item) => item.kind === kind)
     || null;
@@ -1260,7 +1546,6 @@ function buildFallbackRoomAssemblyItems(home = {}, palette = pickRoomAssemblyPal
     { kind: 'vanity', x: 6, y: 4 },
     { kind: 'bed', x: 2 + (seed % 2), y: 4 },
     { kind: 'nightstand', x: 7, y: 10 },
-    { kind: 'desk', x: 10, y: 4 },
     { kind: 'bookshelf', x: 10, y: 8 },
     { kind: 'sofa', x: 8, y: 10 },
     { kind: 'rug', x: 3, y: 9 },
@@ -1293,18 +1578,19 @@ function getRoomAssemblyPlacementPriority(kind) {
     bed: 10,
     wardrobe: 20,
     vanity: 30,
-    desk: 40,
-    bookshelf: 50,
-    sofa: 60,
-    nightstand: 70,
-    floorLamp: 80,
-    wallArt: 90,
-    rug: 100
+    bookshelf: 40,
+    sofa: 50,
+    nightstand: 60,
+    floorLamp: 70,
+    wallArt: 80,
+    rug: 90
   };
   return order[kind] || 999;
 }
 const roomAssemblySingleInstanceKinds = new Set(['wallArt']);
-const roomAssemblyWallFriendlyKinds = new Set(['bed', 'wardrobe', 'vanity', 'desk', 'bookshelf', 'sofa']);
+const roomAssemblyWallFriendlyKinds = new Set(['bed', 'wardrobe', 'vanity', 'bookshelf', 'sofa']);
+const roomAssemblyNonCollisionKinds = new Set(['rug', 'wallArt']);
+const roomAssemblyWallArtOccluderKinds = new Set(['bed', 'wardrobe', 'vanity', 'bookshelf', 'sofa']);
 function getRoomAssemblyRawGridCoordinate(value, fallback = roomAssemblyWallBufferCells) {
   const num = toNum(value, fallback);
   return Number.isFinite(num) ? num : fallback;
@@ -1338,20 +1624,11 @@ function getRoomAssemblyPlacementCandidates(kind, footprint = {}, requestedX, re
   }
   return candidates.sort((a, b) => (a.distance - b.distance) || (a.wallScore - b.wallScore) || (a.y - b.y) || (a.x - b.x));
 }
-function isRoomAssemblyRequestedGridInsideBounds(kind, footprint = {}, requestedX, requestedY) {
-  const requestedGridX = Math.round(toNum(requestedX, Number.NaN));
-  const requestedGridY = Math.round(toNum(requestedY, Number.NaN));
-  if (!Number.isFinite(requestedGridX) || !Number.isFinite(requestedGridY)) return false;
-  const placementBounds = getRoomAssemblyPlacementGridBounds(kind);
-  const xRange = getRoomAssemblyGridAxisRange(footprint.cols, roomAssemblyGridSize.cols);
-  const yRange = getRoomAssemblyGridAxisRange(footprint.rows, roomAssemblyGridSize.rows, placementBounds.minY, placementBounds.maxY);
-  return requestedGridX >= xRange.min
-    && requestedGridX <= xRange.max
-    && requestedGridY >= yRange.min
-    && requestedGridY <= yRange.max;
+function isRoomAssemblyCollisionItem(item = {}) {
+  return Boolean(item && !roomAssemblyNonCollisionKinds.has(item.assemblyKind));
 }
-function getRoomAssemblyOverlapArea(a, b, padding = 8) {
-  if (!a || !b || ['rug', 'wallArt'].includes(a.assemblyKind) || ['rug', 'wallArt'].includes(b.assemblyKind)) return 0;
+function getRoomAssemblyBoxOverlapArea(a, b, padding = 8) {
+  if (!a || !b) return 0;
   const left = Math.max(toNum(a.x), toNum(b.x));
   const top = Math.max(toNum(a.y), toNum(b.y));
   const right = Math.min(toNum(a.x) + toNum(a.w), toNum(b.x) + toNum(b.w));
@@ -1361,8 +1638,95 @@ function getRoomAssemblyOverlapArea(a, b, padding = 8) {
   if (w <= padding || h <= padding) return 0;
   return w * h;
 }
+function getRoomAssemblyOverlapArea(a, b, padding = 8) {
+  if (!isRoomAssemblyCollisionItem(a) || !isRoomAssemblyCollisionItem(b)) return 0;
+  return getRoomAssemblyBoxOverlapArea(a, b, padding);
+}
 function getRoomAssemblyOverlapScore(item, existingItems = []) {
   return existingItems.reduce((sum, existing) => sum + getRoomAssemblyOverlapArea(item, existing), 0);
+}
+function getRoomAssemblyWallArtCoverageScore(item, existingItems = []) {
+  if (!item) return 0;
+  return existingItems.reduce((sum, existing) => {
+    if (
+      item.assemblyKind === 'wallArt'
+      && roomAssemblyWallArtOccluderKinds.has(existing?.assemblyKind)
+    ) {
+      return sum + getRoomAssemblyBoxOverlapArea(item, existing, 0);
+    }
+    if (
+      existing?.assemblyKind === 'wallArt'
+      && roomAssemblyWallArtOccluderKinds.has(item.assemblyKind)
+    ) {
+      return sum + getRoomAssemblyBoxOverlapArea(item, existing, 0);
+    }
+    return sum;
+  }, 0);
+}
+function buildRoomAssemblyResolvedCandidate(item, candidate, existingItems = []) {
+  if (!item) return null;
+  return {
+    item,
+    x: candidate?.x ?? 0,
+    y: candidate?.y ?? 0,
+    distance: candidate?.distance ?? 0,
+    wallScore: candidate?.wallScore ?? 0,
+    overlapScore: getRoomAssemblyOverlapScore(item, existingItems),
+    wallArtScore: getRoomAssemblyWallArtCoverageScore(item, existingItems)
+  };
+}
+function compareRoomAssemblyResolvedCandidate(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  if (a.overlapScore !== b.overlapScore) return a.overlapScore < b.overlapScore ? a : b;
+  if (a.wallArtScore !== b.wallArtScore) return a.wallArtScore < b.wallArtScore ? a : b;
+  if (a.distance !== b.distance) return a.distance < b.distance ? a : b;
+  if (a.wallScore !== b.wallScore) return a.wallScore < b.wallScore ? a : b;
+  if (a.y !== b.y) return a.y < b.y ? a : b;
+  if (a.x !== b.x) return a.x < b.x ? a : b;
+  return a;
+}
+function resolveRoomAssemblyPlacementItem(palette, placement, index = 0, kind = '', existingItems = [], sizeProfile = {}) {
+  const baseItem = buildRoomAssemblyItemFromPlacement(palette, placement, index, sizeProfile);
+  if (!baseItem) return null;
+  const safeKind = normalizeRoomAssemblyKind(kind || baseItem.assemblyKind);
+  const footprint = getRoomAssemblyGridFootprint(baseItem);
+  const candidates = getRoomAssemblyPlacementCandidates(safeKind, footprint, placement?.x, placement?.y);
+  const resolved = candidates.reduce((best, candidate) => {
+    const candidateItem = buildRoomAssemblyItemFromPlacement(palette, placement, index, sizeProfile, candidate);
+    return compareRoomAssemblyResolvedCandidate(
+      best,
+      buildRoomAssemblyResolvedCandidate(candidateItem, candidate, existingItems)
+    );
+  }, null);
+  const winner = resolved?.item || baseItem;
+  const overlapScore = resolved ? resolved.overlapScore : getRoomAssemblyOverlapScore(winner, existingItems);
+  if (overlapScore > 0 && isRoomAssemblyCollisionItem(winner)) return null;
+  return winner;
+}
+function getRoomAssemblyPlacementFromItem(item = {}) {
+  const kind = normalizeRoomAssemblyKind(item.assemblyKind || getRoomAssemblyShopItemForAsset(item.assetId)?.kind);
+  const cellW = roomEditorStageSize.width / roomAssemblyGridSize.cols;
+  const cellH = roomEditorStageSize.height / roomAssemblyGridSize.rows;
+  const visualOffset = getRoomAssemblyVisualOffset(kind, item);
+  const visualGridY = (toNum(item.y, 0) - visualOffset.y) / cellH;
+  return {
+    assetId: getRoomAssemblyBaseAssetId(item.assetId),
+    item: kind,
+    x: Math.round((toNum(item.x, 0) - visualOffset.x) / cellW),
+    y: Math.round(kind === 'wallArt' ? visualGridY : visualGridY + roomAssemblyVisualFloorLineOffsetCells),
+    dir: item.direction || 'front'
+  };
+}
+function resolveRoomAssemblyExistingItem(palette, item, index = 0, existingItems = [], sizeProfile = {}) {
+  return resolveRoomAssemblyPlacementItem(
+    palette,
+    getRoomAssemblyPlacementFromItem(item),
+    index,
+    item?.assemblyKind,
+    existingItems,
+    sizeProfile
+  );
 }
 function buildRoomAssemblyItemFromPlacement(palette, placement, index = 0, sizeProfile = {}, gridOverride = null) {
   const requestedAssetId = String(placement?.assetId || placement?.asset_id || placement?.asset || '').trim();
@@ -1433,41 +1797,11 @@ function buildRoomAssemblyAiItems(palette, aiAssembly, sizeProfile = {}) {
   const kindCounts = {};
   placements
     .map((placement, index) => ({ placement, index, kind: getRoomAssemblyPlacementKind(placement) }))
+    .sort((a, b) => getRoomAssemblyPlacementPriority(a.kind) - getRoomAssemblyPlacementPriority(b.kind) || a.index - b.index)
     .forEach(({ placement, index, kind }) => {
       if (roomAssemblySingleInstanceKinds.has(kind) && kindCounts[kind] >= 1) return;
-      const baseItem = buildRoomAssemblyItemFromPlacement(palette, placement, index, sizeProfile);
-      if (!baseItem) return;
-      if (baseItem.assemblyKind !== 'wallArt') {
-        items.push(baseItem);
-        kindCounts[baseItem.assemblyKind] = (kindCounts[baseItem.assemblyKind] || 0) + 1;
-        return;
-      }
-      const footprint = getRoomAssemblyGridFootprint(baseItem);
-      const baseScore = getRoomAssemblyOverlapScore(baseItem, items);
-      if (isRoomAssemblyRequestedGridInsideBounds(kind || baseItem.assemblyKind, footprint, placement?.x, placement?.y) && baseScore <= 0) {
-        items.push(baseItem);
-        kindCounts[baseItem.assemblyKind] = (kindCounts[baseItem.assemblyKind] || 0) + 1;
-        return;
-      }
-      const candidates = getRoomAssemblyPlacementCandidates(kind || baseItem.assemblyKind, footprint, placement?.x, placement?.y);
-      const resolvedItem = candidates.reduce((best, candidate) => {
-        const candidateItem = buildRoomAssemblyItemFromPlacement(palette, placement, index, sizeProfile, candidate);
-        const score = getRoomAssemblyOverlapScore(candidateItem, items);
-        if (
-          !best
-          || score < best.score
-          || (score === best.score && candidate.distance < best.distance)
-          || (score === best.score && candidate.distance === best.distance && candidate.wallScore < best.wallScore)
-          || (score === best.score && candidate.distance === best.distance && candidate.wallScore === best.wallScore && candidate.y < best.y)
-          || (score === best.score && candidate.distance === best.distance && candidate.wallScore === best.wallScore && candidate.y === best.y && candidate.x < best.x)
-        ) {
-          return { item: candidateItem, score, wallScore: candidate.wallScore, distance: candidate.distance, x: candidate.x, y: candidate.y };
-        }
-        return best;
-      }, null);
-      const item = resolvedItem?.item || baseItem;
+      const item = resolveRoomAssemblyPlacementItem(palette, placement, index, kind, items, sizeProfile);
       if (!item) return;
-      if (resolvedItem?.score > 0 && !roomAssemblyCoreKinds.includes(item.assemblyKind)) return;
       items.push(item);
       kindCounts[item.assemblyKind] = (kindCounts[item.assemblyKind] || 0) + 1;
     });
@@ -1498,11 +1832,16 @@ function buildAgencyRoomAssembly(home = {}, aiAssembly = null, sizeProfile = get
   const aiItems = buildRoomAssemblyAiItems(palette, aiAssembly, sizeProfile);
   const hasAiLayout = aiItems.length > 0;
   const presentCoreKinds = new Set(aiItems.map((item) => item.assemblyKind).filter(Boolean));
-  const missingCoreItems = roomAssemblyCoreKinds
-    .filter((kind) => !presentCoreKinds.has(kind))
-    .map((kind) => fallbackByKind.get(kind))
-    .filter(Boolean);
-  const items = hasAiLayout ? [...aiItems, ...missingCoreItems] : fallbackItems;
+  const items = hasAiLayout
+    ? roomAssemblyCoreKinds
+      .filter((kind) => !presentCoreKinds.has(kind))
+      .reduce((acc, kind, index) => {
+        const fallbackItem = fallbackByKind.get(kind);
+        if (!fallbackItem) return acc;
+        const resolvedItem = resolveRoomAssemblyExistingItem(palette, fallbackItem, 1000 + index, acc, sizeProfile);
+        return resolvedItem ? [...acc, resolvedItem] : acc;
+      }, aiItems)
+    : fallbackItems;
   const resolvedDirections = roomAssemblyKinds.reduce((acc, kind) => {
     acc[kind] = items.find((item) => item.assemblyKind === kind)?.direction || directions[kind] || 'front';
     return acc;
@@ -1527,6 +1866,7 @@ function buildAgencyRoomAssembly(home = {}, aiAssembly = null, sizeProfile = get
     budget,
     spent,
     purchases,
+    furnitureScaleVersion: roomEditorFurnitureScaleVersion,
     sizeProfile,
     directions: resolvedDirections,
     ai: hasAiLayout ? {
@@ -1538,6 +1878,111 @@ function buildAgencyRoomAssembly(home = {}, aiAssembly = null, sizeProfile = get
     items
   };
 }
+
+async function captureRoomAssemblySnapshotPreview(snapshot = {}) {
+  if (typeof document === 'undefined') return null;
+  const stageW = Math.max(1, Math.round(toNum(roomEditorStageSize.width, 1)));
+  const stageH = Math.max(1, Math.round(toNum(roomEditorStageSize.height, 1)));
+  const crop = {
+    x: Math.max(0, Math.min(stageW - 1, roomAssemblyPreviewSourceCrop.x)),
+    y: Math.max(0, Math.min(stageH - 1, roomAssemblyPreviewSourceCrop.y)),
+    w: Math.max(1, Math.min(stageW, roomAssemblyPreviewSourceCrop.w)),
+    h: Math.max(1, Math.min(stageH, roomAssemblyPreviewSourceCrop.h))
+  };
+  const outputW = Math.max(320, Math.round(roomAssemblyPreviewImageSize));
+  const outputH = Math.max(240, Math.round((outputW * crop.h) / crop.w));
+  const canvas = document.createElement('canvas');
+  canvas.width = outputW;
+  canvas.height = outputH;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  const scaleX = outputW / crop.w;
+  const scaleY = outputH / crop.h;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.fillStyle = '#fbf0f7';
+  ctx.fillRect(0, 0, outputW, outputH);
+
+  const backdrop = await loadRoomAssemblyPreviewImage(roomEditorBackdrop);
+  if (backdrop) {
+    ctx.drawImage(backdrop, crop.x, crop.y, crop.w, crop.h, 0, 0, outputW, outputH);
+  }
+
+  const rows = (Array.isArray(snapshot.items) ? snapshot.items : [])
+    .map((item, index) => ({
+      item,
+      index,
+      src: getRoomAssemblyPreviewAssetSrc(item?.assetId),
+      zIndex: getRoomAssemblyPreviewZIndex(item, index)
+    }))
+    .filter((row) => row.src)
+    .sort((a, b) => (a.zIndex - b.zIndex) || (a.index - b.index));
+
+  for (const row of rows) {
+    const image = await loadRoomAssemblyPreviewImage(row.src);
+    if (!image) continue;
+    const item = row.item || {};
+    const itemX = toNum(item.x, 0);
+    const itemY = toNum(item.y, 0);
+    const itemW = toNum(item.w, 1);
+    const itemH = toNum(item.h, 1);
+    if (
+      itemX + itemW <= crop.x
+      || itemX >= crop.x + crop.w
+      || itemY + itemH <= crop.y
+      || itemY >= crop.y + crop.h
+    ) {
+      continue;
+    }
+    const w = Math.max(1, Math.round(toNum(item.w, 1) * scaleX));
+    const h = Math.max(1, Math.round(toNum(item.h, 1) * scaleY));
+    ctx.drawImage(
+      image,
+      Math.round((itemX - crop.x) * scaleX),
+      Math.round((itemY - crop.y) * scaleY),
+      w,
+      h
+    );
+  }
+
+  const pngDataUrl = canvas.toDataURL('image/png');
+  const webpDataUrl = pngDataUrl.length <= roomAssemblyPreviewMaxStorageBytes
+    ? ''
+    : canvas.toDataURL('image/webp', 0.98);
+  const jpegDataUrl = webpDataUrl && webpDataUrl.length > roomAssemblyPreviewMaxStorageBytes
+    ? canvas.toDataURL('image/jpeg', 0.94)
+    : '';
+  const dataUrl = pngDataUrl.length <= roomAssemblyPreviewMaxStorageBytes
+    ? pngDataUrl
+    : webpDataUrl.length <= roomAssemblyPreviewMaxStorageBytes
+      ? webpDataUrl
+      : jpegDataUrl;
+  return {
+    version: roomAssemblyPreviewVersion,
+    dataUrl,
+    width: outputW,
+    height: outputH,
+    crop,
+    createdAt: Date.now()
+  };
+}
+
+async function addRoomAssemblySnapshotPreview(snapshot = {}) {
+  try {
+    const previewImage = await captureRoomAssemblySnapshotPreview(snapshot);
+    if (!previewImage?.dataUrl || previewImage.dataUrl.length > roomAssemblyPreviewMaxStorageBytes) {
+      return snapshot;
+    }
+    const next = { ...snapshot, previewImage };
+    writeAgencyRoomAssemblySnapshot(next);
+    return next;
+  } catch (error) {
+    console.warn('Room assembly preview capture failed:', error);
+    return snapshot;
+  }
+}
+
 function persistAgencyRoomAssemblySnapshot(snapshot) {
   const canvas = {
     stage: roomEditorStageSize,
@@ -1558,6 +2003,7 @@ function persistAgencyRoomAssemblySnapshot(snapshot) {
       budget: snapshot.budget,
       spent: snapshot.spent,
       purchases: snapshot.purchases,
+      furnitureScaleVersion: snapshot.furnitureScaleVersion || roomEditorFurnitureScaleVersion,
       sizeProfile: snapshot.sizeProfile,
       directions: snapshot.directions,
       ai: snapshot.ai ? { model: snapshot.ai.model, character: snapshot.ai.character, notes: snapshot.ai.notes } : null,
@@ -1568,23 +2014,27 @@ function persistAgencyRoomAssemblySnapshot(snapshot) {
     selectedId: snapshot.selectedId,
     savedAt: snapshot.savedAt,
     source: snapshot.source,
+    furnitureScaleVersion: snapshot.furnitureScaleVersion || roomEditorFurnitureScaleVersion,
     sizeProfile: snapshot.sizeProfile || buildRoomAssemblySizeProfile(snapshot.items),
     items: snapshot.items
   }));
   localStorage.setItem(roomEditorCanvasStorageKey, JSON.stringify(canvas));
-  localStorage.setItem(roomEditorSizeProfileStorageKey, JSON.stringify(snapshot.sizeProfile || buildRoomAssemblySizeProfile(snapshot.items)));
-  localStorage.setItem(roomEditorAssemblyStorageKey, JSON.stringify(snapshot));
+  writeAgencyRoomAssemblySnapshot(snapshot);
   window.dispatchEvent(new CustomEvent(roomEditorLayoutUpdatedEvent, { detail: snapshot }));
   return snapshot;
 }
 function saveAgencyRoomAssembly(home = {}, aiAssembly = null, sizeProfile = getRoomAssemblyCurrentSizeProfile()) {
   return persistAgencyRoomAssemblySnapshot(buildAgencyRoomAssembly(home, aiAssembly, sizeProfile));
 }
+async function saveAgencyRoomAssemblyWithPreview(home = {}, aiAssembly = null, sizeProfile = getRoomAssemblyCurrentSizeProfile()) {
+  return addRoomAssemblySnapshotPreview(saveAgencyRoomAssembly(home, aiAssembly, sizeProfile));
+}
 
 export default function HousingSocialPanel() {
   const { lang } = useLanguage();
   const isEn = lang === 'en';
   const [loading, setLoading] = useState(true);
+  const [socialClasses, setSocialClasses] = useState([]);
   const [housingTiers, setHousingTiers] = useState([]);
   const [characters, setCharacters] = useState([]);
   const [districts, setDistricts] = useState([]);
@@ -1595,6 +2045,8 @@ export default function HousingSocialPanel() {
   const [, setPublicAgencyAnnouncements] = useState([]);
   const [agencyForm, setAgencyForm] = useState(emptyAgency);
   const [homeForm, setHomeForm] = useState(emptyHome);
+  const [classForm, setClassForm] = useState(emptySocialClass);
+  const [editingClassId, setEditingClassId] = useState('');
   const [editingHomeId, setEditingHomeId] = useState('');
   const [savingBindingId, setSavingBindingId] = useState('');
   const [savingAgency, setSavingAgency] = useState(false);
@@ -1606,12 +2058,16 @@ export default function HousingSocialPanel() {
   const [roomAssemblyHomeId, setRoomAssemblyHomeId] = useState('');
   const [roomAssemblyNotice, setRoomAssemblyNotice] = useState('');
   const [roomAssemblySaving, setRoomAssemblySaving] = useState(false);
-  const [roomAssemblySnapshot, setRoomAssemblySnapshot] = useState(null);
+  const [roomAssemblySnapshot, setRoomAssemblySnapshot] = useState(() => readAgencyRoomAssemblySnapshot());
   const [homeNotice, setHomeNotice] = useState('');
   const [recommendCharacterId, setRecommendCharacterId] = useState('');
   const [recommendHousingId, setRecommendHousingId] = useState('');
   const [housingChainBusy, setHousingChainBusy] = useState(false);
   const [housingChainNotice, setHousingChainNotice] = useState('');
+  const [activeHousingView, setActiveHousingView] = useState('story');
+  const [managementOpen, setManagementOpen] = useState(false);
+  const [managementTab, setManagementTab] = useState('homes');
+  const [storyStepIndex, setStoryStepIndex] = useState(0);
 
   const headers = useMemo(() => {
     const token = localStorage.getItem('cp_token') || '';
@@ -1643,6 +2099,9 @@ export default function HousingSocialPanel() {
   const sortedHousingTiers = useMemo(() => (
     [...housingTiers].sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || Number(a.weekly_rent || 0) - Number(b.weekly_rent || 0))
   ), [housingTiers]);
+  const sortedSocialClasses = useMemo(() => (
+    [...socialClasses].sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || String(a.name || '').localeCompare(String(b.name || '')))
+  ), [socialClasses]);
   const availableHousingTiers = useMemo(() => (
     sortedHousingTiers.filter((item) => Number(item.is_enabled ?? 1) === 1)
   ), [sortedHousingTiers]);
@@ -1662,9 +2121,7 @@ export default function HousingSocialPanel() {
   const selectedRecommendationHome = useMemo(() => (
     availableHousingTiers.find((item) => String(item.id) === String(recommendHousingId)) || availableHousingTiers[0] || null
   ), [availableHousingTiers, recommendHousingId]);
-  const currentRoomAssemblySizeProfile = useMemo(() => (
-    showRoomAssemblyModal ? getRoomAssemblyCurrentSizeProfile() : {}
-  ), [showRoomAssemblyModal, roomAssemblySnapshot]);
+  const currentRoomAssemblySizeProfile = getRoomAssemblyCurrentSizeProfile();
   const districtDisplayName = useCallback((item) => (
     isEn ? (defaultDistrictNameEn[item?.id] || item?.name || item?.id) : (item?.name || item?.id)
   ), [isEn]);
@@ -1686,6 +2143,7 @@ export default function HousingSocialPanel() {
     setLoading(true);
     try {
       const data = await requestJson('/api/social-housing/bootstrap', { headers });
+      setSocialClasses(data.classes || []);
       setHousingTiers(data.housing_tiers || []);
       setCharacters(data.characters || []);
       setDistricts(data.districts || []);
@@ -1727,6 +2185,23 @@ export default function HousingSocialPanel() {
       setRecommendHousingId(String(availableHousingTiers[0].id));
     }
   }, [availableHousingTiers, recommendHousingId]);
+  useEffect(() => {
+    if (roomAssemblySnapshot) return;
+    const recovered = readAgencyRoomAssemblySnapshot();
+    if (recovered) setRoomAssemblySnapshot(recovered);
+  }, [roomAssemblySnapshot]);
+  useEffect(() => {
+    if (!roomAssemblySnapshot || isRoomAssemblySnapshotPreviewCurrent(roomAssemblySnapshot)) return undefined;
+    let cancelled = false;
+    addRoomAssemblySnapshotPreview(roomAssemblySnapshot).then((nextSnapshot) => {
+      if (!cancelled && nextSnapshot?.previewImage?.dataUrl) {
+        setRoomAssemblySnapshot(nextSnapshot);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [roomAssemblySnapshot]);
 
   const saveHome = async (payload = homeForm) => {
     const data = await requestJson('/api/social-housing/housing', { method: 'POST', headers, body: JSON.stringify(payload) });
@@ -1738,14 +2213,57 @@ export default function HousingSocialPanel() {
     setHousingTiers(data.housing_tiers || []);
     setAgencyAds(data.agency_ads || []);
   };
+  const saveSocialClass = async (payload = classForm) => {
+    const commonLocations = Array.isArray(payload.common_locations)
+      ? payload.common_locations
+      : String(payload.common_locations || '').split(/[\n,，]/).map((item) => item.trim()).filter(Boolean);
+    const data = await requestJson('/api/social-housing/classes', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ...payload, common_locations: commonLocations })
+    });
+    setSocialClasses(data.classes || []);
+    setClassForm(emptySocialClass);
+    setEditingClassId('');
+  };
+  const deleteSocialClass = async (id) => {
+    const ok = window.confirm(isEn
+      ? 'Deleting this class clears bound character class links and may affect recommendations and agency explanations. Continue?'
+      : '删除这个阶层会清空已绑定角色的阶层，并影响推荐解释和中介推荐理由。确定删除吗？');
+    if (!ok) return;
+    const data = await requestJson(`/api/social-housing/classes/${encodeURIComponent(id)}`, { method: 'DELETE', headers });
+    setSocialClasses(data.classes || []);
+    if (String(editingClassId) === String(id)) {
+      setClassForm(emptySocialClass);
+      setEditingClassId('');
+    }
+  };
+  const beginEditSocialClass = (item) => {
+    setEditingClassId(String(item.id || ''));
+    setClassForm({
+      ...emptySocialClass,
+      ...item,
+      common_locations: Array.isArray(item.common_locations) ? item.common_locations.join(', ') : (item.common_locations || '')
+    });
+  };
   const deleteAgencyAd = async (id) => { await requestJson(`/api/social-housing/agency/ads/${id}`, { method: 'DELETE', headers }); await loadAll(); };
+  const refreshCharacterWallet = async (id) => {
+    if (!id) return null;
+    const data = await requestJson(`/api/wallet/${encodeURIComponent(id)}`, { headers });
+    const wallet = Number(data.wallet ?? 0);
+    setCharacters((current) => current.map((item) => (
+      String(item.id) === String(id) ? { ...item, wallet } : item
+    )));
+    return wallet;
+  };
   const updateBinding = async (id, binding) => { setSavingBindingId(id); try { const data = await requestJson(`/api/social-housing/characters/${id}/binding`, { method: 'POST', headers, body: JSON.stringify(binding) }); setCharacters(data.characters || []); } finally { setSavingBindingId(''); } };
-  const payRent = async (id) => { setSavingBindingId(id); try { const data = await requestJson(`/api/social-housing/characters/${id}/pay-rent`, { method: 'POST', headers }); setCharacters(data.characters || []); } finally { setSavingBindingId(''); } };
+  const payRent = async (id) => { setSavingBindingId(id); try { await refreshCharacterWallet(id); const data = await requestJson(`/api/social-housing/characters/${id}/pay-rent`, { method: 'POST', headers }); setCharacters(data.characters || []); } finally { setSavingBindingId(''); } };
   const recommendHomeToCharacter = async () => {
     if (!selectedRecommendationCharacter || !selectedRecommendationHome) return;
     setHousingChainBusy(true);
     setHousingChainNotice(text.chainRunning);
     try {
+      await refreshCharacterWallet(selectedRecommendationCharacter.id);
       const data = await requestJson(`/api/social-housing/characters/${selectedRecommendationCharacter.id}/recommend-home`, {
         method: 'POST',
         headers,
@@ -1779,6 +2297,7 @@ export default function HousingSocialPanel() {
     setHousingChainBusy(true);
     setHousingChainNotice(text.chainRunning);
     try {
+      await refreshCharacterWallet(selectedRecommendationCharacter.id);
       const data = await requestJson(`/api/social-housing/characters/${selectedRecommendationCharacter.id}/assign-home`, {
         method: 'POST',
         headers,
@@ -1829,11 +2348,11 @@ export default function HousingSocialPanel() {
     const palette = pickRoomAssemblyPalette(selectedRoomAssemblyHome);
     const budget = getRoomAssemblyBudget(selectedRoomAssemblyHome);
     const sizeProfile = getRoomAssemblyCurrentSizeProfile();
-    const calibratedKinds = Object.keys(sizeProfile);
+    const calibratedKindCount = getRoomAssemblySizeProfileKindCount(sizeProfile);
     setRoomAssemblySaving(true);
     setRoomAssemblyNotice(isEn
-      ? `Agency AI is generating purchases and placement from the room grid, furniture prices, listing budget, and current room proportions...${calibratedKinds.length ? ` Loaded ${calibratedKinds.length} size guides.` : ''}`
-      : `中介 AI 正在根据房间网格、家具价格、房源预算和当前房间比例生成采购摆放...${calibratedKinds.length ? ` 已读取 ${calibratedKinds.length} 类比例标尺。` : ''}`);
+      ? `Agency AI is generating purchases and placement from the room grid, furniture prices, listing budget, and fixed room proportions...${calibratedKindCount ? ` Loaded ${calibratedKindCount} size guides.` : ''}`
+      : `中介 AI 正在根据房间网格、家具价格、房源预算和固定房间比例生成采购摆放...${calibratedKindCount ? ` 已读取 ${calibratedKindCount} 类比例标尺。` : ''}`);
     try {
       const data = await requestJson('/api/social-housing/agency/room-assembly', {
         method: 'POST',
@@ -1853,17 +2372,21 @@ export default function HousingSocialPanel() {
           furniture: getRoomAssemblyFurnitureContext(sizeProfile)
         })
       });
-      const snapshot = saveAgencyRoomAssembly(selectedRoomAssemblyHome, data.assembly || null, sizeProfile);
+      const snapshot = await saveAgencyRoomAssemblyWithPreview(selectedRoomAssemblyHome, data.assembly || null, sizeProfile);
       setRoomAssemblySnapshot(snapshot);
+      const snapshotSizeKindCount = getRoomAssemblySizeProfileKindCount(snapshot.sizeProfile);
+      const screenshotNote = snapshot.previewImage?.dataUrl ? (isEn ? ' Preview captured.' : ' 已自动截图。') : '';
       setRoomAssemblyNotice(isEn
-        ? `AI generated and saved to the actual room. ${snapshot.home.emoji || ''}${snapshot.home.name || snapshot.home.id || 'showroom'} / budget ${formatMoney(snapshot.budget)} / spent ${formatMoney(snapshot.spent)} / ${snapshot.items.length} assets / ${Object.keys(snapshot.sizeProfile || {}).length} size guides.${snapshot.ai?.notes ? ` Notes: ${snapshot.ai.notes}` : ''}`
-        : `AI 已生成并保存到实际房间。${snapshot.home.emoji || ''}${snapshot.home.name || snapshot.home.id || '样板间'} / 预算 ${formatMoney(snapshot.budget)} / 花费 ${formatMoney(snapshot.spent)} / ${snapshot.items.length} 个素材 / ${Object.keys(snapshot.sizeProfile || {}).length} 类比例标尺。${snapshot.ai?.notes ? ` 备注：${snapshot.ai.notes}` : ''}`);
+        ? `AI generated and saved to the actual room. ${snapshot.home.emoji || ''}${snapshot.home.name || snapshot.home.id || 'showroom'} / budget ${formatMoney(snapshot.budget)} / spent ${formatMoney(snapshot.spent)} / ${snapshot.items.length} assets / ${snapshotSizeKindCount} size guides.${screenshotNote}${snapshot.ai?.notes ? ` Notes: ${snapshot.ai.notes}` : ''}`
+        : `AI 已生成并保存到实际房间。${snapshot.home.emoji || ''}${snapshot.home.name || snapshot.home.id || '样板间'} / 预算 ${formatMoney(snapshot.budget)} / 花费 ${formatMoney(snapshot.spent)} / ${snapshot.items.length} 个素材 / ${snapshotSizeKindCount} 类比例标尺。${screenshotNote}${snapshot.ai?.notes ? ` 备注：${snapshot.ai.notes}` : ''}`);
     } catch (e) {
-      const snapshot = saveAgencyRoomAssembly(selectedRoomAssemblyHome, null, sizeProfile);
+      const snapshot = await saveAgencyRoomAssemblyWithPreview(selectedRoomAssemblyHome, null, sizeProfile);
       setRoomAssemblySnapshot(snapshot);
+      const snapshotSizeKindCount = getRoomAssemblySizeProfileKindCount(snapshot.sizeProfile);
+      const screenshotNote = snapshot.previewImage?.dataUrl ? (isEn ? ' Preview captured.' : ' 已自动截图。') : '';
       setRoomAssemblyNotice(isEn
-        ? `AI generation failed, so a rule-based template was saved first: ${e.message || 'Unknown error'}. ${snapshot.home.emoji || ''}${snapshot.home.name || snapshot.home.id || 'showroom'} / budget ${formatMoney(snapshot.budget)} / spent ${formatMoney(snapshot.spent)} / ${snapshot.items.length} assets / ${Object.keys(snapshot.sizeProfile || {}).length} size guides.`
-        : `AI 生成失败，已先用规则模板保存：${e.message || '未知错误'}。${snapshot.home.emoji || ''}${snapshot.home.name || snapshot.home.id || '样板间'} / 预算 ${formatMoney(snapshot.budget)} / 花费 ${formatMoney(snapshot.spent)} / ${snapshot.items.length} 个素材 / ${Object.keys(snapshot.sizeProfile || {}).length} 类比例标尺。`);
+        ? `AI generation failed, so a rule-based template was saved first: ${e.message || 'Unknown error'}. ${snapshot.home.emoji || ''}${snapshot.home.name || snapshot.home.id || 'showroom'} / budget ${formatMoney(snapshot.budget)} / spent ${formatMoney(snapshot.spent)} / ${snapshot.items.length} assets / ${snapshotSizeKindCount} size guides.${screenshotNote}`
+        : `AI 生成失败，已先用规则模板保存：${e.message || '未知错误'}。${snapshot.home.emoji || ''}${snapshot.home.name || snapshot.home.id || '样板间'} / 预算 ${formatMoney(snapshot.budget)} / 花费 ${formatMoney(snapshot.spent)} / ${snapshot.items.length} 个素材 / ${snapshotSizeKindCount} 类比例标尺。${screenshotNote}`);
     } finally {
       setRoomAssemblySaving(false);
     }
@@ -1874,206 +2397,407 @@ export default function HousingSocialPanel() {
   const homelessCount = characters.length - housedCount;
   const overdueCount = characters.filter((c) => String(c.binding?.housing_status || '') === 'overdue').length;
   const stableCount = characters.filter((c) => c.binding?.housing_id && String(c.binding?.housing_status || 'stable') === 'stable').length;
+  const activeChain = rentalChains[0] || null;
+  const activeChainEvents = useMemo(() => (
+    activeChain ? getChainEventsForDisplay(rentalChainEvents, activeChain.id) : []
+  ), [activeChain, rentalChainEvents]);
+  const activeViewingDialogue = useMemo(() => buildViewingDialogue(activeChainEvents), [activeChainEvents]);
+  const activeConsideration = useMemo(() => getChainNote(activeChainEvents, 'consideration'), [activeChainEvents]);
+  const activeDecision = useMemo(() => getChainNote(activeChainEvents, 'decision'), [activeChainEvents]);
+  const latestAgencyAd = visibleAgencyAds[0] || null;
+  const visualStageIndex = useMemo(() => {
+    if (!activeChain) return 0;
+    if (activeChain.status === 'completed') return 6;
+    const stage = String(activeChain.stage || 'recommended');
+    if (stage === 'viewing') return 2;
+    if (stage === 'considering') return 4;
+    if (stage === 'deciding') return 5;
+    if (stage === 'ready_to_sign' || stage === 'signing' || stage === 'completed') return 6;
+    return 0;
+  }, [activeChain]);
+
+  useEffect(() => {
+    setStoryStepIndex(visualStageIndex);
+  }, [activeChain?.id, visualStageIndex]);
+
+  const chainEventText = (types = []) => {
+    const event = activeChainEvents.find((item) => types.includes(item.event_type));
+    if (!event) return '';
+    const payload = parseChainPayload(event);
+    return String(
+      payload.log
+      || payload.message
+      || payload.summary
+      || payload.reason
+      || payload.content
+      || payload.invitation
+      || payload.agent_intro
+      || ''
+    ).trim();
+  };
+  const pairLabel = `${selectedRecommendationCharacter?.name || text.noHomelessCharacters} → ${selectedRecommendationHome ? `${selectedRecommendationHome.emoji || ''}${selectedRecommendationHome.name || selectedRecommendationHome.id}` : text.noAvailableHomes}`;
+  const activeChainLabel = activeChain
+    ? `${activeChain.character_name || activeChain.character_id || text.character} → ${activeChain.home_emoji || ''}${activeChain.home_name || activeChain.home_id || text.selectedHome}`
+    : pairLabel;
+  const roomAssemblyPreviewImage = roomAssemblySnapshot?.previewImage?.dataUrl || '';
+  const inviteText = chainEventText(['invitation', 'invite', 'agent_invite']);
+  const viewingPreviewLine = activeViewingDialogue?.lines?.[0]?.content || '';
+  const storySteps = [
+    {
+      icon: Home,
+      label: isEn ? 'Recommend' : '推荐',
+      sub: isEn ? 'Match listing' : '匹配房源',
+      title: activeChain ? (isEn ? 'Recommendation created' : '已生成推荐') : (isEn ? 'Waiting for recommendation' : '等待推荐房源'),
+      body: chainEventText(['recommended', 'recommendation']) || (activeChain
+        ? `${activeChainLabel}。`
+        : (isEn ? 'Pick a homeless role and an enabled listing, then start the complete rental story.' : '选择无房角色和启用房源后，开始完整租房故事。'))
+    },
+    {
+      icon: MessageSquareText,
+      label: isEn ? 'Invite' : '邀约',
+      sub: isEn ? 'Agent chat' : '中介私聊',
+      title: isEn ? 'Viewing invitation' : '中介发出看房邀请',
+      body: inviteText || viewingPreviewLine || (activeChain
+        ? (isEn ? 'The agent has moved the story toward a viewing conversation.' : '中介已经把链路推进到看房沟通。')
+        : (isEn ? 'The invitation appears after the story starts.' : '故事开始后会在这里展示邀约内容。'))
+    },
+    {
+      icon: Eye,
+      label: isEn ? 'Viewing' : '看房',
+      sub: isEn ? 'Observe and talk' : '观察与对话',
+      title: isEn ? 'Viewing conversation' : '角色正在看房',
+      body: viewingPreviewLine || (activeViewingDialogue?.summary || (isEn ? 'No viewing dialogue yet.' : '还没有看房对话。'))
+    },
+    {
+      icon: NotebookText,
+      label: isEn ? 'Summary' : '总结',
+      sub: isEn ? 'Impressions' : '看房感受',
+      title: isEn ? 'Viewing summary' : '整理看房感受',
+      body: activeViewingDialogue?.summary || (isEn ? 'The viewing summary will appear after a viewing round.' : '看房总结会在看房轮次后出现。')
+    },
+    {
+      icon: Brain,
+      label: isEn ? 'Consider' : '考虑',
+      sub: isEn ? 'Budget and taste' : '预算与偏好',
+      title: isEn ? 'Character consideration' : '角色认真考虑中',
+      body: activeConsideration || (isEn ? 'No consideration note yet.' : '还没有考虑记录。')
+    },
+    {
+      icon: Scale,
+      label: isEn ? 'Decision' : '决定',
+      sub: isEn ? 'Accept or decline' : '接受或拒绝',
+      title: isEn ? 'Final decision' : '角色做出决定',
+      body: activeDecision || activeChain?.error_message || (isEn ? 'Decision will appear when the chain reaches this stage.' : '链路进入决定阶段后会显示结果。')
+    },
+    {
+      icon: KeyRound,
+      label: isEn ? 'Sign' : '签约',
+      sub: isEn ? 'Write housing' : '写入住房',
+      title: activeChain?.status === 'failed' ? text.chainFailed : (isEn ? 'Signing and housing write' : '签约并写入住房'),
+      body: activeChain?.error_message || (activeChain?.status === 'completed'
+        ? (isEn ? 'The housing binding has been written.' : '住房绑定已经写入。')
+        : (isEn ? 'Signing waits for the completed chain result.' : '签约状态会等待完整链路结果。'))
+    }
+  ];
+  const activeStoryStep = storySteps[Math.min(Math.max(storyStepIndex, 0), storySteps.length - 1)] || storySteps[0];
+  const rentStress = selectedRecommendationHome
+    ? Math.min(100, Math.round((Number(selectedRecommendationHome.weekly_rent || 0) / Math.max(Number(selectedRecommendationCharacter?.wallet || 0), 1)) * 180))
+    : 0;
+  const comfortSignal = selectedRecommendationHome ? Math.min(100, Math.round((Number(selectedRecommendationHome.comfort || 0) / 60) * 100)) : 0;
+  const privacySignal = selectedRecommendationHome ? Math.min(100, Math.round((Number(selectedRecommendationHome.privacy || 0) / 60) * 100)) : 0;
+  const signalLabel = (value) => value >= 72 ? (isEn ? 'High' : '高') : value >= 42 ? (isEn ? 'Medium' : '中等') : (isEn ? 'Low' : '低');
+  const managementTabs = [
+    { key: 'homes', icon: Building2, label: text.catalog, desc: isEn ? 'Create, edit, enable, disable and delete listings.' : '新增、编辑、启停与删除房源。' },
+    { key: 'residents', icon: Users, label: text.roleBinding, desc: isEn ? 'Housing bindings, rent cycles and rent collection.' : '绑定状态、交租周期和欠租处理。' },
+    { key: 'classes', icon: BadgeCent, label: text.classProfiles, desc: isEn ? 'Budget, spending, prestige and location rules.' : '预算、消费、声望与常去地点规则。' },
+    { key: 'agency', icon: Store, label: text.agencyAi, desc: isEn ? 'Model role, persona prompt and interval settings.' : '模型角色、人格提示和决策间隔。' },
+    { key: 'history', icon: ScrollText, label: isEn ? 'History' : '历史记录', desc: isEn ? 'All rental chains and agency ads.' : '全部租房链路和中介广告。' }
+  ];
 
   if (loading) return <div style={{ padding: 24, color: '#64748b' }}>{text.loading}</div>;
 
   return (
-    <div style={shell.page} className="housing-panel">
-      <Section title={text.title} icon={Building2} extra={`${text.sellableHomes} ${housingTiers.length} | ${text.roleBinding} ${characters.length}`}>
-        <div className="housing-stat-grid">
-          <StatCard label={text.sellableHomes} value={housingTiers.length} tone="info" icon={Building2} />
-          <StatCard label={text.stable} value={stableCount} tone="good" icon={CheckCircle2} />
-          <StatCard label={text.homeless} value={homelessCount} />
-          <StatCard label={text.overdue} value={overdueCount} tone="warn" icon={AlertTriangle} />
-          <StatCard label={text.recentChains} value={rentalChains.length} icon={MessageSquareText} />
-        </div>
-      </Section>
-
-      <Section title={text.recommendHousing} icon={Send} extra={`${text.recentChains} ${rentalChains.length}`}>
-        <div className="housing-workbench">
-          <div className="housing-command-card">
-            <div className="housing-command-grid">
-              <Field label={text.eligibleRole}>
-                <select style={shell.input} value={recommendCharacterId} onChange={(e) => setRecommendCharacterId(e.target.value)} disabled={housingChainBusy || recommendableCharacters.length === 0}>
-                  {recommendableCharacters.length
-                    ? recommendableCharacters.map((item) => <option key={item.id} value={item.id}>{item.name} / {text.wallet} {formatMoney(item.wallet)}</option>)
-                    : <option value="">{text.noHomelessCharacters}</option>}
-                </select>
-              </Field>
-              <Field label={text.homeName}>
-                <select style={shell.input} value={recommendHousingId} onChange={(e) => setRecommendHousingId(e.target.value)} disabled={housingChainBusy || !selectedRecommendationCharacter || availableHousingTiers.length === 0}>
-                  {availableHousingTiers.length
-                    ? availableHousingTiers.map((item) => <option key={item.id} value={item.id}>{item.emoji || ''} {item.name} / {formatMoney(item.weekly_rent)}/{text.perWeek} / {text.deposit} {formatMoney(item.deposit)}</option>)
-                    : <option value="">{text.noAvailableHomes}</option>}
-                </select>
-              </Field>
+    <div id="housing-core-loop-redesign" style={shell.page} className="housing-panel">
+      <section className="housing-play-shell" aria-label={isEn ? 'Housing system core loop' : '住房系统核心玩法布局'}>
+        <header className="housing-play-header">
+          <div className="housing-play-brand">
+            <span className="housing-play-logo"><HouseHeart size={18} /></span>
+            <div>
+              <strong>{text.title}</strong>
+              <small>{isEn ? 'Rental stories, agency ads, and room staging' : '租房故事、中介广告和样板间布置'}</small>
             </div>
-            <div className="housing-selected-grid">
-              <div className="housing-selected-person">
-                <div className="housing-card-kicker">{text.character}</div>
-                <div className="housing-selected-name"><UserRound size={17} />{selectedRecommendationCharacter?.name || text.noHomelessCharacters}</div>
-                {selectedRecommendationCharacter ? (
-                  <div className="housing-selected-meta">
-                    <Pill icon={WalletCards}>{text.wallet} {formatMoney(selectedRecommendationCharacter.wallet)}</Pill>
-                    <Pill icon={CircleDashed}>{text.homeless}</Pill>
-                  </div>
-                ) : <div className="housing-selected-note">{text.noHousingActionTarget}</div>}
-              </div>
-              <HomeSummaryCard home={selectedRecommendationHome} compact />
-            </div>
-            <div className="housing-command-actions">
-              {selectedRecommendationCharacter ? (
-                <>
-                  <ActionButton
-                    icon={Send}
-                    tone="warning"
-                    disabled={housingChainBusy || !selectedRecommendationCharacter || !selectedRecommendationHome}
-                    title={text.recommendHome}
-                    onClick={() => recommendHomeToCharacter().catch((e) => alert(e.message))}
-                  >
-                    {housingChainBusy ? text.chainRunning : text.recommendHome}
-                  </ActionButton>
-                  <ActionButton
-                    icon={KeyRound}
-                    tone="primary"
-                    disabled={housingChainBusy || !selectedRecommendationCharacter || !selectedRecommendationHome}
-                    title={text.assignHome}
-                    onClick={() => assignHomeToCharacter().catch((e) => alert(e.message))}
-                  >
-                    {text.assignHome}
-                  </ActionButton>
-                </>
-              ) : <div className="housing-command-empty">{text.noHousingActionTarget}</div>}
-            </div>
-            {selectedRecommendationCharacter ? <div className="housing-command-hint">{text.housedActionHint}</div> : null}
-            {housingChainNotice ? <div className={`housing-chain-notice ${housingChainNotice.startsWith(text.chainFailed) ? 'is-error' : ''}`}>{housingChainNotice}</div> : null}
           </div>
-          <div className="housing-chain-list">
-            {rentalChains.slice(0, 5).map((chain) => (
-              <RentalChainCard key={chain.id} chain={chain} events={getChainEventsForDisplay(rentalChainEvents, chain.id)} />
-            ))}
-            {rentalChains.length === 0 ? <div className="housing-empty-card">{text.untriggered}</div> : null}
+          <nav className="housing-play-tabs" aria-label={isEn ? 'Housing sections' : '住房系统主要功能'}>
+            <button type="button" className={activeHousingView === 'story' ? 'is-active' : ''} aria-pressed={activeHousingView === 'story'} onClick={() => setActiveHousingView('story')}>
+              <Sparkles size={15} />{isEn ? 'Rental Story' : '租房故事'}
+            </button>
+            <button type="button" className={activeHousingView === 'agency' ? 'is-active' : ''} aria-pressed={activeHousingView === 'agency'} onClick={() => setActiveHousingView('agency')}>
+              <WandSparkles size={15} />{isEn ? 'Agency AI Studio' : '中介 AI 创作室'}
+            </button>
+          </nav>
+          <div className="housing-play-utilities">
+            <button type="button" className="btn btn-ghost" onClick={() => { setManagementTab('homes'); setManagementOpen(true); }}>
+              <Building2 size={15} />{isEn ? 'Manage Listings' : '房源管理'}
+            </button>
+            <button type="button" className="btn btn-ghost housing-icon-only" onClick={() => { setManagementTab('agency'); setManagementOpen(true); }} aria-label={isEn ? 'Agency settings' : '中介设置'}>
+              <Settings2 size={15} />
+            </button>
           </div>
-        </div>
-      </Section>
+        </header>
 
-      <Section title={text.roleBinding} icon={BedDouble} extra={`${housedCount}/${characters.length} ${text.housedCount}`}>
-        <div className="housing-character-list">
-          {housedCharacters.map((character) => {
-            const binding = character.binding || {};
-            const selectedHousing = housingById.get(String(binding.housing_id || '')) || binding.housing;
-            const status = String(binding.housing_status || (selectedHousing ? 'stable' : 'homeless'));
-            return (
-              <CharacterHousingCard
-                key={character.id}
-                character={character}
-                binding={binding}
-                selectedHousing={selectedHousing}
-                status={status}
-                sortedHousingTiers={sortedHousingTiers}
-                savingBindingId={savingBindingId}
-                updateBinding={updateBinding}
-                payRent={payRent}
-              />
-            );
-          })}
-          {housedCharacters.length === 0 ? <div className="housing-empty-card">{text.noHousedCharacters}</div> : null}
-        </div>
-      </Section>
-
-      <Section title={text.catalog} icon={Home} extra={`${sortedHousingTiers.length} ${text.homeUnit}`}>
-        <div className="housing-card-actions">
-          <ActionButton icon={Plus} tone="primary" onClick={() => { setEditingHomeId(''); setHomeForm(emptyHome); setShowCustomHomeEditor(true); }}>{text.custom}</ActionButton>
-          <ActionButton icon={WandSparkles} tone="neutral" onClick={() => setShowRoomAssemblyModal(true)}>{text.openRoomAssembly}</ActionButton>
-        </div>
-        {homeNotice ? <div className="housing-inline-notice" style={{ ...shell.card, fontSize: 14 }}>{homeNotice}</div> : null}
-        <div className="housing-home-grid">
-          {sortedHousingTiers.map((home) => (
-            <HomeSummaryCard
-              key={home.id}
-              home={home}
-              title={Number(home.is_enabled ?? 1) === 1 ? text.enabledState : text.disabledState}
-              actions={(
-                <>
-                  <ActionButton icon={Edit3} tone="neutral" onClick={() => beginEditHome(home)}>{text.edit}</ActionButton>
-                  <ActionButton icon={Trash2} tone="danger" onClick={() => deleteHome(home.id).catch((e) => alert(e.message))}>{text.remove}</ActionButton>
-                </>
-              )}
-            />
-          ))}
-          {sortedHousingTiers.length === 0 ? <div className="housing-empty-card">{text.emptyHomes}</div> : null}
-        </div>
-      </Section>
-
-      <Section title={isEn ? 'Listing Templates' : '房源模板'} icon={Sparkles} extra={`${homePresets.length} ${text.homeUnit}`}>
-        <div className="housing-home-grid">
-          {homePresets.map((preset) => (
-            <HomeSummaryCard
-              key={preset.key}
-              home={preset.values}
-              title={homePresetLabel(preset, 'subtitle')}
-              actions={(
-                <ActionButton icon={Plus} tone="primary" onClick={() => applyHomePreset(preset).catch((e) => alert(e.message))}>
-                  {savedHomeIds.has(String(preset.values.id)) ? text.applyExistingHome : text.applyHome}
-                </ActionButton>
-              )}
-            />
-          ))}
-        </div>
-      </Section>
-
-      <Section title={text.agencyAi} icon={Building2} extra={`${text.lastAd} ${formatTime(agencyForm.last_ad_at)}`}>
-        <div className="housing-agency-grid">
-          <div style={shell.card}>
-            <div className="housing-agency-form-grid">
-              <Field label={text.officeName}><input style={shell.input} value={agencyForm.agency_name || ''} onChange={(e) => setAgencyForm((p) => ({ ...p, agency_name: e.target.value }))} /></Field>
-              <Field label={text.agentName}><input style={shell.input} value={agencyForm.agent_name || ''} onChange={(e) => setAgencyForm((p) => ({ ...p, agent_name: e.target.value }))} /></Field>
-              <Field label={text.officeDistrict}><select style={shell.input} value={agencyForm.office_district || 'street'} onChange={(e) => saveAgencyField('office_district', e.target.value).catch((err) => alert(err.message))}>{resolvedDistrictOptions.map((item) => <option key={item.id} value={item.id}>{districtDisplayName(item)}</option>)}</select></Field>
-              <Field label={`${text.autoModel} (${resolvedAgencyModelOptions.length})`}><select style={shell.input} value={agencyForm.model_char_id || 'auto'} onChange={(e) => saveAgencyField('model_char_id', e.target.value).catch((err) => alert(err.message))}>{[{ id: 'auto', name: text.autoModel, model_name: '' }, ...resolvedAgencyModelOptions].map((item) => <option key={item.id} value={item.id}>{item.name}{item.model_name ? ` - ${item.model_name}` : ''}</option>)}</select></Field>
-              <Field label={text.businessScope}><input style={shell.input} value={agencyForm.business_scope || ''} onChange={(e) => updateAgencyField('business_scope', e.target.value)} /></Field>
-              <Field label={text.intervalHours}><input style={shell.input} type="number" min="1" value={agencyForm.decision_interval_hours || 6} onChange={(e) => setAgencyForm((p) => ({ ...p, decision_interval_hours: toNum(e.target.value, 6) }))} /></Field>
-              <Field label={text.adStyle}><div className="housing-ad-style-row"><select style={shell.input} value={agencyTemplateKey} onChange={(e) => setAgencyTemplateKey(e.target.value)}>{promptStyles.map((item) => <option key={item.key} value={item.key}>{promptStyleLabel(item)}</option>)}</select><ActionButton icon={Sparkles} tone="info" style={{ whiteSpace: 'nowrap' }} onClick={() => applyAgencyTemplate(agencyTemplateKey)}>{text.applyStyle}</ActionButton></div></Field>
-              <Field label={text.prompt} span><textarea style={{ ...shell.input, minHeight: 96, resize: 'vertical' }} value={agencyForm.persona_prompt || ''} onChange={(e) => updateAgencyField('persona_prompt', e.target.value)} /></Field>
-            </div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
-              <ActionButton icon={Number(agencyForm.enabled || 0) === 1 ? X : CheckCircle2} tone={Number(agencyForm.enabled || 0) === 1 ? 'danger' : 'success'} onClick={() => saveAgency({ ...agencyForm, enabled: Number(agencyForm.enabled || 0) === 1 ? 0 : 1 }).catch((e) => alert(e.message))}>{Number(agencyForm.enabled || 0) === 1 ? text.disable : text.enable}</ActionButton>
-              <ActionButton icon={Save} tone="success" onClick={() => saveAgency().catch((e) => alert(e.message))}>{savingAgency ? text.saving : text.save}</ActionButton>
-              <ActionButton icon={Play} tone="warning" onClick={() => publishAgency().catch((e) => alert(e.message))}>{publishingAgency ? text.saving : text.run}</ActionButton>
-              {agencyError ? <ActionButton icon={Play} tone="violet" onClick={() => publishAgency().catch((e) => alert(e.message))}>{text.retry}</ActionButton> : null}
-              <ActionButton icon={WandSparkles} tone="primary" onClick={() => setShowRoomAssemblyModal(true)}>{text.openRoomAssembly}</ActionButton>
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-              <Pill>{text.nextAd} {formatTime(agencyForm.next_ad_at)}</Pill>
-              {agencyForm.last_error_at ? <Pill bg="#fff1f2" color="#be123c">{text.lastFailure} {formatTime(agencyForm.last_error_at)}</Pill> : null}
-            </div>
-            {agencyError ? (
-              <div style={{ marginTop: 12, background: '#fff1f2', color: '#be123c', border: '1px solid #fecdd3', borderRadius: 8, padding: 12 }}>
-                <div style={{ fontWeight: 700, marginBottom: 8 }}>{text.agencyFailed}</div>
-                <div style={{ fontSize: 13, lineHeight: 1.7 }}>{summarizeAgencyError(agencyError)}</div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-                  <ActionButton icon={Play} tone="violet" onClick={() => publishAgency().catch((e) => alert(e.message))}>{text.retry}</ActionButton>
-                  <ActionButton icon={X} tone="danger" onClick={() => clearAgencyError().catch((e) => alert(e.message))}>{text.clearError}</ActionButton>
+        <main className="housing-play-main">
+          {activeHousingView === 'story' ? (
+            <div className="housing-play-screen" data-screen="story">
+              <section className="housing-story-launcher">
+                <div className="housing-story-intro">
+                  <span className="housing-play-kicker">START A HOUSING STORY</span>
+                  <h2>{isEn ? 'Let a role find a real home' : '让角色真正走完一次租房故事'}</h2>
+                  <p>{isEn ? 'Pick one homeless role and one enabled listing. ChatPulse will run the recommendation, viewing, consideration, decision, and signing chain.' : '选择一个无房角色和一个启用房源，系统会跑完整的推荐、邀约、看房、考虑、决定和签约链路。'}</p>
                 </div>
-              </div>
-            ) : null}
-          </div>
-          <div style={{ display: 'grid', gap: 10 }}>
-            {visibleAgencyAds.length ? visibleAgencyAds.map((ad) => (
-              <div key={ad.id} style={shell.card}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
-                  <div className="housing-ad-title" style={{ fontWeight: 800, fontSize: 15 }}>{ad.title || text.noAds}</div>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <Pill bg={ad.trigger_type === 'auto' ? '#fff0f6' : '#fff8fb'} color={ad.trigger_type === 'auto' ? '#ff4f82' : '#806273'}>{ad.trigger_type === 'auto' ? text.auto : text.manual}</Pill>
-                    {Number(ad.is_published ? 1 : 0) === 1 ? <Pill bg="#dcfce7" color="#166534">{text.published}</Pill> : null}
-                    <ActionButton icon={Trash2} tone="danger" onClick={() => deleteAgencyAd(ad.id).catch((e) => alert(e.message))}>{text.removeAd}</ActionButton>
+
+                <div className="housing-story-casting">
+                  <div className="housing-casting-column">
+                    <div className="housing-casting-title"><span>{isEn ? 'Choose Role' : '选择角色'}</span><small>{homelessCount} {text.homeless}</small></div>
+                    {recommendableCharacters.slice(0, 5).map((item, index) => (
+                      <button type="button" key={item.id} className={`housing-choice ${String(recommendCharacterId) === String(item.id) ? 'is-selected' : ''}`} onClick={() => setRecommendCharacterId(String(item.id))} disabled={housingChainBusy}>
+                        <span className={`housing-choice-avatar ${index % 2 ? 'is-pink' : ''}`}><UserRound size={16} /></span>
+                        <span><strong>{item.name}</strong><small>{text.wallet} {formatMoney(item.wallet)} · {item.status || text.idle}</small></span>
+                        {String(recommendCharacterId) === String(item.id) ? <Check size={16} /> : <Circle size={16} />}
+                      </button>
+                    ))}
+                    {recommendableCharacters.length === 0 ? <div className="housing-empty-card">{text.noHomelessCharacters}</div> : null}
+                  </div>
+                  <div className="housing-casting-arrow"><HeartHandshake size={26} /></div>
+                  <div className="housing-casting-column">
+                    <div className="housing-casting-title"><span>{isEn ? 'Choose Listing' : '选择房源'}</span><small>{availableHousingTiers.length} {isEn ? text.homeUnit : '个可用'}</small></div>
+                    {availableHousingTiers.slice(0, 5).map((item, index) => (
+                      <button type="button" key={item.id} className={`housing-choice ${String(recommendHousingId) === String(item.id) ? 'is-selected' : ''}`} onClick={() => setRecommendHousingId(String(item.id))} disabled={housingChainBusy || !selectedRecommendationCharacter}>
+                        <span className={`housing-choice-avatar ${index % 2 ? 'is-pink' : ''}`}><Building2 size={16} /></span>
+                        <span><strong>{item.emoji || ''} {item.name || item.id}</strong><small>{formatMoney(item.weekly_rent)}/{text.perWeek} · {text.deposit} {formatMoney(item.deposit)}</small></span>
+                        {String(recommendHousingId) === String(item.id) ? <Check size={16} /> : <Circle size={16} />}
+                      </button>
+                    ))}
+                    {availableHousingTiers.length === 0 ? <div className="housing-empty-card">{text.noAvailableHomes}</div> : null}
                   </div>
                 </div>
-                <div style={{ marginTop: 8, color: '#475569', fontSize: 13, lineHeight: 1.65 }}>{ad.content}</div>
+
+                <div className="housing-launch-action">
+                  <div><span>{isEn ? 'This story' : '本次故事'}</span><strong>{pairLabel}</strong></div>
+                  <button type="button" className="btn btn-primary" disabled={housingChainBusy || !selectedRecommendationCharacter || !selectedRecommendationHome} onClick={() => recommendHomeToCharacter().catch((error) => alert(error.message))}>
+                    {housingChainBusy ? <RotateCw size={16} className="is-spinning" /> : <Play size={16} />}
+                    {housingChainBusy ? text.chainRunning : (isEn ? 'Start Rental Story' : '开始租房故事')}
+                  </button>
+                </div>
+                {housingChainNotice ? <div className={`housing-chain-notice ${housingChainNotice.startsWith(text.chainFailed) ? 'is-error' : ''}`}>{housingChainNotice}</div> : null}
+              </section>
+
+              <section className="housing-story-stage" data-run-state={housingChainBusy ? 'running' : activeChain ? 'done' : 'ready'}>
+                <div className="housing-stage-heading">
+                  <div><span className="housing-play-kicker">LIVE STORY</span><h3>{isEn ? 'Rental Chain' : '租房链路'}</h3></div>
+                  <div className="housing-stage-state"><span className="housing-live-dot" /><strong>{housingChainBusy ? text.chainRunning : activeChain ? getChainStageLabel(activeChain.status === 'completed' ? 'completed' : activeChain.stage) : (isEn ? 'Waiting' : '等待开始')}</strong><small>{activeChain ? formatTime(activeChain.updated_at) : (isEn ? 'Estimated 1-2 minutes' : '预计 1-2 分钟')}</small></div>
+                </div>
+                <div className="housing-story-steps" role="list" aria-label={isEn ? 'Rental chain stages' : '租房链路阶段'}>
+                  {storySteps.map((step, index) => {
+                    const Icon = step.icon;
+                    return (
+                      <React.Fragment key={step.label}>
+                        <button type="button" className={`housing-story-step ${index === storyStepIndex ? 'is-active' : ''} ${index < visualStageIndex ? 'is-done' : ''}`} onClick={() => setStoryStepIndex(index)}>
+                          <span><Icon size={16} /></span><strong>{step.label}</strong><small>{step.sub}</small>
+                        </button>
+                        {index < storySteps.length - 1 ? <ArrowRight size={14} aria-hidden="true" /> : null}
+                      </React.Fragment>
+                    );
+                  })}
+                </div>
+                <div className="housing-stage-content">
+                  <article className="housing-stage-scene">
+                    <div className="housing-scene-head">
+                      <span className="housing-scene-icon">{React.createElement(activeStoryStep.icon, { size: 18 })}</span>
+                      <div><small>{isEn ? `Stage ${storyStepIndex + 1} / 7` : `阶段 ${storyStepIndex + 1} / 7`}</small><h3>{activeStoryStep.title}</h3></div>
+                    </div>
+                    <div className="housing-scene-dialogue">
+                      {storyStepIndex === 2 && activeViewingDialogue?.lines?.length ? (
+                        activeViewingDialogue.lines.slice(0, 4).map((line, index) => (
+                          <p key={`${line.speaker}-${index}`}><strong>{line.speaker}：</strong>{line.content}</p>
+                        ))
+                      ) : <p>{activeStoryStep.body}</p>}
+                    </div>
+                    {activeChain?.error_message ? <div className="housing-chain-error">{activeChain.error_message}</div> : null}
+                    <div className="housing-scene-actions">
+                      <button type="button" className="btn btn-ghost" disabled={housingChainBusy || !selectedRecommendationCharacter || !selectedRecommendationHome} onClick={() => recommendHomeToCharacter().catch((error) => alert(error.message))}><RotateCw size={14} />{isEn ? 'Run Again' : '重试完整故事'}</button>
+                      <button type="button" className="btn btn-ghost" onClick={() => setStoryStepIndex(2)}><MessagesSquare size={14} />{text.viewDialogue}</button>
+                    </div>
+                  </article>
+                  <aside className="housing-story-outcome">
+                    <span className="housing-play-kicker">STORY SIGNALS</span>
+                    <h3>{activeChainLabel}</h3>
+                    <div className="housing-signal"><span>{isEn ? 'Rent Pressure' : '租金压力'}</span><strong>{signalLabel(rentStress)}</strong><div><i style={{ width: `${rentStress}%` }} /></div></div>
+                    <div className="housing-signal"><span>{text.comfort}</span><strong>{signalLabel(comfortSignal)}</strong><div><i style={{ width: `${comfortSignal}%` }} /></div></div>
+                    <div className="housing-signal"><span>{text.privacy}</span><strong>{signalLabel(privacySignal)}</strong><div><i style={{ width: `${privacySignal}%` }} /></div></div>
+                    <div className="housing-outcome-note"><Sparkles size={15} /><p>{activeChain?.status === 'completed' ? (isEn ? 'The role has moved in and housing was written.' : '角色已经入住，住房绑定已写入。') : activeDecision || activeConsideration || (isEn ? 'The role tendency changes as each stage completes.' : '故事开始后，角色倾向会随每个阶段变化。')}</p></div>
+                  </aside>
+                </div>
+              </section>
+
+              <section className="housing-agency-teaser">
+                <div><span className="housing-play-kicker">SECOND PLAYGROUND</span><h3>{isEn ? 'Want the agency AI to work?' : '想让中介 AI 做点什么？'}</h3><p>{isEn ? 'Jump into ad writing or room assembly without making the home page busy.' : '不把默认首页堆满，也能直接进入广告创作或房间布置。'}</p></div>
+                <button type="button" onClick={() => setActiveHousingView('agency')}><span><Megaphone size={16} /></span><strong>{isEn ? 'Create a housing ad' : '创作一则住房广告'}</strong><small>{isEn ? 'Generate copy and publish it' : '生成文案并发布到商业街'}</small><ArrowRight size={15} /></button>
+                <button type="button" onClick={() => setActiveHousingView('agency')}><span className="is-pink"><Armchair size={16} /></span><strong>{isEn ? 'Stage a showroom' : '为房源布置样板间'}</strong><small>{isEn ? 'AI buys furniture and saves it' : 'AI 选购家具并保存到像素小屋'}</small><ArrowRight size={15} /></button>
+              </section>
+            </div>
+          ) : (
+            <div className="housing-play-screen" data-screen="agency">
+              <div className="housing-agency-heading">
+                <div><span className="housing-play-kicker">AGENCY AI STUDIO</span><h2>{isEn ? 'Agency AI Studio' : '中介 AI 创作室'}</h2><p>{isEn ? 'One side writes compelling listings; the other turns an empty unit into a liveable room.' : '一个负责把房源讲得让人心动，一个负责把空房变成可以入住的家。'}</p></div>
+                <button type="button" className="btn btn-ghost" onClick={() => { setManagementTab('agency'); setManagementOpen(true); }}><SlidersHorizontal size={15} />{isEn ? 'Agency Settings' : '中介设置'}</button>
               </div>
-            )) : <div style={{ ...shell.card, color: '#94a3b8', fontSize: 13 }}>{text.noAds}</div>}
-          </div>
-        </div>
-      </Section>
+              <div className="housing-agency-studios">
+                <section className="housing-agency-studio">
+                  <div className="housing-studio-title"><span><Megaphone size={18} /></span><div><small>ADVERTISEMENT LAB</small><h3>{isEn ? 'Let the agency write an ad' : '让中介写一则广告'}</h3></div></div>
+                  <div className="housing-studio-controls">
+                    <label><span>{isEn ? 'Listing' : '宣传房源'}</span><select className="form-select" value={recommendHousingId} onChange={(e) => setRecommendHousingId(e.target.value)}>{availableHousingTiers.map((item) => <option key={item.id} value={item.id}>{item.emoji || ''} {item.name || item.id}</option>)}</select></label>
+                    <label><span>{text.adStyle}</span><select className="form-select" value={agencyTemplateKey} onChange={(e) => setAgencyTemplateKey(e.target.value)}>{promptStyles.map((item) => <option key={item.key} value={item.key}>{promptStyleLabel(item)}</option>)}</select></label>
+                    <button type="button" className="btn btn-primary" disabled={publishingAgency} onClick={() => { applyAgencyTemplate(agencyTemplateKey); publishAgency().catch((e) => alert(e.message)); }}>{publishingAgency ? <RotateCw size={15} className="is-spinning" /> : <Sparkles size={15} />}{publishingAgency ? text.saving : (isEn ? 'Generate Ad' : '生成广告')}</button>
+                  </div>
+                  <article className="housing-ad-preview">
+                    <span className="housing-play-kicker">PREVIEW</span>
+                    <h3>{latestAgencyAd?.title || text.noAds}</h3>
+                    <p>{latestAgencyAd?.content || (isEn ? 'The newest generated ad appears here after the agency runs.' : '中介生成广告后，最新标题和正文会显示在这里。')}</p>
+                    <div><span className="housing-soft-tag">{text.lastAd} {formatTime(agencyForm.last_ad_at)}</span><span className="housing-soft-tag is-pink">{text.nextAd} {formatTime(agencyForm.next_ad_at)}</span></div>
+                  </article>
+                  {agencyError ? <div className="housing-chain-notice is-error">{text.agencyFailed} {summarizeAgencyError(agencyError)}</div> : null}
+                  <div className="housing-studio-footer"><span>{latestAgencyAd?.is_published ? text.published : (isEn ? 'Generated ads can be published to the city board.' : '生成后可发布到城市公告。')}</span><button type="button" className="btn" onClick={() => publishAgency().catch((e) => alert(e.message))}>{text.run}</button></div>
+                </section>
+
+                <section className="housing-agency-studio is-room">
+                  <div className="housing-studio-title"><span><Armchair size={18} /></span><div><small>ROOM ASSEMBLY</small><h3>{isEn ? 'Let the agency stage a showroom' : '让中介布置一间样板房'}</h3></div></div>
+                  <label className="housing-room-select"><span>{text.homeName}</span><select className="form-select" value={selectedRoomAssemblyHome?.id || ''} onChange={(e) => setRoomAssemblyHomeId(e.target.value)}>{roomAssemblyHomes.map((item) => <option key={item.id} value={item.id}>{item.emoji || ''} {item.name || item.id}</option>)}</select></label>
+                  <div className={`housing-room-canvas ${roomAssemblyPreviewImage ? 'has-preview' : ''}`}>
+                    {roomAssemblyPreviewImage ? (
+                      <img className="housing-room-preview-image" src={roomAssemblyPreviewImage} alt={isEn ? 'Last generated showroom screenshot' : '上一次生成的样板房截图'} draggable="false" />
+                    ) : (
+                      <>
+                        <div className="housing-room-wall" />
+                        <span className="housing-room-bed"><BedDouble size={30} /></span>
+                        <span className="housing-room-bookshelf"><NotebookText size={25} /></span>
+                        <span className="housing-room-rug" />
+                        <span className="housing-room-plant"><Flower2 size={20} /></span>
+                      </>
+                    )}
+                    <div className="housing-room-budget"><span>{text.budget}</span><strong>{formatMoney(selectedRoomAssemblyHome ? getRoomAssemblyBudget(selectedRoomAssemblyHome) : 0)}</strong><small>{roomAssemblySnapshot ? `${text.spent} ${formatMoney(roomAssemblySnapshot.spent)} · ${text.purchased} ${roomAssemblySnapshot.purchases?.length || 0}` : text.roomAssemblyHint}</small></div>
+                  </div>
+                  <div className="housing-room-options"><span className="is-selected">{selectedRoomAssemblyHome?.name || text.selectedHome}</span><span>{text.furnitureShop} {roomAssemblyShopItems.length}</span><span>{text.scaleProfile} {getRoomAssemblySizeProfileKindCount(currentRoomAssemblySizeProfile)}</span></div>
+                  {roomAssemblyNotice ? <div className="housing-chain-notice">{roomAssemblyNotice}</div> : null}
+                  <div className="housing-studio-footer"><span>{isEn ? 'Falls back to rules if AI fails.' : 'AI 失败时会自动使用规则方案。'}</span><button type="button" className="btn btn-primary" disabled={roomAssemblySaving || !selectedRoomAssemblyHome} onClick={runRoomAssembly}>{roomAssemblySaving ? <RotateCw size={15} className="is-spinning" /> : <WandSparkles size={15} />}{roomAssemblySaving ? text.aiGenerating : text.generateRoomAssembly}</button></div>
+                </section>
+              </div>
+              <section className="housing-agency-history">
+                <div><span className="housing-play-kicker">RECENT CREATIONS</span><h3>{isEn ? 'Recent Creations' : '最近创作'}</h3></div>
+                <div className="housing-history-row"><span className="housing-choice-avatar"><Megaphone size={15} /></span><span><strong>{latestAgencyAd?.title || text.noAds}</strong><small>{latestAgencyAd ? `${formatTime(latestAgencyAd.created_at || agencyForm.last_ad_at)} · ${latestAgencyAd.is_published ? text.published : text.manual}` : text.untriggered}</small></span><button type="button" className="btn btn-ghost" onClick={() => { setManagementTab('history'); setManagementOpen(true); }}>{isEn ? 'View' : '查看'}</button></div>
+                <div className="housing-history-row"><span className="housing-choice-avatar is-pink"><Armchair size={15} /></span><span><strong>{roomAssemblySnapshot?.home?.name || selectedRoomAssemblyHome?.name || text.roomAssembly}</strong><small>{roomAssemblySnapshot ? `${text.spent} ${formatMoney(roomAssemblySnapshot.spent)} · ${text.purchased} ${roomAssemblySnapshot.purchases?.length || 0}` : text.untriggered}</small></span><button type="button" className="btn btn-ghost" onClick={() => setShowRoomAssemblyModal(true)}>{isEn ? 'Open' : '打开'}</button></div>
+              </section>
+            </div>
+          )}
+        </main>
+
+        {managementOpen ? (
+          <aside className="housing-management-drawer">
+            <div className="housing-drawer-head"><div><span className="housing-play-kicker">MANAGEMENT</span><h3>{isEn ? 'Housing Management' : '住房管理'}</h3></div><button type="button" className="btn btn-ghost housing-icon-only" onClick={() => setManagementOpen(false)}><X size={16} /></button></div>
+            <div className="housing-management-layout">
+              <div className="housing-management-list">
+                {managementTabs.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button type="button" key={item.key} className={managementTab === item.key ? 'is-active' : ''} onClick={() => setManagementTab(item.key)}>
+                      <span><Icon size={16} /></span><div><strong>{item.label}</strong><small>{item.desc}</small></div><ChevronRight size={15} />
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="housing-management-detail">
+                {managementTab === 'homes' ? (
+                  <>
+                    <div className="housing-management-actions"><ActionButton icon={Plus} tone="primary" onClick={() => { setEditingHomeId(''); setHomeForm(emptyHome); setShowCustomHomeEditor(true); }}>{text.custom}</ActionButton><ActionButton icon={WandSparkles} tone="neutral" onClick={() => setShowRoomAssemblyModal(true)}>{text.openRoomAssembly}</ActionButton></div>
+                    {homeNotice ? <div className="housing-inline-notice">{homeNotice}</div> : null}
+                    <div className="housing-management-card-list">
+                      {sortedHousingTiers.map((home) => (
+                        <HomeSummaryCard key={home.id} home={home} title={Number(home.is_enabled ?? 1) === 1 ? text.enabledState : text.disabledState} actions={<><ActionButton icon={Edit3} tone="neutral" onClick={() => beginEditHome(home)}>{text.edit}</ActionButton><ActionButton icon={Trash2} tone="danger" onClick={() => deleteHome(home.id).catch((e) => alert(e.message))}>{text.remove}</ActionButton></>} />
+                      ))}
+                      {sortedHousingTiers.length === 0 ? <div className="housing-empty-card">{text.emptyHomes}</div> : null}
+                    </div>
+                    <div className="housing-template-strip">
+                      {homePresets.map((preset) => <button key={preset.key} type="button" onClick={() => applyHomePreset(preset).catch((e) => alert(e.message))}><Sparkles size={14} /><span>{homePresetLabel(preset, 'subtitle')}</span></button>)}
+                    </div>
+                  </>
+                ) : null}
+                {managementTab === 'residents' ? (
+                  <div className="housing-character-list">
+                    {housedCharacters.map((character) => {
+                      const binding = character.binding || {};
+                      const selectedHousing = housingById.get(String(binding.housing_id || '')) || binding.housing;
+                      const status = String(binding.housing_status || (selectedHousing ? 'stable' : 'homeless'));
+                      return <CharacterHousingCard key={character.id} character={character} binding={binding} selectedHousing={selectedHousing} status={status} sortedHousingTiers={sortedHousingTiers} savingBindingId={savingBindingId} updateBinding={updateBinding} payRent={payRent} />;
+                    })}
+                    {housedCharacters.length === 0 ? <div className="housing-empty-card">{text.noHousedCharacters}</div> : null}
+                  </div>
+                ) : null}
+                {managementTab === 'classes' ? (
+                  <div className="housing-class-workbench">
+                    <div className="housing-class-form" style={shell.card}>
+                      <div className="housing-card-kicker">{text.classProfilesHint}</div>
+                      <div className="housing-class-form-grid">
+                        <Field label={text.id}><input style={shell.input} value={classForm.id} onChange={(e) => setClassForm((p) => ({ ...p, id: e.target.value }))} placeholder="optional-id" /></Field>
+                        <Field label={text.className}><input style={shell.input} value={classForm.name} onChange={(e) => setClassForm((p) => ({ ...p, name: e.target.value }))} /></Field>
+                        <Field label={text.classEmoji}><input style={shell.input} value={classForm.emoji} onChange={(e) => setClassForm((p) => ({ ...p, emoji: e.target.value }))} /></Field>
+                        <Field label={text.sortOrder}><input style={shell.input} type="number" value={classForm.sort_order} onChange={(e) => setClassForm((p) => ({ ...p, sort_order: toNum(e.target.value) }))} /></Field>
+                        <Field label={text.workBias}><input style={shell.input} type="number" min="-100" max="100" value={classForm.work_bias} onChange={(e) => setClassForm((p) => ({ ...p, work_bias: toNum(e.target.value) }))} /></Field>
+                        <Field label={text.consumptionBias}><input style={shell.input} type="number" min="-100" max="100" value={classForm.consumption_bias} onChange={(e) => setClassForm((p) => ({ ...p, consumption_bias: toNum(e.target.value) }))} /></Field>
+                        <Field label={text.prestigeBias}><input style={shell.input} type="number" min="-100" max="100" value={classForm.prestige_bias} onChange={(e) => setClassForm((p) => ({ ...p, prestige_bias: toNum(e.target.value) }))} /></Field>
+                        <Field label={text.socialBarrier}><input style={shell.input} type="number" min="-100" max="100" value={classForm.social_barrier} onChange={(e) => setClassForm((p) => ({ ...p, social_barrier: toNum(e.target.value) }))} /></Field>
+                        <Field label={text.commonLocations} span><input style={shell.input} value={classForm.common_locations} onChange={(e) => setClassForm((p) => ({ ...p, common_locations: e.target.value }))} placeholder={text.agencyPlaceholder} /></Field>
+                        <Field label={text.classDescription} span><textarea style={{ ...shell.input, minHeight: 86, resize: 'vertical' }} value={classForm.description} onChange={(e) => setClassForm((p) => ({ ...p, description: e.target.value }))} /></Field>
+                      </div>
+                      <div className="housing-card-actions"><ActionButton icon={Save} tone="primary" onClick={() => saveSocialClass().catch((e) => alert(e.message))}>{editingClassId ? text.saveEdit : text.addClass}</ActionButton><ActionButton icon={X} tone="neutral" onClick={() => { setClassForm(emptySocialClass); setEditingClassId(''); }}>{text.cancel}</ActionButton></div>
+                    </div>
+                    <div className="housing-class-list">
+                      {sortedSocialClasses.map((item) => (
+                        <article className={`housing-class-card ${Number(item.is_enabled ?? 1) !== 1 ? 'is-disabled' : ''}`} key={item.id}>
+                          <div><strong>{item.emoji || ''} {item.name || item.id}</strong><span>{item.description || '-'}</span></div>
+                          <div className="housing-class-bias-row"><Pill>{text.workBias} {item.work_bias || 0}</Pill><Pill>{text.consumptionBias} {item.consumption_bias || 0}</Pill><Pill>{text.prestigeBias} {item.prestige_bias || 0}</Pill><Pill>{text.socialBarrier} {item.social_barrier || 0}</Pill></div>
+                          {Array.isArray(item.common_locations) && item.common_locations.length > 0 ? <div className="housing-class-locations">{item.common_locations.join(' / ')}</div> : null}
+                          <div className="housing-card-actions"><ActionButton icon={Edit3} tone="neutral" onClick={() => beginEditSocialClass(item)}>{text.edit}</ActionButton><ActionButton icon={Trash2} tone="danger" onClick={() => deleteSocialClass(item.id).catch((e) => alert(e.message))}>{text.remove}</ActionButton></div>
+                        </article>
+                      ))}
+                      {sortedSocialClasses.length === 0 ? <div className="housing-empty-card">{text.emptyClasses}</div> : null}
+                    </div>
+                  </div>
+                ) : null}
+                {managementTab === 'agency' ? (
+                  <div className="housing-agency-form-grid">
+                    <Field label={text.officeName}><input style={shell.input} value={agencyForm.agency_name || ''} onChange={(e) => setAgencyForm((p) => ({ ...p, agency_name: e.target.value }))} /></Field>
+                    <Field label={text.agentName}><input style={shell.input} value={agencyForm.agent_name || ''} onChange={(e) => setAgencyForm((p) => ({ ...p, agent_name: e.target.value }))} /></Field>
+                    <Field label={text.officeDistrict}><select style={shell.input} value={agencyForm.office_district || 'street'} onChange={(e) => saveAgencyField('office_district', e.target.value).catch((err) => alert(err.message))}>{resolvedDistrictOptions.map((item) => <option key={item.id} value={item.id}>{districtDisplayName(item)}</option>)}</select></Field>
+                    <Field label={`${text.autoModel} (${resolvedAgencyModelOptions.length})`}><select style={shell.input} value={agencyForm.model_char_id || 'auto'} onChange={(e) => saveAgencyField('model_char_id', e.target.value).catch((err) => alert(err.message))}>{[{ id: 'auto', name: text.autoModel, model_name: '' }, ...resolvedAgencyModelOptions].map((item) => <option key={item.id} value={item.id}>{item.name}{item.model_name ? ` - ${item.model_name}` : ''}</option>)}</select></Field>
+                    <Field label={text.businessScope}><input style={shell.input} value={agencyForm.business_scope || ''} onChange={(e) => updateAgencyField('business_scope', e.target.value)} /></Field>
+                    <Field label={text.intervalHours}><input style={shell.input} type="number" min="1" value={agencyForm.decision_interval_hours || 6} onChange={(e) => setAgencyForm((p) => ({ ...p, decision_interval_hours: toNum(e.target.value, 6) }))} /></Field>
+                    <Field label={text.prompt} span><textarea style={{ ...shell.input, minHeight: 96, resize: 'vertical' }} value={agencyForm.persona_prompt || ''} onChange={(e) => updateAgencyField('persona_prompt', e.target.value)} /></Field>
+                    <div className="housing-management-actions"><ActionButton icon={Number(agencyForm.enabled || 0) === 1 ? X : CheckCircle2} tone={Number(agencyForm.enabled || 0) === 1 ? 'danger' : 'success'} onClick={() => saveAgency({ ...agencyForm, enabled: Number(agencyForm.enabled || 0) === 1 ? 0 : 1 }).catch((e) => alert(e.message))}>{Number(agencyForm.enabled || 0) === 1 ? text.disable : text.enable}</ActionButton><ActionButton icon={Save} tone="success" onClick={() => saveAgency().catch((e) => alert(e.message))}>{savingAgency ? text.saving : text.save}</ActionButton></div>
+                  </div>
+                ) : null}
+                {managementTab === 'history' ? (
+                  <div className="housing-management-card-list">
+                    {visibleAgencyAds.map((ad) => <article key={`ad-${ad.id}`} className="housing-history-detail"><strong>{ad.title || text.noAds}</strong><small>{ad.trigger_type === 'auto' ? text.auto : text.manual} · {Number(ad.is_published ? 1 : 0) === 1 ? text.published : text.untriggered}</small><p>{ad.content}</p><ActionButton icon={Trash2} tone="danger" onClick={() => deleteAgencyAd(ad.id).catch((e) => alert(e.message))}>{text.removeAd}</ActionButton></article>)}
+                    {rentalChains.map((chain) => <RentalChainCard key={`chain-${chain.id}`} chain={chain} events={getChainEventsForDisplay(rentalChainEvents, chain.id)} />)}
+                    {visibleAgencyAds.length === 0 && rentalChains.length === 0 ? <div className="housing-empty-card">{text.untriggered}</div> : null}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </aside>
+        ) : null}
+
+        <footer className="housing-play-footer"><span><i />{isEn ? 'Housing service online' : '住房服务正常'}</span><span>{homelessCount} {text.homeless} · {availableHousingTiers.length} {text.sellableHomes} · {rentalChains.length} {text.recentChains}</span></footer>
+      </section>
       {showRoomAssemblyModal ? (
         <div className="housing-modal-backdrop" style={{ position: 'fixed', inset: 0, zIndex: 52, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }} onClick={() => setShowRoomAssemblyModal(false)}>
           <div className="housing-modal-card housing-room-assembly-modal" style={{ width: 'min(760px, 100%)', maxHeight: '85vh', overflowY: 'auto', padding: 20 }} onClick={(e) => e.stopPropagation()}>
@@ -2099,7 +2823,7 @@ export default function HousingSocialPanel() {
                   <Pill>{text.privacy} {selectedRoomAssemblyHome.privacy || 0}</Pill>
                   <Pill bg="#fff0f6" color="#ff4f82">{text.budget} {formatMoney(getRoomAssemblyBudget(selectedRoomAssemblyHome))}</Pill>
                   <Pill bg="#f5f3ff" color="#6d28d9">{text.furnitureShop} {roomAssemblyShopItems.length} {text.itemCount}</Pill>
-                  <Pill bg="#ecfdf5" color="#047857">{text.scaleProfile} {Object.keys(currentRoomAssemblySizeProfile).length} {text.classCount}</Pill>
+                  <Pill bg="#ecfdf5" color="#047857">{text.scaleProfile} {getRoomAssemblySizeProfileKindCount(currentRoomAssemblySizeProfile)} {text.classCount}</Pill>
                 </div>
               ) : null}
               <div className="housing-modal-copy" style={{ fontSize: 13, lineHeight: 1.65 }}>
@@ -2113,11 +2837,14 @@ export default function HousingSocialPanel() {
               {roomAssemblySnapshot ? (
                 <div style={{ border: '1px solid #e7edf5', borderRadius: 16, padding: 14, background: '#f8fafc' }}>
                   <div style={{ fontWeight: 800, color: '#334155', marginBottom: 8 }}>{text.savedAssets}</div>
+                  {roomAssemblySnapshot.previewImage?.dataUrl ? (
+                    <img className="housing-room-modal-preview" src={roomAssemblySnapshot.previewImage.dataUrl} alt={isEn ? 'Saved showroom screenshot' : '已保存的样板房截图'} draggable="false" />
+                  ) : null}
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
                     <Pill bg="#fff0f6" color="#ff4f82">{text.budget} {formatMoney(roomAssemblySnapshot.budget)}</Pill>
                     <Pill bg="#ecfdf5" color="#047857">{text.spent} {formatMoney(roomAssemblySnapshot.spent)}</Pill>
                     <Pill>{text.purchased} {roomAssemblySnapshot.purchases?.length || 0} {text.itemCount}</Pill>
-                    <Pill>{text.scaleProfile} {Object.keys(roomAssemblySnapshot.sizeProfile || {}).length} {text.classCount}</Pill>
+                    <Pill>{text.scaleProfile} {getRoomAssemblySizeProfileKindCount(roomAssemblySnapshot.sizeProfile)} {text.classCount}</Pill>
                   </div>
                   <div style={{ display: 'grid', gap: 6 }}>
                     {roomAssemblySnapshot.items.map((item) => (

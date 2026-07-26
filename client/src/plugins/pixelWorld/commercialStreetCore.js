@@ -34,14 +34,6 @@ const commercialV2PlayerCharacters = [
     spriteBase: '/assets/pixel-world/characters/pink-cardigan-girl-v1/frames-64x80',
     assetVersion: 'pink-cardigan-girl-v1-20260524',
     initial: { x: 3508, y: 640, direction: 'front' }
-  },
-  {
-    id: 'droplet-halo-mage-v1',
-    label: '水滴光环法师',
-    spriteBase: '/assets/pixel-world/characters/droplet-halo-mage-v1/frames-256x320',
-    assetVersion: 'droplet-halo-mage-v1-hidpi-256-side-coat-balanced-20260709',
-    visualScale: 1.25,
-    initial: { x: 3620, y: 640, direction: 'front' }
   }
 ];
 const commercialV2DefaultControlledPlayerId = 'pink-cardigan-girl-v1';

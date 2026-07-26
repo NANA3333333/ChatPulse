@@ -154,7 +154,7 @@ function parseDesktopWeatherEffect(event) {
   try {
     const parsed = JSON.parse(value);
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch (_error) {
+  } catch {
     return {};
   }
 }
@@ -243,7 +243,10 @@ export const DESKTOP_AUTO_ARRANGE_STORAGE_KEY = 'chatpulse:desktop-auto-arrange:
 export const DESKTOP_ALIGN_TO_GRID_STORAGE_KEY = 'chatpulse:desktop-align-to-grid:v1';
 const DESKTOP_CREATED_ITEMS_STORAGE_KEY = 'chatpulse:desktop-created-items:v2';
 const DESKTOP_RECYCLE_BIN_STORAGE_KEY = 'chatpulse:desktop-recycle-bin:v1';
+const DESKTOP_ALBUM_PHOTOS_STORAGE_KEY = 'chatpulse:desktop-album-photos:v1';
 export const DESKTOP_RECYCLE_BIN_ID = 'desktop-recycle-bin';
+export const DESKTOP_ALBUM_APP_ID = 'desktop-album';
+const DESKTOP_ALBUM_MAX_PHOTOS = 24;
 const DESKTOP_ICON_DEFAULT_COLUMNS = 4;
 
 export const getResponsiveBrowserChromeHeight = () => (
@@ -392,7 +395,7 @@ export function getDesktopLunarInfo(date, lang) {
       };
     }
     return { month: '', day: formatted, short: formatted };
-  } catch (error) {
+  } catch {
     return {
       month: '',
       day: String(date.getDate()),
@@ -646,6 +649,64 @@ export function saveRecycleBinItems(items) {
   } catch (error) {
     console.warn('Failed to save recycle bin items:', error);
   }
+}
+
+export function createDesktopPhotoId() {
+  const suffix = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID().slice(0, 8)
+    : Math.random().toString(36).slice(2, 10);
+  return `desktop-photo-${Date.now().toString(36)}-${suffix}`;
+}
+
+export function normalizeDesktopAlbumPhoto(photo, index = 0) {
+  if (!photo || typeof photo !== 'object') return null;
+  const dataUrl = String(photo.dataUrl || '');
+  if (!/^data:image\/(?:png|jpeg|jpg|webp|svg\+xml);/i.test(dataUrl)) return null;
+  const createdAt = Number(photo.createdAt) || Date.now();
+  const id = String(photo.id || createDesktopPhotoId());
+  const fallbackLabel = `Photo ${index + 1}`;
+  return {
+    id,
+    label: String(photo.label || fallbackLabel).trim() || fallbackLabel,
+    dataUrl,
+    width: Math.max(1, Math.round(Number(photo.width) || 1)),
+    height: Math.max(1, Math.round(Number(photo.height) || 1)),
+    type: String(photo.type || 'image/png'),
+    createdAt,
+  };
+}
+
+export function loadDesktopAlbumPhotos() {
+  try {
+    const raw = window.localStorage.getItem(DESKTOP_ALBUM_PHOTOS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((photo, index) => normalizeDesktopAlbumPhoto(photo, index))
+      .filter(Boolean)
+      .slice(0, DESKTOP_ALBUM_MAX_PHOTOS);
+  } catch (error) {
+    console.warn('Failed to load desktop album photos:', error);
+    return [];
+  }
+}
+
+export function saveDesktopAlbumPhotos(photos) {
+  const serializablePhotos = (Array.isArray(photos) ? photos : [])
+    .map((photo, index) => normalizeDesktopAlbumPhoto(photo, index))
+    .filter(Boolean)
+    .slice(0, DESKTOP_ALBUM_MAX_PHOTOS);
+  for (let count = serializablePhotos.length; count >= 0; count -= 1) {
+    try {
+      const payload = serializablePhotos.slice(0, count);
+      window.localStorage.setItem(DESKTOP_ALBUM_PHOTOS_STORAGE_KEY, JSON.stringify(payload));
+      return payload;
+    } catch (error) {
+      if (count <= 1) console.warn('Failed to save desktop album photos:', error);
+    }
+  }
+  return [];
 }
 
 export function getDesktopGridMetrics(element) {

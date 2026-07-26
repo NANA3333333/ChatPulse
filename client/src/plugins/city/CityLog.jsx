@@ -1,8 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Activity,
     AlertCircle,
+    Archive,
+    Bell,
+    BookOpen,
     Briefcase,
+    CalendarDays,
     ChevronDown,
     ChevronRight,
     CloudFog,
@@ -10,13 +14,21 @@ import {
     CloudRain,
     CloudSun,
     Coffee,
+    Coins,
+    List,
+    MapPin,
+    Megaphone,
     Moon,
     Package,
-    Settings,
+    Power,
+    RotateCcw,
+    Search,
+    SlidersHorizontal,
     Store,
     SunMedium,
+    User,
+    Users,
     Wind,
-    RotateCcw,
 } from 'lucide-react';
 import CityManager from './CityManager';
 import AvatarWithFrame from '../../components/AvatarWithFrame';
@@ -27,20 +39,11 @@ import './CityLog.css';
 
 const FALLBACK_AVATAR = defaultAvatarUrl('User');
 const avatarSrc = (url, apiUrl) => resolveAvatarUrl(url, apiUrl) || FALLBACK_AVATAR;
-
-const tabStyle = (active) => ({
-    padding: '10px 16px',
-    border: 'none',
-    borderBottom: active ? '2px solid #ff4f82' : '2px solid transparent',
-    backgroundColor: 'transparent',
-    color: active ? '#ff4f82' : '#806273',
-    cursor: 'pointer',
-    fontSize: '14px',
-    fontWeight: active ? '600' : '400',
-    transition: 'all 0.2s',
-    flex: '0 0 auto',
-    whiteSpace: 'nowrap',
-});
+const CITY_LIVE_EVENTS = ['city_update', 'wallet_sync', 'refresh_contacts', 'city_inventory_update'];
+const INITIAL_VISIBLE_ROW_LIMIT = 300;
+const ROW_LIMIT_STEP = 300;
+const normalizeSearchText = (value) => String(value || '').trim().toLowerCase();
+const isEnabledConfigValue = (value) => value === true || value === 1 || String(value || '').toLowerCase() === '1' || String(value || '').toLowerCase() === 'true';
 
 const LOCATION_NAMES = {
     factory: { zh: '🏭 工厂', en: '🏭 Factory' },
@@ -93,69 +96,6 @@ const PHYSICAL_LABEL_EN = {
     fatigued: 'Fatigued',
     stable: 'Stable'
 };
-
-const getLocalizedLocationName = (location, isEn) => LOCATION_NAMES[location]?.[isEn ? 'en' : 'zh'] || location || (isEn ? 'Home' : '家');
-const getEmotionLabel = (emotion, isEn) => (isEn ? (EMOTION_LABEL_EN[emotion?.key] || emotion?.label || '') : (emotion?.label || ''));
-const getPhysicalLabel = (physical, isEn) => (isEn ? (PHYSICAL_LABEL_EN[physical?.key] || physical?.label || '') : (physical?.label || ''));
-
-function getStatusDetails(status, isEn = false) {
-    switch (status) {
-        case 'working':
-            return { icon: <Briefcase size={16} />, text: isEn ? 'Working' : '工作中', color: '#ff9800' };
-        case 'eating':
-            return { icon: <Coffee size={16} />, text: isEn ? 'Eating' : '吃饭中', color: '#4caf50' };
-        case 'sleeping':
-            return { icon: <Moon size={16} />, text: isEn ? 'Sleeping' : '睡觉中', color: '#9c27b0' };
-        case 'hungry':
-            return { icon: <AlertCircle size={16} />, text: isEn ? 'Hungry' : '饥饿', color: '#f44336' };
-        case 'coma':
-            return { icon: <Activity size={16} />, text: isEn ? 'Unconscious' : '昏迷', color: '#d32f2f' };
-        default:
-            return { icon: <Store size={16} />, text: isEn ? 'Idle' : '空闲', color: '#2196f3' };
-    }
-}
-
-function getActionEmoji(type) {
-    switch (type) {
-        case 'BUY':
-            return '📦';
-        case 'EAT':
-            return '🍜';
-        case 'STARVE':
-            return '🥵';
-        case 'BROKE':
-            return '💸';
-        case 'GIFT':
-            return '🎁';
-        case 'FED':
-            return '🍱';
-        case 'PLAN':
-            return '🗓️';
-        case 'GIVE_ITEM':
-            return '🎁';
-        case 'SOCIAL':
-            return '💬';
-        default:
-            return '';
-    }
-}
-
-function getStateColor(value) {
-    if (value >= 70) return '#4caf50';
-    if (value >= 40) return '#ff9800';
-    return '#f44336';
-}
-
-function getInvertedStateColor(value) {
-    if (value <= 30) return '#4caf50';
-    if (value <= 60) return '#ff9800';
-    return '#f44336';
-}
-
-function getCurrentWeather(events) {
-    if (!Array.isArray(events)) return null;
-    return events.find((event) => String(event.event_type || '').toLowerCase() === 'weather') || null;
-}
 
 const WEATHER_BACKGROUND_ASSETS = {
     sunny: {
@@ -235,6 +175,63 @@ const WEATHER_INTENSITY_LABELS = {
     heavy: { zh: '重度', en: 'Heavy' },
 };
 
+const TONES = ['blue', 'coral', 'green', 'purple', 'amber', 'red'];
+
+const asNumber = (value, fallback = 0) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+};
+
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+const getLocalizedLocationName = (location, isEn) => LOCATION_NAMES[location]?.[isEn ? 'en' : 'zh'] || location || (isEn ? 'Home' : '家');
+const getEmotionLabel = (emotion, isEn) => (isEn ? (EMOTION_LABEL_EN[emotion?.key] || emotion?.label || '') : (emotion?.label || ''));
+const getPhysicalLabel = (physical, isEn) => (isEn ? (PHYSICAL_LABEL_EN[physical?.key] || physical?.label || '') : (physical?.label || ''));
+
+function getStatusDetails(status, isEn = false) {
+    switch (status) {
+        case 'working':
+            return { icon: <Briefcase size={15} />, text: isEn ? 'Working' : '工作中' };
+        case 'eating':
+            return { icon: <Coffee size={15} />, text: isEn ? 'Eating' : '吃饭中' };
+        case 'sleeping':
+            return { icon: <Moon size={15} />, text: isEn ? 'Sleeping' : '睡觉中' };
+        case 'hungry':
+            return { icon: <AlertCircle size={15} />, text: isEn ? 'Hungry' : '饥饿' };
+        case 'coma':
+            return { icon: <Activity size={15} />, text: isEn ? 'Unconscious' : '昏迷' };
+        default:
+            return { icon: <Store size={15} />, text: isEn ? 'Idle' : '空闲' };
+    }
+}
+
+function getActionEmoji(type) {
+    switch (String(type || '').toUpperCase()) {
+        case 'BUY':
+            return '📦';
+        case 'EAT':
+            return '🍜';
+        case 'STARVE':
+            return '🥵';
+        case 'BROKE':
+            return '💸';
+        case 'GIFT':
+            return '🎁';
+        case 'FED':
+            return '🍱';
+        case 'PLAN':
+            return '🗓️';
+        case 'GIVE_ITEM':
+            return '🎁';
+        case 'SOCIAL':
+            return '💬';
+        case 'QUEST':
+            return '📌';
+        default:
+            return '';
+    }
+}
+
 function parseWeatherEffect(event) {
     const value = event?.effect_json ?? event?.effect ?? {};
     if (value && typeof value === 'object' && !Array.isArray(value)) return value;
@@ -242,7 +239,7 @@ function parseWeatherEffect(event) {
     try {
         const parsed = JSON.parse(value);
         return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-    } catch (_err) {
+    } catch {
         return {};
     }
 }
@@ -299,8 +296,12 @@ function getWeatherVisual(event, isEn = false) {
         tint: meta.tint,
         accent: meta.accent,
         background,
-        particles: 0,
     };
+}
+
+function getCurrentWeather(events) {
+    if (!Array.isArray(events)) return null;
+    return events.find((event) => String(event.event_type || '').toLowerCase() === 'weather') || null;
 }
 
 function isWeatherAnnouncement(item) {
@@ -364,61 +365,596 @@ function splitHackerIntelContent(value) {
     return { visible, hasIntel: true };
 }
 
+function parseQuestReview(value) {
+    if (!value) return null;
+    if (typeof value === 'object') return value;
+    if (typeof value !== 'string') return null;
+    try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+        return null;
+    }
+}
+
+function formatDateTag(value) {
+    const date = new Date(value || Date.now());
+    if (!Number.isFinite(date.getTime())) return '';
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function formatTime(value, isEn) {
+    const date = new Date(value || Date.now());
+    if (!Number.isFinite(date.getTime())) return '--:--';
+    return date.toLocaleTimeString(isEn ? 'en-US' : 'zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatDateLabel(tag, todayTag, isEn) {
+    if (!tag) return isEn ? 'Unknown date' : '未知日期';
+    if (tag === todayTag) return isEn ? `${tag} Today` : `${tag} 今天`;
+    return tag;
+}
+
+function getCategoryForLog(log) {
+    const type = String(log?.action_type || '').toUpperCase();
+    const questReview = parseQuestReview(log?.quest_review);
+    const content = String(log?.content || '').trim();
+    if (Boolean(log?.is_truncated) || content.startsWith('【商业街输出折叠】') || String(questReview?.status || '') === 'error' || type.includes('ERROR')) {
+        return 'exception';
+    }
+    if (type === 'SOCIAL') return 'social';
+    if (['BUY', 'EAT', 'GIFT', 'GIVE_ITEM', 'FED', 'BROKE'].includes(type)) return 'trade';
+    return 'action';
+}
+
+function getCategoryLabel(categoryId, tx) {
+    switch (categoryId) {
+        case 'action':
+            return tx('Action', '行动');
+        case 'trade':
+            return tx('Trade', '交易');
+        case 'social':
+            return tx('Social', '社交');
+        case 'notice':
+            return tx('Notice', '公告');
+        case 'exception':
+            return tx('Exception', '异常');
+        default:
+            return tx('All', '全部');
+    }
+}
+
+function getLogActionTitle(log, content, tx) {
+    const emoji = getActionEmoji(log.action_type);
+    const type = String(log.action_type || '').toUpperCase();
+    const text = String(content || log.content || '').replace(/\s+/g, ' ').trim();
+    if (text) return `${emoji ? `${emoji} ` : ''}${text}`;
+    if (type === 'SOCIAL') return tx('Social encounter', '社交偶遇');
+    if (type === 'BUY') return tx('Bought an item', '购买物品');
+    if (type === 'EAT') return tx('Had a meal', '吃饭恢复');
+    if (type === 'QUEST') return tx('Quest progress', '任务推进');
+    return type || tx('City activity', '城市行动');
+}
+
+function Avatar({ resident, size = 'md', apiUrl }) {
+    const name = resident?.name || 'C';
+    if (resident?.avatar) {
+        return (
+            <AvatarWithFrame
+                size={size === 'lg' ? 68 : size === 'sm' ? 32 : 50}
+                frame={resident.avatarFrame || 'none'}
+                src={avatarSrc(resident.avatar, apiUrl)}
+                fallbackSrc={FALLBACK_AVATAR}
+                alt=""
+                className={`city-avatar city-avatar-${size}`}
+            />
+        );
+    }
+    return (
+        <div className={`avatar-placeholder avatar-${size} tone-${resident?.tone || 'blue'}`} aria-label={`${name}头像占位`}>
+            {name.slice(0, 1)}
+        </div>
+    );
+}
+
+function Metric({ value, kind }) {
+    const number = asNumber(value);
+    const positive = number > 0;
+    const display = number === 0 ? '0' : `${positive ? '+' : '-'}${Math.abs(number)}`;
+    return <span className={`metric ${positive ? 'positive' : number < 0 ? 'negative' : 'neutral'}`}>{display}{kind}</span>;
+}
+
+function AppShell({
+    page,
+    setPage,
+    children,
+    currentWeather,
+    weatherVisual,
+    onRefresh,
+    loading,
+    tx,
+    isEn,
+    residentCount = 0,
+    searchValue,
+    onSearchChange,
+    cityEnabled = false,
+    cityStatusKnown = false,
+    togglingCityEnabled = false,
+    onToggleCityEnabled,
+}) {
+    const now = new Date();
+    const WeatherIcon = weatherVisual?.Icon || CloudSun;
+    const weatherText = currentWeather ? (currentWeather.title || weatherVisual?.label || tx('Live', '实时')) : tx('Quiet', '平稳');
+    const dateText = isEn
+        ? now.toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit' })
+        : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${now.toLocaleDateString('zh-CN', { weekday: 'short' })}`;
+    const timeText = now.toLocaleTimeString(isEn ? 'en-US' : 'zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+    return (
+        <div className="app-shell">
+            <header className="topbar">
+                <div className="brand">
+                    <span className="brand-mark"><Activity /></span>
+                    <strong>ChatPulse</strong>
+                    <i />
+                    <b>{tx('Commercial Street', '商业街')}</b>
+                </div>
+                <nav className="page-tabs" aria-label={tx('Commercial street page', '商业街页面')}>
+                    <button className={page === 'logs' ? 'active' : ''} type="button" onClick={() => setPage('logs')}>{tx('Logs', '日志')}</button>
+                    <button className={page === 'settings' ? 'active' : ''} type="button" onClick={() => setPage('settings')}>{tx('Management', '管理')}</button>
+                </nav>
+                <div className="top-meta">
+                    <span><CalendarDays />{dateText}</span>
+                    <span>{timeText}</span>
+                    <span className="weather"><WeatherIcon />{weatherText}</span>
+                    <span><User />{tx(`Online ${residentCount}`, `在线 ${residentCount}`)}</span>
+                    <label className="global-search">
+                        <input
+                            value={searchValue}
+                            onChange={(event) => onSearchChange(event.target.value)}
+                            placeholder={tx('Search districts/items/characters', '搜索分区/商品/角色')}
+                        />
+                        <Search />
+                    </label>
+                    <button
+                        className={`city-status-button ${cityEnabled ? 'is-on' : 'is-off'}`}
+                        type="button"
+                        onClick={onToggleCityEnabled}
+                        disabled={!cityStatusKnown || togglingCityEnabled}
+                        aria-pressed={cityEnabled}
+                        title={cityEnabled ? tx('Click to pause commercial street', '点击关闭商业街') : tx('Click to start commercial street', '点击开启商业街')}
+                    >
+                        <Power />
+                        {togglingCityEnabled
+                            ? tx('Saving', '保存中')
+                            : cityEnabled
+                                ? tx('Street On', '商业街开启')
+                                : cityStatusKnown
+                                    ? tx('Street Off', '商业街关闭')
+                                    : tx('Status', '状态')}
+                    </button>
+                    <button className="icon-button refresh-button" type="button" onClick={onRefresh} disabled={loading}><RotateCcw />{tx('Refresh', '刷新')}</button>
+                </div>
+            </header>
+            {children}
+        </div>
+    );
+}
+
+function ResidentRibbon({ residents, selected, setSelected, apiUrl, tx, activityCount }) {
+    const trackRef = useRef(null);
+    const scrollNext = () => trackRef.current?.scrollBy({ left: 320, behavior: 'smooth' });
+    return (
+        <div className="resident-ribbon" aria-label={tx('Resident filter', '居民筛选')}>
+            <div className="ribbon-track" ref={trackRef}>
+                <button type="button" className={`resident-tab resident-tab-all ${selected === 'all' ? 'selected' : ''}`} onClick={() => setSelected('all')}>
+                    <div className="avatar-placeholder avatar-md tone-blue"><Users size={22} /></div>
+                    <span className="resident-tab-copy"><strong>{tx('All Residents', '全部居民')}</strong><small>{tx('Full city feed', '全城动态')}</small></span>
+                    <span className="energy-ring energy-high">{activityCount}</span>
+                </button>
+                {residents.map((resident) => (
+                    <button key={resident.id} type="button" className={`resident-tab ${selected === resident.id ? 'selected' : ''}`} onClick={() => setSelected(selected === resident.id ? 'all' : resident.id)}>
+                        <Avatar resident={resident} apiUrl={apiUrl} />
+                        <span className="resident-tab-copy"><strong>{resident.name}</strong><small>{resident.place}</small></span>
+                        <span className={`energy-ring energy-${resident.energy < 50 ? 'low' : resident.energy < 70 ? 'mid' : 'high'}`}>{resident.energy}</span>
+                        {resident.unread > 0 && <b className="unread-badge">{resident.unread}</b>}
+                    </button>
+                ))}
+            </div>
+            <button className="ribbon-next" type="button" aria-label={tx('More residents', '查看更多居民')} onClick={scrollNext}><ChevronRight /></button>
+        </div>
+    );
+}
+
+function CategoryRail({ categories, active, setActive }) {
+    return (
+        <aside className="category-rail" aria-label="Log categories">
+            {categories.map((item) => {
+                const Icon = item.icon;
+                return (
+                    <button key={item.id} className={active === item.id ? 'active' : ''} type="button" onClick={() => setActive(item.id)}>
+                        <Icon />
+                        <span>{item.label}</span>
+                        {item.count > 0 && <b>{item.count > 99 ? '99+' : item.count}</b>}
+                    </button>
+                );
+            })}
+        </aside>
+    );
+}
+
+function LogRow({ row, expanded, setExpanded, apiUrl, tx, isEn, expandedHiddenLogs, setExpandedHiddenLogs, retryQuestReview, rerollCityLog, retryingQuestReviewId, rerollingLogId }) {
+    const hiddenExpanded = Boolean(expandedHiddenLogs[row.numericId]);
+    const showFailureActions = row.sourceType === 'log' && (row.failed || row.isTruncated || String(row.questReview?.status || '') === 'error');
+    return (
+        <article className={`log-row ${row.failed ? 'is-failed' : ''} ${expanded ? 'is-expanded' : ''}`}>
+            <button className="log-row-main" type="button" aria-expanded={expanded} onClick={() => setExpanded(expanded ? null : row.id)}>
+                <time>{row.time}</time>
+                <span className="log-person">
+                    <Avatar resident={row.resident} apiUrl={apiUrl} size="sm" />
+                    <strong>{row.residentName}</strong>
+                </span>
+                <span className="log-action"><b>{row.action}</b><small>{row.categoryLabel}</small></span>
+                <span className="log-place"><MapPin />{row.place}</span>
+                <Metric value={row.money} kind={tx(' coins', '金币')} />
+                <Metric value={row.energy} kind={tx(' energy', '精力')} />
+                <Metric value={row.calories} kind={tx(' cal', '卡')} />
+                <span className="row-caret">{expanded ? <ChevronDown /> : <ChevronRight />}</span>
+            </button>
+            {expanded && (
+                <div className="log-expanded">
+                    <div>
+                        <h4>{row.failed ? tx('Exception Details', '异常详情') : tx('Event Details', '事件详情')}</h4>
+                        <p>{row.content || row.action}</p>
+                        {(row.isTruncated || row.hasHiddenHackerIntel) && (
+                            <div className="technical-reason">
+                                <strong>{row.isTruncated ? tx('Hidden content', '隐藏内容') : tx('Private intel hidden', '私密情报已隐藏')}</strong>
+                                <button className="text-link-button" type="button" onClick={() => setExpandedHiddenLogs((prev) => ({ ...prev, [row.numericId]: !hiddenExpanded }))}>
+                                    {hiddenExpanded ? tx('Collapse original', '收起原文') : tx('View original', '查看原文')}
+                                </button>
+                                {hiddenExpanded && <code>{row.hiddenContent || row.content}</code>}
+                            </div>
+                        )}
+                        {row.technicalReason && (
+                            <div className="technical-reason">
+                                <strong>{tx('Technical reason', '技术原因')}</strong>
+                                <code>{row.technicalReason}</code>
+                            </div>
+                        )}
+                        <dl>
+                            <div><dt>{tx('Source', '来源')}</dt><dd>{row.sourceLabel}</dd></div>
+                            <div><dt>{tx('Location', '地点')}</dt><dd>{row.place}</dd></div>
+                            <div><dt>{tx('Recorded at', '记录时间')}</dt><dd>{new Date(row.timestamp).toLocaleString(isEn ? 'en-US' : 'zh-CN')}</dd></div>
+                        </dl>
+                    </div>
+                    <div>
+                        <h4>{row.questReview ? tx('Mayor Review', '市长评分') : tx('State Changes', '状态变化')}</h4>
+                        {row.questReview ? (
+                            <div className={`quest-review-card ${String(row.questReview.status || '') === 'error' ? 'is-error' : ''}`}>
+                                <div className="quest-review-head">
+                                    <strong>{String(row.questReview.status || '') === 'error' ? tx('Scoring failed', '评分失败') : tx('Progress score', '推进评分')}</strong>
+                                    {String(row.questReview.status || '') !== 'error' && <b>+{Number(row.questReview.progress_delta || 0)} {tx('pts', '分')}</b>}
+                                </div>
+                                {String(row.questReview.status || '') !== 'error' && (
+                                    <div className="progress">
+                                        <span style={{ width: `${clamp((Number(row.questReview.progress_after || 0) / Math.max(1, Number(row.questReview.target_score || 1))) * 100, 0, 100)}%` }} />
+                                    </div>
+                                )}
+                                <p>{String(row.questReview.status || '') === 'error' ? (row.questReview.error_message || tx('Quest scoring failed. Please retry.', '任务评分失败，请重试。')) : (row.questReview.comment || tx('This action has been scored by the Mayor judge.', '这次行动已由市长裁判完成评分。'))}</p>
+                            </div>
+                        ) : (
+                            <p>{tx('This record has been synchronized to wallet, energy and inventory state.', '本条记录已同步角色钱包、体力和背包状态。')}</p>
+                        )}
+                        {showFailureActions && (
+                            <div className="inline-actions">
+                                <button type="button" onClick={() => rerollCityLog(row.numericId)} disabled={rerollingLogId === row.numericId}>
+                                    <RotateCcw /><span>{rerollingLogId === row.numericId ? tx('Generating...', '生成中...') : tx('Regenerate', '重新生成')}<small>{tx('Rebuild this event', '重新生成本次事件')}</small></span>
+                                </button>
+                                <button className="primary" type="button" onClick={() => retryQuestReview(row.numericId)} disabled={retryingQuestReviewId === row.numericId}>
+                                    <Activity /><span>{retryingQuestReviewId === row.numericId ? tx('Scoring...', '评分中...') : tx('Retry score', '重试评分')}<small>{tx('Keep event content', '保留事件内容')}</small></span>
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+        </article>
+    );
+}
+
+function CityBrief({ currentWeather, weatherVisual, visibleAnnouncements, events, selectedResident, residents, apiUrl, tx, isEn, onRefresh }) {
+    const selected = residents.find((item) => item.id === selectedResident) || residents[0] || null;
+    const WeatherIcon = weatherVisual?.Icon || CloudSun;
+    const eventLines = events
+        .filter((event) => String(event.event_type || '').toLowerCase() !== 'weather')
+        .slice(0, 3);
+    const inventory = selected?.inventory || [];
+    const status = selected?.raw ? getStatusDetails(selected.raw.city_status, isEn) : null;
+
+    return (
+        <aside className="city-brief">
+            <section>
+                <h3><Bell />{tx('City Brief', '城市简报')}</h3>
+                <div className="weather-line">
+                    <WeatherIcon />
+                    <div>
+                        <strong>{currentWeather ? (currentWeather.title || weatherVisual?.label) : tx('Street is quiet', '街区平稳')}</strong>
+                        <span>{weatherVisual?.intensityLabel || tx('No special weather', '暂无特殊天气')}</span>
+                    </div>
+                    <small>{currentWeather ? formatTime(currentWeather.created_at || currentWeather.timestamp, isEn) : tx('Now', '现在')}</small>
+                </div>
+                {currentWeather?.description && <p className="brief-description">{currentWeather.description}</p>}
+            </section>
+
+            <section>
+                <div className="section-heading">
+                    <h4><Megaphone />{tx('Notices', '公告')}</h4>
+                    <button type="button" onClick={onRefresh}>{tx('Refresh', '刷新')}</button>
+                </div>
+                {visibleAnnouncements.length === 0 ? (
+                    <p>{tx('No notices yet.', '暂无公告。')}</p>
+                ) : visibleAnnouncements.slice(0, 3).map((item) => {
+                    const meta = getAnnouncementMeta(item, isEn);
+                    const paragraphs = splitAnnouncementParagraphs(item);
+                    return (
+                        <div className="event-line" key={`brief-ann-${item.id}`}>
+                            <i />
+                            <div>
+                                <strong>{item.title || meta.label}</strong>
+                                <span>{paragraphs[0] || cleanAnnouncementContent(item)}</span>
+                            </div>
+                            <b>{meta.label}</b>
+                        </div>
+                    );
+                })}
+            </section>
+
+            <section>
+                <h4><Archive />{tx('Active Events', '当前事件')}</h4>
+                {eventLines.length === 0 ? (
+                    <p>{tx('No active event right now.', '当前没有活跃事件。')}</p>
+                ) : eventLines.map((event) => (
+                    <div className="event-line" key={`brief-event-${event.id || event.title}`}>
+                        <i />
+                        <div>
+                            <strong>{event.emoji || ''}{event.title || tx('Street event', '街区事件')}</strong>
+                            <span>{event.description || tx('Event is running.', '事件正在进行。')}</span>
+                        </div>
+                        <b>{event.event_type || tx('Live', '实时')}</b>
+                    </div>
+                ))}
+            </section>
+
+            {selected && (
+                <section className="resident-detail">
+                    <div className="section-heading">
+                        <h4><User />{tx('Resident Snapshot', '居民快照')}</h4>
+                    </div>
+                    <div className="detail-person">
+                        <Avatar resident={selected} apiUrl={apiUrl} size="lg" />
+                        <div>
+                            <strong>{selected.name}</strong>
+                            <span><MapPin />{selected.place}</span>
+                            <small>{selected.mood} · {selected.physical}</small>
+                        </div>
+                    </div>
+                    <div className="detail-metrics">
+                        <div><span>{tx('Coins', '金币')}</span><strong>{selected.wallet.toFixed(0)}</strong></div>
+                        <div><span>{tx('Energy', '精力')}</span><strong>{selected.energy}</strong></div>
+                        <div><span>{tx('Inventory', '背包')}</span><strong>{inventory.length}/15</strong></div>
+                    </div>
+                    <div className="progress"><span style={{ width: `${selected.energy}%` }} /></div>
+                    <div className="inventory-preview">
+                        <span>{tx('Inventory preview', '背包预览')}</span>
+                        <div>
+                            {inventory.slice(0, 6).length > 0 ? inventory.slice(0, 6).map((item, index) => (
+                                <i key={`${selected.id}-item-${item.item_id || item.id || index}`} title={item.name || item.item_name || tx('Item', '物品')}>
+                                    {item.emoji || item.name?.slice(0, 1) || item.item_name?.slice(0, 1) || <Package size={14} />}
+                                </i>
+                            )) : <i>--</i>}
+                        </div>
+                    </div>
+                    <div className="schedule">
+                        <h5>{tx('Current state', '当前状态')}</h5>
+                        <p><time>{formatTime(Date.now(), isEn)}</time><span>{status?.icon}{status?.text} · {selected.place}</span></p>
+                    </div>
+                </section>
+            )}
+        </aside>
+    );
+}
+
+function LogPage({ rows, totalRows, canLoadMore, onLoadMore, categories, category, setCategory, selectedResident, setSelectedResident, residents, apiUrl, tx, isEn, currentWeather, weatherVisual, visibleAnnouncements, events, onRefresh, loading, retryQuestReview, rerollCityLog, retryingQuestReviewId, rerollingLogId, activityCount }) {
+    const [expandedRow, setExpandedRow] = useState(null);
+    const [expandedHiddenLogs, setExpandedHiddenLogs] = useState({});
+    const todayTag = formatDateTag(Date.now());
+    const firstRowId = rows[0]?.id || null;
+    const groupedRows = useMemo(() => rows.reduce((acc, row) => {
+        const tag = row.dateTag || todayTag;
+        if (!acc[tag]) acc[tag] = [];
+        acc[tag].push(row);
+        return acc;
+    }, {}), [rows, todayTag]);
+    const sortedTags = Object.keys(groupedRows).sort((a, b) => b.localeCompare(a));
+
+    useEffect(() => {
+        setExpandedRow((current) => {
+            if (current && rows.some((row) => row.id === current)) return current;
+            return firstRowId;
+        });
+    }, [firstRowId, rows]);
+
+    return (
+        <div className="log-page">
+            <ResidentRibbon residents={residents} selected={selectedResident} setSelected={setSelectedResident} apiUrl={apiUrl} tx={tx} activityCount={activityCount} />
+            <div className="log-workspace">
+                <CategoryRail categories={categories} active={category} setActive={setCategory} />
+                <main className="workspace-scroll city-scroll">
+                    <div className="feed-column">
+                        <div className="feed-toolbar">
+                            <div><BookOpen /><strong>{tx('Live Ledger', '实时账本')}</strong><span>{rows.length}/{totalRows} {tx('records', '条记录')}</span></div>
+                            <button type="button" onClick={onRefresh} disabled={loading}><SlidersHorizontal />{tx('Refresh feed', '刷新动态')}</button>
+                        </div>
+                        <div className="log-list">
+                            {rows.length === 0 ? (
+                                <div className="empty-state">
+                                    <Archive />
+                                    <strong>{tx('No records found', '没有找到记录')}</strong>
+                                    <span>{tx('Try another resident or category.', '换个居民或分类试试。')}</span>
+                                </div>
+                            ) : (
+                                <>
+                                    {sortedTags.map((tag) => (
+                                        <div key={tag}>
+                                            <div className="date-divider">
+                                                <span><CalendarDays />{formatDateLabel(tag, todayTag, isEn)}</span>
+                                                <small>{groupedRows[tag].length} {tx('records', '条记录')}</small>
+                                            </div>
+                                            {groupedRows[tag].map((row) => (
+                                                <LogRow
+                                                    key={row.id}
+                                                    row={row}
+                                                    expanded={expandedRow === row.id}
+                                                    setExpanded={setExpandedRow}
+                                                    apiUrl={apiUrl}
+                                                    tx={tx}
+                                                    isEn={isEn}
+                                                    expandedHiddenLogs={expandedHiddenLogs}
+                                                    setExpandedHiddenLogs={setExpandedHiddenLogs}
+                                                    retryQuestReview={retryQuestReview}
+                                                    rerollCityLog={rerollCityLog}
+                                                    retryingQuestReviewId={retryingQuestReviewId}
+                                                    rerollingLogId={rerollingLogId}
+                                                />
+                                            ))}
+                                        </div>
+                                    ))}
+                                    {canLoadMore && (
+                                        <div className="load-more-row">
+                                            <button type="button" onClick={onLoadMore}>
+                                                <ChevronDown />
+                                                <span>{tx('Load more', '查看更多')}</span>
+                                                <small>{Math.min(ROW_LIMIT_STEP, Math.max(0, totalRows - rows.length))} {tx('more', '条')}</small>
+                                            </button>
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    </div>
+                    <CityBrief
+                        currentWeather={currentWeather}
+                        weatherVisual={weatherVisual}
+                        visibleAnnouncements={visibleAnnouncements}
+                        events={events}
+                        selectedResident={selectedResident}
+                        residents={residents}
+                        apiUrl={apiUrl}
+                        tx={tx}
+                        isEn={isEn}
+                        onRefresh={onRefresh}
+                    />
+                </main>
+            </div>
+        </div>
+    );
+}
+
+function SettingsPage({ apiUrl, onRefresh, onOpenLogs }) {
+    return (
+        <div className="settings-page settings-page--management">
+            <CityManager apiUrl={apiUrl} onRefreshLogs={onRefresh} onOpenLogs={onOpenLogs} />
+        </div>
+    );
+}
+
 export default function CityLog({ apiUrl }) {
     const { lang } = useLanguage();
     const isEn = lang === 'en';
     const tx = useCallback((en, zh) => (isEn ? en : zh), [isEn]);
-    const announcementActionTypes = new Set(['ANNOUNCE', 'MAYOR', 'EVENT']);
-    const isAnnouncementLog = (log) => {
-        const actionType = String(log.action_type || '').toUpperCase();
-        if (announcementActionTypes.has(actionType)) return true;
-        return actionType === 'QUEST' && String(log.character_id || '').toLowerCase() === 'system';
-    };
-    const [tab, setTab] = useState('feed');
+    const [page, setPage] = useState('logs');
+    const [selectedResident, setSelectedResident] = useState('all');
+    const [category, setCategory] = useState('all');
     const [logs, setLogs] = useState([]);
     const [announcements, setAnnouncements] = useState([]);
     const [events, setEvents] = useState([]);
     const [characters, setCharacters] = useState([]);
+    const [cityConfig, setCityConfig] = useState({});
+    const [globalSearch, setGlobalSearch] = useState('');
     const [loading, setLoading] = useState(true);
-    const [expandedBag, setExpandedBag] = useState(null);
-    const [collapsedDates, setCollapsedDates] = useState({});
-    const [expandedHiddenLogs, setExpandedHiddenLogs] = useState({});
+    const [visibleRowLimit, setVisibleRowLimit] = useState(INITIAL_VISIBLE_ROW_LIMIT);
     const [retryingQuestReviewId, setRetryingQuestReviewId] = useState(null);
     const [rerollingLogId, setRerollingLogId] = useState(null);
-    const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
-    const refreshTimerRef = React.useRef(null);
+    const [togglingCityEnabled, setTogglingCityEnabled] = useState(false);
+    const refreshTimerRef = useRef(null);
     const token = localStorage.getItem('cp_token') || '';
-    const characterById = useMemo(() => new Map(characters.map(c => [String(c.id), c])), [characters]);
+    const announcementActionTypes = useMemo(() => new Set(['ANNOUNCE', 'MAYOR', 'EVENT']), []);
 
-    useEffect(() => {
-        const onResize = () => setIsMobile(window.innerWidth <= 768);
-        window.addEventListener('resize', onResize);
-        return () => window.removeEventListener('resize', onResize);
-    }, []);
+    const isAnnouncementLog = useCallback((log) => {
+        const actionType = String(log.action_type || '').toUpperCase();
+        if (announcementActionTypes.has(actionType)) return true;
+        return actionType === 'QUEST' && String(log.character_id || '').toLowerCase() === 'system';
+    }, [announcementActionTypes]);
 
     const fetchData = useCallback(async () => {
+        setLoading(true);
         try {
             const headers = { Authorization: `Bearer ${token}` };
-            const [logsRes, announcementsRes, eventsRes, charsRes] = await Promise.all([
-                fetch(`${apiUrl}/city/logs?limit=all`, { headers }),
+            const [logsRes, announcementsRes, eventsRes, charsRes, configRes] = await Promise.all([
+                fetch(`${apiUrl}/city/logs?limit=300`, { headers }),
                 fetch(`${apiUrl}/city/announcements?limit=50`, { headers }),
                 fetch(`${apiUrl}/city/events`, { headers }),
                 fetch(`${apiUrl}/city/characters`, { headers }),
+                fetch(`${apiUrl}/city/config`, { headers }),
             ]);
-            const logsData = await logsRes.json();
-            const announcementsData = await announcementsRes.json();
-            const eventsData = await eventsRes.json();
-            const charsData = await charsRes.json();
+            const [logsData, announcementsData, eventsData, charsData, configData] = await Promise.all([
+                logsRes.json(),
+                announcementsRes.json(),
+                eventsRes.json(),
+                charsRes.json(),
+                configRes.json(),
+            ]);
             if (logsData.success) setLogs(logsData.logs || []);
             if (announcementsData.success) setAnnouncements(announcementsData.announcements || []);
             if (eventsData.success) setEvents(eventsData.events || []);
             if (charsData.success) setCharacters(charsData.characters || []);
+            if (configData.success) setCityConfig(configData.config || {});
         } catch (e) {
             console.error('CityLog error:', e);
         } finally {
             setLoading(false);
         }
     }, [apiUrl, token]);
+
+    const cityEnabled = isEnabledConfigValue(cityConfig.dlc_enabled);
+    const cityStatusKnown = Object.prototype.hasOwnProperty.call(cityConfig, 'dlc_enabled');
+
+    const toggleCityEnabled = useCallback(async () => {
+        if (togglingCityEnabled) return;
+        const nextValue = cityEnabled ? '0' : '1';
+        setTogglingCityEnabled(true);
+        try {
+            const headers = {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            };
+            const response = await fetch(`${apiUrl}/city/config`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ key: 'dlc_enabled', value: nextValue }),
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || tx('Failed to update commercial street status', '商业街状态更新失败'));
+            }
+            setCityConfig((current) => data.config || { ...current, dlc_enabled: nextValue });
+            await fetchData();
+            window.dispatchEvent(new Event('city_update'));
+        } catch (error) {
+            window.alert(error.message || tx('Failed to update commercial street status', '商业街状态更新失败'));
+        } finally {
+            setTogglingCityEnabled(false);
+        }
+    }, [apiUrl, cityEnabled, fetchData, token, togglingCityEnabled, tx]);
 
     const retryQuestReview = async (logId) => {
         if (!logId || retryingQuestReviewId) return;
@@ -479,11 +1015,10 @@ export default function CityLog({ apiUrl }) {
                 fetchData();
             }, 800);
         };
-        const handleCityUpdate = () => scheduleRefresh();
-        window.addEventListener('city_update', handleCityUpdate);
+        CITY_LIVE_EVENTS.forEach((eventName) => window.addEventListener(eventName, scheduleRefresh));
         const interval = setInterval(fetchData, 5000);
         return () => {
-            window.removeEventListener('city_update', handleCityUpdate);
+            CITY_LIVE_EVENTS.forEach((eventName) => window.removeEventListener(eventName, scheduleRefresh));
             clearInterval(interval);
             if (refreshTimerRef.current) {
                 clearTimeout(refreshTimerRef.current);
@@ -492,684 +1027,255 @@ export default function CityLog({ apiUrl }) {
         };
     }, [fetchData]);
 
-    const activityLogs = logs.filter((log) => !isAnnouncementLog(log));
+    const activityLogs = useMemo(() => logs.filter((log) => !isAnnouncementLog(log)), [logs, isAnnouncementLog]);
+    const characterById = useMemo(() => new Map(characters.map((character) => [String(character.id), character])), [characters]);
 
-    const latestLogDateTag = activityLogs.length > 0
-        ? (() => {
-            const latest = new Date(activityLogs[0].timestamp);
-            return `${latest.getFullYear()}-${String(latest.getMonth() + 1).padStart(2, '0')}-${String(latest.getDate()).padStart(2, '0')}`;
-        })()
-        : '';
+    const recentCountByCharacter = useMemo(() => {
+        const todayTag = formatDateTag(Date.now());
+        return activityLogs.reduce((acc, log) => {
+            if (formatDateTag(log.timestamp) !== todayTag) return acc;
+            const key = String(log.character_id || '');
+            acc.set(key, (acc.get(key) || 0) + 1);
+            return acc;
+        }, new Map());
+    }, [activityLogs]);
 
-    const groupedLogs = activityLogs.reduce((acc, log) => {
-        const d = new Date(log.timestamp);
-        const tag = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        if (!acc[tag]) acc[tag] = [];
-        acc[tag].push(log);
-        return acc;
-    }, {});
+    const residents = useMemo(() => characters.map((character, index) => {
+        const emotion = deriveEmotion(character);
+        const physical = derivePhysicalState(character);
+        const inventory = Array.isArray(character.inventory) ? character.inventory : [];
+        return {
+            id: String(character.id),
+            name: character.name || tx('Unnamed', '未命名'),
+            place: getLocalizedLocationName(character.location, isEn),
+            energy: clamp(Math.round(asNumber(character.energy, 100)), 0, 100),
+            wallet: asNumber(character.wallet, 0),
+            mood: getEmotionLabel(emotion, isEn) || tx('Calm', '平静'),
+            physical: getPhysicalLabel(physical, isEn) || tx('Stable', '稳定'),
+            inventory,
+            unread: Math.min(9, recentCountByCharacter.get(String(character.id)) || 0),
+            avatar: character.avatar,
+            avatarFrame: character.avatar_frame,
+            tone: TONES[index % TONES.length],
+            raw: character,
+        };
+    }), [characters, isEn, recentCountByCharacter, tx]);
 
-    const todayTag = (() => {
-        const now = new Date();
-        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    })();
+    useEffect(() => {
+        if (selectedResident !== 'all' && !residents.some((resident) => resident.id === selectedResident)) {
+            setSelectedResident('all');
+        }
+    }, [residents, selectedResident]);
 
     const currentWeather = getCurrentWeather(events);
     const weatherVisual = currentWeather ? getWeatherVisual(currentWeather, isEn) : null;
-    const visibleAnnouncements = announcements.filter((item, index) => {
+    const visibleAnnouncements = useMemo(() => announcements.filter((item, index) => {
         if (isWeatherAnnouncement(item)) {
             return announcements.findIndex((candidate) => isWeatherAnnouncement(candidate)) === index;
         }
         const identity = normalizeAnnouncementIdentity(item);
         return announcements.findIndex((candidate) => normalizeAnnouncementIdentity(candidate) === identity) === index;
-    });
-    const summaryCards = [
-        { key: 'records', Icon: Activity, label: tx('Diary Records', '日记记录'), value: activityLogs.length, tone: 'rose' },
-        { key: 'notices', Icon: AlertCircle, label: tx('Notices', '公告'), value: visibleAnnouncements.length, tone: 'amber' },
-        { key: 'residents', Icon: Store, label: tx('Residents', '居民'), value: characters.length, tone: 'mint' },
-        {
-            key: 'weather',
-            Icon: weatherVisual?.Icon || CloudSun,
-            label: tx('Weather', '天气'),
-            value: currentWeather ? (currentWeather.title || weatherVisual?.label || tx('Live', '实时')) : tx('Quiet', '平稳'),
-            tone: 'sky',
-        },
-    ];
+    }), [announcements]);
 
-    const isCollapsed = (tag) => {
-        if (collapsedDates[tag] !== undefined) return collapsedDates[tag];
-        return tag !== latestLogDateTag;
-    };
+    const allRows = useMemo(() => {
+        const residentFallback = {
+            id: 'system',
+            name: tx('System', '系统'),
+            place: tx('Commercial Street', '商业街'),
+            energy: 100,
+            wallet: 0,
+            mood: tx('Stable', '稳定'),
+            physical: tx('Stable', '稳定'),
+            inventory: [],
+            unread: 0,
+            tone: 'blue',
+            raw: null,
+        };
+
+        const activityRows = activityLogs.map((log) => {
+            const character = characterById.get(String(log.character_id));
+            const resident = residents.find((item) => item.id === String(log.character_id)) || {
+                ...residentFallback,
+                id: String(log.character_id || 'system'),
+                name: log.char_name || character?.name || residentFallback.name,
+                avatar: log.char_avatar || character?.avatar,
+                avatarFrame: log.char_avatar_frame || character?.avatar_frame,
+                raw: character || null,
+            };
+            const questReview = parseQuestReview(log.quest_review);
+            const isCollapsedOutput = String(log.content || '').trim().startsWith('【商业街输出折叠】');
+            const isTruncated = Boolean(log.is_truncated) || isCollapsedOutput;
+            const hackerIntelView = splitHackerIntelContent(log.content);
+            const content = hackerIntelView.hasIntel ? hackerIntelView.visible : String(log.content || '').trim();
+            const categoryId = getCategoryForLog(log);
+            const failed = categoryId === 'exception';
+            const timestamp = log.timestamp || Date.now();
+            return {
+                id: `log-${log.id}`,
+                numericId: log.id,
+                sourceType: 'log',
+                sourceLabel: String(log.action_type || '').toUpperCase() || tx('City runtime', '城市运行时'),
+                raw: log,
+                timestamp,
+                timestampValue: new Date(timestamp).getTime() || Date.now(),
+                time: formatTime(timestamp, isEn),
+                dateTag: formatDateTag(timestamp),
+                residentId: String(log.character_id || 'system'),
+                resident,
+                residentName: log.char_name || resident.name,
+                categoryId,
+                categoryLabel: getCategoryLabel(categoryId, tx),
+                action: getLogActionTitle(log, content, tx),
+                content,
+                place: getLocalizedLocationName(log.location || character?.location, isEn),
+                money: asNumber(log.delta_money, 0),
+                energy: asNumber(log.delta_energy, 0),
+                calories: asNumber(log.delta_calories, 0),
+                failed,
+                isTruncated,
+                hasHiddenHackerIntel: hackerIntelView.hasIntel,
+                hiddenContent: log.truncated_original_content || log.content,
+                technicalReason: questReview?.error_message || '',
+                questReview,
+            };
+        });
+
+        const announcementRows = visibleAnnouncements.map((item) => {
+            const meta = getAnnouncementMeta(item, isEn);
+            const paragraphs = splitAnnouncementParagraphs(item);
+            const timestamp = item.timestamp || item.created_at || Date.now();
+            return {
+                id: `announcement-${item.id}`,
+                numericId: `announcement-${item.id}`,
+                sourceType: 'announcement',
+                sourceLabel: meta.label,
+                raw: item,
+                timestamp,
+                timestampValue: new Date(timestamp).getTime() || Date.now(),
+                time: formatTime(timestamp, isEn),
+                dateTag: formatDateTag(timestamp),
+                residentId: 'system',
+                resident: residentFallback,
+                residentName: meta.label,
+                categoryId: 'notice',
+                categoryLabel: getCategoryLabel('notice', tx),
+                action: item.title || paragraphs[0] || meta.label,
+                content: paragraphs.join('\n') || cleanAnnouncementContent(item),
+                place: getLocalizedLocationName(item.location, isEn),
+                money: 0,
+                energy: 0,
+                calories: 0,
+                failed: false,
+                isTruncated: false,
+                hasHiddenHackerIntel: false,
+                hiddenContent: '',
+                technicalReason: '',
+                questReview: null,
+            };
+        });
+
+        return [...activityRows, ...announcementRows].sort((a, b) => b.timestampValue - a.timestampValue);
+    }, [activityLogs, characterById, residents, visibleAnnouncements, isEn, tx]);
+
+    const searchNeedle = useMemo(() => normalizeSearchText(globalSearch), [globalSearch]);
+    const searchedRows = useMemo(() => {
+        if (!searchNeedle) return allRows;
+        return allRows.filter((row) => [
+            row.residentName,
+            row.sourceLabel,
+            row.categoryLabel,
+            row.action,
+            row.content,
+            row.place,
+            row.raw?.location,
+            row.raw?.item_id,
+            row.raw?.action_type,
+        ].some((value) => normalizeSearchText(value).includes(searchNeedle)));
+    }, [allRows, searchNeedle]);
+
+    const filteredRows = useMemo(() => searchedRows.filter((row) => {
+        if (selectedResident !== 'all' && row.residentId !== selectedResident) return false;
+        if (category !== 'all' && row.categoryId !== category) return false;
+        return true;
+    }), [category, searchedRows, selectedResident]);
+
+    useEffect(() => {
+        setVisibleRowLimit(INITIAL_VISIBLE_ROW_LIMIT);
+    }, [category, selectedResident, searchNeedle]);
+
+    const visibleRows = useMemo(() => filteredRows.slice(0, visibleRowLimit), [filteredRows, visibleRowLimit]);
+
+    const categories = useMemo(() => {
+        const count = (id) => id === 'all' ? searchedRows.length : searchedRows.filter((row) => row.categoryId === id).length;
+        return [
+            { id: 'all', label: tx('All', '全部'), icon: List, count: count('all') },
+            { id: 'action', label: tx('Action', '行动'), icon: Activity, count: count('action') },
+            { id: 'trade', label: tx('Trade', '交易'), icon: Coins, count: count('trade') },
+            { id: 'social', label: tx('Social', '社交'), icon: Users, count: count('social') },
+            { id: 'notice', label: tx('Notice', '公告'), icon: Megaphone, count: count('notice') },
+            { id: 'exception', label: tx('Exception', '异常'), icon: AlertCircle, count: count('exception') },
+        ];
+    }, [searchedRows, tx]);
 
     return (
-        <div className="city-log-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-            <style>{`
-                .city-scroll {
-                    scrollbar-width: thin;
-                    scrollbar-color: rgba(148, 163, 184, 0.32) transparent;
-                }
-                .city-scroll::-webkit-scrollbar {
-                    width: 6px;
-                    height: 6px;
-                }
-                .city-scroll::-webkit-scrollbar-track {
-                    background: transparent;
-                }
-                .city-scroll::-webkit-scrollbar-thumb {
-                    background: linear-gradient(180deg, rgba(203, 213, 225, 0.72), rgba(148, 163, 184, 0.38));
-                    border-radius: 999px;
-                    border: 1px solid transparent;
-                    background-clip: padding-box;
-                }
-                .city-scroll::-webkit-scrollbar-thumb:hover {
-                    background: linear-gradient(180deg, rgba(191, 219, 254, 0.78), rgba(148, 163, 184, 0.52));
-                    border-radius: 999px;
-                    border: 1px solid transparent;
-                    background-clip: padding-box;
-                }
-            `}</style>
-            <div className="city-log-tabs" style={{ display: 'flex', borderBottom: '1px solid #eee', padding: '0 12px', backgroundColor: '#fff', overflowX: 'auto', gap: '8px' }}>
-                <button className={tab === 'feed' ? 'is-active' : ''} style={tabStyle(tab === 'feed')} onClick={() => setTab('feed')}>
-                    <Activity size={14} style={{ verticalAlign: 'middle', marginRight: '4px' }} />{tx('Live Feed', '实时动态')}
-                </button>
-                <button className={tab === 'manage' ? 'is-active' : ''} style={tabStyle(tab === 'manage')} onClick={() => setTab('manage')}>
-                    <Settings size={14} style={{ verticalAlign: 'middle', marginRight: '4px' }} />{tx('District Management', '分区管理')}
-                </button>
-            </div>
-
-            <div className="city-log-content" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-                {tab === 'manage' ? (
-                    <CityManager apiUrl={apiUrl} onRefreshLogs={fetchData} />
-                ) : loading ? (
-                    <div className="city-log-loading" style={{ padding: '40px', textAlign: 'center', color: '#999' }}>{tx('Loading...', '加载中...')}</div>
-                ) : (
-                    <div
-                        className="city-log-feed"
-                        style={{
-                            padding: isMobile ? '10px' : '16px',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '16px',
-                            height: '100%',
-                            minHeight: 0,
-                            overflow: 'hidden',
+        <div className="city-log-panel">
+            <AppShell
+                page={page}
+                setPage={setPage}
+                currentWeather={currentWeather}
+                weatherVisual={weatherVisual}
+                onRefresh={fetchData}
+                loading={loading}
+                tx={tx}
+                isEn={isEn}
+                residentCount={residents.length}
+                searchValue={globalSearch}
+                onSearchChange={setGlobalSearch}
+                cityEnabled={cityEnabled}
+                cityStatusKnown={cityStatusKnown}
+                togglingCityEnabled={togglingCityEnabled}
+                onToggleCityEnabled={toggleCityEnabled}
+            >
+                {page === 'settings' ? (
+                    <SettingsPage
+                        apiUrl={apiUrl}
+                        onRefresh={fetchData}
+                        onOpenLogs={(query = '') => {
+                            setGlobalSearch(query);
+                            setPage('logs');
                         }}
-                    >
-                        <div className="city-log-overview">
-                            <div className="city-log-overview-title">
-                                <span className="city-log-kicker">{tx('Commercial Street Diary', '商业街日记')}</span>
-                                <strong>{tx('Live city pulse', '街区实时脉搏')}</strong>
-                            </div>
-                            <div className="city-log-stat-grid">
-                                {summaryCards.map((card) => {
-                                    const StatIcon = card.Icon;
-                                    return (
-                                        <div key={card.key} className={`city-log-stat-card city-log-stat-card--${card.tone}`}>
-                                            <StatIcon size={16} />
-                                            <span>{card.label}</span>
-                                            <strong>{card.value}</strong>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                        <div
-                            className="city-log-feed-layout"
-                            style={{
-                                display: 'flex',
-                                flexDirection: isMobile ? 'column' : 'row',
-                                gap: '16px',
-                                flex: 1,
-                                minHeight: 0,
-                            }}
-                        >
-                        <div
-                            className="city-log-main-panel"
-                            style={{
-                                flex: isMobile ? 'none' : 2.2,
-                                minHeight: isMobile ? '56vh' : 0,
-                                display: 'flex',
-                                flexDirection: 'column',
-                                position: 'relative',
-                                backgroundColor: '#fff',
-                                borderRadius: '12px',
-                                boxShadow: '0 2px 10px rgba(0,0,0,0.05)',
-                                overflow: 'hidden',
-                            }}
-                        >
-                            <div className="city-log-main-header" style={{ padding: '12px 18px', borderBottom: '1px solid #eee', background: weatherVisual ? weatherVisual.tint : 'linear-gradient(to right, #f8f9fa, #fff)' }}>
-                                <h3 style={{ margin: 0, fontSize: isMobile ? '14px' : '15px', display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'space-between' }}>
-                                    <Activity size={16} color="#ff9800" /> {tx('City Feed', '城市动态')}
-                                </h3>
-                            </div>
-                            {weatherVisual && (
-                                <div className="city-log-weather-backdrop" style={{ position: 'absolute', inset: '52px 0 0 0', pointerEvents: 'none', overflow: 'hidden' }}>
-                                    {weatherVisual.background && (
-                                        <img
-                                            src={weatherVisual.background}
-                                            alt=""
-                                            aria-hidden="true"
-                                            style={{
-                                                position: 'absolute',
-                                                inset: 0,
-                                                width: '100%',
-                                                height: '100%',
-                                                objectFit: 'cover',
-                                                opacity: 0.94,
-                                                filter: 'saturate(1.03) brightness(1.03)',
-                                            }}
-                                        />
-                                    )}
-                                    <div style={{ position: 'absolute', inset: 0, background: weatherVisual.tint, opacity: 0.08 }} />
-                                    {Array.from({ length: weatherVisual.particles }).map((_, index) => (
-                                        <span
-                                            key={`weather-particle-${weatherVisual.key}-${index}`}
-                                            style={{
-                                                position: 'absolute',
-                                                left: `${8 + ((index * 11) % 84)}%`,
-                                                top: `${5 + ((index * 9) % 70)}%`,
-                                                width: weatherVisual.key === 'foggy' ? '54px' : weatherVisual.key === 'windy' ? '30px' : '2px',
-                                                height: weatherVisual.key === 'foggy' ? '12px' : weatherVisual.key === 'windy' ? '2px' : '14px',
-                                                borderRadius: '999px',
-                                                background: weatherVisual.key === 'foggy'
-                                                    ? 'rgba(255,255,255,0.24)'
-                                                    : weatherVisual.key === 'windy'
-                                                        ? `${weatherVisual.accent}55`
-                                                        : `${weatherVisual.accent}44`,
-                                                transform: weatherVisual.key === 'windy'
-                                                    ? `translateX(${(index % 4) * 6}px)`
-                                                    : `rotate(${weatherVisual.key === 'stormy' ? 18 : 8}deg)`,
-                                                boxShadow: weatherVisual.key === 'sunny'
-                                                    ? `0 0 18px ${weatherVisual.accent}22`
-                                                    : 'none',
-                                            }}
-                                        />
-                                    ))}
-                                </div>
-                            )}
-                            <div className="city-scroll city-log-workbench" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: '12px', position: 'relative', zIndex: 1, background: weatherVisual ? 'rgba(255,255,255,0.16)' : undefined }}>
-                                <div className="city-log-announcement-panel" style={{ flex: isMobile ? 'none' : 0.9, minHeight: isMobile ? '28vh' : 0, display: 'flex', flexDirection: 'column', border: '1px solid #f3e8dc', borderRadius: '10px', overflow: 'hidden', background: '#fffaf5' }}>
-                                    <div style={{ padding: '10px 14px', borderBottom: '1px solid #f3e8dc', background: 'linear-gradient(to right, #fff7ed, #fff)' }}>
-                                        <h3 style={{ margin: 0, fontSize: isMobile ? '13px' : '14px', display: 'flex', alignItems: 'center', gap: '6px', color: '#c2410c' }}>
-                                            <AlertCircle size={15} color="#f97316" /> {tx('Notice Board', '公告区')}
-                                        </h3>
-                                    </div>
-                                    <div className="city-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '10px' }}>
-                                        {currentWeather && weatherVisual && (
-                                            <div className="city-log-weather-card" style={{ padding: '10px 12px', borderRadius: '10px', marginBottom: '10px', background: 'rgba(255,255,255,0.72)', border: `1px solid ${weatherVisual.accent}2e`, boxShadow: '0 4px 16px rgba(0,0,0,0.04)' }}>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '4px', alignItems: 'center' }}>
-                                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: weatherVisual.accent }}>
-                                                        <weatherVisual.Icon size={14} />
-                                                        {tx('Current Weather', '当前天气')}
-                                                    </span>
-                                                    <span style={{ fontSize: '11px', color: '#b45309', flexShrink: 0 }}>
-                                                        {new Date(currentWeather.created_at || currentWeather.timestamp || Date.now()).toLocaleTimeString()}
-                                                    </span>
-                                                </div>
-                                                <div style={{ fontSize: '13px', fontWeight: 700, color: '#7c2d12', marginBottom: '3px' }}>
-                                                    {currentWeather.emoji || ''} {currentWeather.title || weatherVisual.label}
-                                                    {weatherVisual.intensityLabel && (
-                                                        <span style={{ marginLeft: '6px', fontSize: '11px', color: weatherVisual.accent, fontWeight: 800 }}>
-                                                            {weatherVisual.intensityLabel}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                {currentWeather.description && (
-                                                    <div style={{ fontSize: isMobile ? '12px' : '13px', color: '#7c2d12', lineHeight: 1.65 }}>
-                                                        {currentWeather.description}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        )}
-                                        {visibleAnnouncements.length === 0 ? (
-                                            <div style={{ textAlign: 'center', color: '#bbb', padding: '16px 0', fontSize: '12px' }}>{tx('No notices yet', '暂无公告')}</div>
-                                        ) : (
-                                            visibleAnnouncements.map((item) => (
-                                                <div className="city-log-notice-card" key={`ann-${item.id}`} style={{ padding: '10px 10px 12px', marginBottom: '10px', border: `1px solid ${getAnnouncementMeta(item, isEn).borderColor}`, borderRadius: '12px', background: 'rgba(255,255,255,0.72)', boxShadow: '0 4px 14px rgba(120, 53, 15, 0.04)' }}>
-                                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', marginBottom: '8px', alignItems: 'center' }}>
-                                                        <span style={{ fontSize: '11px', fontWeight: 700, color: getAnnouncementMeta(item, isEn).chipColor, background: getAnnouncementMeta(item, isEn).chipBg, borderRadius: '999px', padding: '3px 8px', flexShrink: 0 }}>
-                                                            {item.title || getAnnouncementMeta(item, isEn).label}
-                                                        </span>
-                                                        <span style={{ fontSize: '11px', color: '#b45309', flexShrink: 0 }}>{new Date(item.timestamp).toLocaleTimeString()}</span>
-                                                    </div>
-                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                                                        {item.title && (
-                                                            <div style={{ fontSize: '13px', fontWeight: 700, color: '#7c2d12', wordBreak: 'break-word' }}>
-                                                                {item.title}
-                                                            </div>
-                                                        )}
-                                                        {splitAnnouncementParagraphs(item).map((part, index) => (
-                                                            <div
-                                                                key={`ann-${item.id}-part-${index}`}
-                                                                style={{
-                                                                    fontSize: isMobile ? '12px' : '13px',
-                                                                    color: '#7c2d12',
-                                                                    lineHeight: 1.7,
-                                                                    wordBreak: 'break-word',
-                                                                    paddingLeft: index === 0 ? 0 : '10px',
-                                                                    borderLeft: index === 0 ? 'none' : '2px solid rgba(249, 115, 22, 0.16)',
-                                                                }}
-                                                            >
-                                                                {part}
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                            ))
-                                        )}
-                                    </div>
-                                </div>
-
-                                <div
-                                    className="city-log-activity-panel"
-                                    style={{
-                                        flex: isMobile ? 'none' : 1.8,
-                                        minHeight: isMobile ? '36vh' : 0,
-                                        display: 'flex',
-                                        flexDirection: 'column',
-                                        border: '1px solid #eee',
-                                        borderRadius: '10px',
-                                        overflow: 'hidden',
-                                        background: '#fff',
-                                    }}
-                                >
-                                    <div style={{ padding: '10px 14px', borderBottom: '1px solid #eee', background: 'linear-gradient(to right, #f8f9fa, #fff)' }}>
-                                        <h3 style={{ margin: 0, fontSize: isMobile ? '13px' : '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                            <Activity size={15} color="#ff9800" /> {tx('Personal Activity', '个人活动')}
-                                        </h3>
-                                    </div>
-                                    <div className="city-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '10px' }}>
-                                {activityLogs.length === 0 ? (
-                                    <div style={{ textAlign: 'center', color: '#bbb', marginTop: '40px', fontSize: '13px' }}>{tx('No activity yet. Waiting for the simulation engine...', '暂无动态，等待模拟引擎运行...')}</div>
-                                ) : (
-                                    Object.keys(groupedLogs)
-                                        .sort((a, b) => b.localeCompare(a))
-                                        .map((dateTag) => {
-                                            const dateLogs = groupedLogs[dateTag];
-                                            const collapsed = isCollapsed(dateTag);
-                                            const isToday = dateTag === todayTag;
-                                            return (
-                                                <div className="city-log-date-group" key={dateTag} style={{ marginBottom: '12px' }}>
-                                                    <div
-                                                        className="city-log-date-header"
-                                                        onClick={() => setCollapsedDates((prev) => ({ ...prev, [dateTag]: !collapsed }))}
-                                                        style={{
-                                                            display: 'flex',
-                                                            alignItems: 'center',
-                                                            padding: '8px 10px',
-                                                            backgroundColor: isToday ? '#fff8e1' : '#f5f5f5',
-                                                            borderRadius: '6px',
-                                                            cursor: 'pointer',
-                                                            marginBottom: '8px',
-                                                            fontSize: isMobile ? '12px' : '13px',
-                                                            fontWeight: '600',
-                                                            color: isToday ? '#ff9800' : '#666',
-                                                            border: isToday ? '1px solid #ffe082' : '1px solid #eee',
-                                                        }}
-                                                    >
-                                                        {collapsed ? <ChevronRight size={14} style={{ marginRight: '6px' }} /> : <ChevronDown size={14} style={{ marginRight: '6px' }} />}
-                                                        📅 {dateTag} {isToday ? tx('(today)', '(今天)') : ''}
-                                                        <span style={{ marginLeft: 'auto', fontSize: '11px', color: '#999', fontWeight: '400' }}>{dateLogs.length} {tx('records', '条记录')}</span>
-                                                    </div>
-
-                                                    {!collapsed &&
-                                                        dateLogs.map((log) => {
-                                                            const isSocial = log.action_type === 'SOCIAL';
-                                                            const isCollapsedOutput = String(log.content || '').trim().startsWith('【商业街输出折叠】');
-                                                            const isTruncated = Boolean(log.is_truncated) || isCollapsedOutput;
-                                                            const hiddenExpanded = Boolean(expandedHiddenLogs[log.id]);
-                                                            const hackerIntelView = splitHackerIntelContent(log.content);
-                                                            const hasHiddenHackerIntel = hackerIntelView.hasIntel;
-                                                            const displayContent = hasHiddenHackerIntel ? hackerIntelView.visible : log.content;
-                                                            const logCharacter = characterById.get(String(log.character_id));
-                                                            return (
-                                                                <div
-                                                                    className={`city-log-entry${isSocial ? ' is-social' : ''}${isTruncated ? ' is-muted' : ''}`}
-                                                                    key={log.id}
-                                                                    style={{
-                                                                        display: 'flex',
-                                                                        gap: '10px',
-                                                                        padding: isMobile ? '8px' : '10px',
-                                                                        marginLeft: isMobile ? '4px' : '12px',
-                                                                        borderLeft: '2px solid #eee',
-                                                                        borderBottom: '1px solid #f5f5f5',
-                                                                        alignItems: 'flex-start',
-                                                                        ...(isSocial
-                                                                            ? {
-                                                                                background: 'linear-gradient(135deg, #fce4ec 0%, #f3e5f5 50%, #e8eaf6 100%)',
-                                                                                borderRadius: '0 8px 8px 0',
-                                                                                marginBottom: '4px',
-                                                                                border: '1px solid #e1bee7',
-                                                                                borderLeft: '4px solid #ff4081',
-                                                                                borderBottom: '1px solid #e1bee7',
-                                                                            }
-                                                                            : {}),
-                                                                    }}
-                                                                >
-                                                                    <AvatarWithFrame
-                                                                        size={isMobile ? 32 : 36}
-                                                                        frame={logCharacter?.avatar_frame || log.char_avatar_frame}
-                                                                        src={avatarSrc(log.char_avatar, apiUrl)}
-                                                                        fallbackSrc={FALLBACK_AVATAR}
-                                                                        alt=""
-                                                                    />
-                                                                    <div style={{ flex: 1, minWidth: 0 }}>
-                                                                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '3px' }}>
-                                                                            <span style={{ fontWeight: '600', fontSize: isMobile ? '12px' : '13px', color: isSocial ? '#7b1fa2' : undefined }}>
-                                                                                {getActionEmoji(log.action_type)} {log.char_name}
-                                                                                {isSocial ? tx(' · encounter', ' · 偶遇') : ''}
-                                                                            </span>
-                                                                            <span style={{ fontSize: '11px', color: '#bbb', flexShrink: 0 }}>{new Date(log.timestamp).toLocaleTimeString()}</span>
-                                                                        </div>
-                                                                        {isTruncated ? (
-                                                                            <div
-                                                                                style={{
-                                                                                    borderLeft: '2px solid rgba(140, 140, 140, 0.16)',
-                                                                                    background: 'rgba(120, 120, 120, 0.028)',
-                                                                                    color: 'rgba(102, 102, 102, 0.5)',
-                                                                                    borderRadius: '0 6px 6px 0',
-                                                                                    padding: isMobile ? '4px 8px' : '5px 9px',
-                                                                                    lineHeight: 1.35,
-                                                                                    opacity: 0.52,
-                                                                                }}
-                                                                            >
-                                                                                <button
-                                                                                    type="button"
-                                                                                    onClick={() => setExpandedHiddenLogs((prev) => ({ ...prev, [log.id]: !hiddenExpanded }))}
-                                                                                    style={{
-                                                                                        width: '100%',
-                                                                                        border: 'none',
-                                                                                        background: 'transparent',
-                                                                                        padding: 0,
-                                                                                        cursor: 'pointer',
-                                                                                        display: 'flex',
-                                                                                        alignItems: 'center',
-                                                                                        justifyContent: 'space-between',
-                                                                                        gap: '6px',
-                                                                                        color: 'inherit',
-                                                                                        textAlign: 'left',
-                                                                                        opacity: 0.95,
-                                                                                    }}
-                                                                                >
-                                                                                    <div style={{ fontSize: isMobile ? '10px' : '11px', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '4px', letterSpacing: '0.01em' }}>
-                                                                                        <AlertCircle size={11} />
-                                                                                        {isCollapsedOutput ? tx('City activity collapsed', '商业街活动已折叠') : tx('Hidden content', '隐藏内容')}
-                                                                                    </div>
-                                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '2px', fontSize: '9px', color: 'rgba(108, 108, 108, 0.42)' }}>
-                                                                                        <span>{hiddenExpanded ? tx('Collapse', '收起') : tx('View', '查看')}</span>
-                                                                                        {hiddenExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-                                                                                    </div>
-                                                                                </button>
-                                                                                {hiddenExpanded && (
-                                                                                    <div style={{ marginTop: '4px', fontSize: '10px', color: 'rgba(92, 92, 92, 0.64)', wordBreak: 'break-word' }}>
-                                                                                        {tx('Original: ', '原文：')}{log.truncated_original_content || log.content}
-                                                                                    </div>
-                                                                                )}
-                                                                                <div style={{ marginTop: '6px', display: 'flex', justifyContent: 'flex-end' }}>
-                                                                                    <button
-                                                                                        type="button"
-                                                                                        onClick={() => rerollCityLog(log.id)}
-                                                                                        disabled={rerollingLogId === log.id}
-                                                                                        style={{
-                                                                                            border: '1px solid rgba(245, 158, 11, 0.35)',
-                                                                                            borderRadius: '999px',
-                                                                                            padding: '4px 8px',
-                                                                                            background: rerollingLogId === log.id ? '#fde68a' : '#fff7ed',
-                                                                                            color: '#b45309',
-                                                                                            cursor: rerollingLogId === log.id ? 'not-allowed' : 'pointer',
-                                                                                            fontSize: '10px',
-                                                                                            fontWeight: 700,
-                                                                                            display: 'inline-flex',
-                                                                                            alignItems: 'center',
-                                                                                            gap: '4px',
-                                                                                        }}
-                                                                                    >
-                                                                                        <RotateCcw size={10} />
-                                                                                        {rerollingLogId === log.id ? tx('Retrying...', '重试中...') : tx('Retry', '重试')}
-                                                                                    </button>
-                                                                                </div>
-                                                                            </div>
-                                                                        ) : (
-                                                                            <>
-                                                                                {!!displayContent && (
-                                                                                    <div style={{ fontSize: isMobile ? '12px' : '13px', color: isSocial ? '#4a148c' : '#555', lineHeight: 1.7, wordBreak: 'break-word' }}>{displayContent}</div>
-                                                                                )}
-                                                                                {hasHiddenHackerIntel && (
-                                                                                    <div
-                                                                                        style={{
-                                                                                            marginTop: '6px',
-                                                                                            borderLeft: '2px solid rgba(140, 140, 140, 0.16)',
-                                                                                            background: 'rgba(120, 120, 120, 0.028)',
-                                                                                            color: 'rgba(102, 102, 102, 0.68)',
-                                                                                            borderRadius: '0 6px 6px 0',
-                                                                                            padding: isMobile ? '4px 8px' : '5px 9px',
-                                                                                            lineHeight: 1.4,
-                                                                                        }}
-                                                                                    >
-                                                                                        <button
-                                                                                            type="button"
-                                                                                            onClick={() => setExpandedHiddenLogs((prev) => ({ ...prev, [log.id]: !hiddenExpanded }))}
-                                                                                            style={{
-                                                                                                width: '100%',
-                                                                                                border: 'none',
-                                                                                                background: 'transparent',
-                                                                                                padding: 0,
-                                                                                                cursor: 'pointer',
-                                                                                                display: 'flex',
-                                                                                                alignItems: 'center',
-                                                                                                justifyContent: 'space-between',
-                                                                                                gap: '6px',
-                                                                                                color: 'inherit',
-                                                                                                textAlign: 'left',
-                                                                                            }}
-                                                                                        >
-                                                                                            <div style={{ fontSize: isMobile ? '10px' : '11px', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '4px', letterSpacing: '0.01em' }}>
-                                                                                                <AlertCircle size={11} />
-                                                                                                {tx('Hacker intel monitor log collapsed', '黑客据点监听记录已折叠')}
-                                                                                            </div>
-                                                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '2px', fontSize: '9px', color: 'rgba(108, 108, 108, 0.5)' }}>
-                                                                                                <span>{hiddenExpanded ? tx('Collapse', '收起') : tx('View', '查看')}</span>
-                                                                                                {hiddenExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-                                                                                            </div>
-                                                                                        </button>
-                                                                                        {hiddenExpanded && (
-                                                                                            <div style={{ marginTop: '4px', fontSize: '10px', color: 'rgba(92, 92, 92, 0.7)', wordBreak: 'break-word' }}>
-                                                                                                {tx('Detailed monitored conversations are visible only to the character. The frontend will not show raw private-chat content to the user.', '具体监听对话仅角色可见，前端不会向用户展示原始私聊内容。')}
-                                                                                            </div>
-                                                                                        )}
-                                                                                    </div>
-                                                                                )}
-                                                                            </>
-                                                                        )}
-                                                                        {(log.delta_calories !== 0 || log.delta_money !== 0) && (
-                                                                            <div style={{ marginTop: '4px', display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '11px', fontWeight: '600' }}>
-                                                                                {log.delta_calories !== 0 && (
-                                                                                    <span style={{ color: log.delta_calories > 0 ? '#4caf50' : '#f44336' }}>
-                                                                                        {log.delta_calories > 0 ? '+' : ''}
-                                                                                        {log.delta_calories} {tx('cal', '卡')}
-                                                                                    </span>
-                                                                                )}
-                                                                                {log.delta_money !== 0 && (
-                                                                                    <span style={{ color: log.delta_money > 0 ? '#ff9800' : '#d32f2f' }}>
-                                                                                        {log.delta_money > 0 ? '+' : ''}
-                                                                                        {Number(log.delta_money).toFixed(0)} {tx('coins', '金币')}
-                                                                                    </span>
-                                                                                )}
-                                                                            </div>
-                                                                        )}
-                                                                        {log.quest_review && (
-                                                                            <div
-                                                                                style={{
-                                                                                    marginTop: '8px',
-                                                                                    padding: isMobile ? '8px' : '9px 10px',
-                                                                                    borderRadius: '8px',
-                                                                                    background: String(log.quest_review.status || '') === 'error' ? '#fff1f0' : '#fff7e8',
-                                                                                    border: `1px solid ${String(log.quest_review.status || '') === 'error' ? '#ffccc7' : '#ffd591'}`,
-                                                                                }}
-                                                                            >
-                                                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
-                                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                                                                                        <span style={{ fontSize: '11px', fontWeight: 700, color: String(log.quest_review.status || '') === 'error' ? '#cf1322' : '#ad6800' }}>
-                                                                                            {String(log.quest_review.status || '') === 'error' ? tx('Quest Scoring Failed', '任务评分失败') : tx('Quest Progress Score', '任务推进评分')}
-                                                                                        </span>
-                                                                                        {String(log.quest_review.status || '') !== 'error' && (
-                                                                                            <span style={{ fontSize: '11px', color: '#d46b08', fontWeight: 700 }}>
-                                                                                                +{Number(log.quest_review.progress_delta || 0)} {tx('pts', '分')}
-                                                                                            </span>
-                                                                                        )}
-                                                                                        {String(log.quest_review.short_label || '').trim() && String(log.quest_review.status || '') !== 'error' && (
-                                                                                            <span style={{ fontSize: '10px', color: '#ad6800', background: '#fff1b8', borderRadius: '999px', padding: '2px 6px' }}>
-                                                                                                {log.quest_review.short_label}
-                                                                                            </span>
-                                                                                        )}
-                                                                                    </div>
-                                                                                    {String(log.quest_review.status || '') !== 'error' && (
-                                                                                        <span style={{ fontSize: '11px', color: '#ad6800', fontWeight: 600 }}>
-                                                                                            {Number(log.quest_review.progress_after || 0)}/{Number(log.quest_review.target_score || 0)}
-                                                                                        </span>
-                                                                                    )}
-                                                                                </div>
-                                                                                {String(log.quest_review.status || '') === 'error' ? (
-                                                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                                                                                        <div style={{ fontSize: isMobile ? '11px' : '12px', color: '#a8071a', lineHeight: 1.6 }}>
-                                                                                            {log.quest_review.error_message || tx('Quest scoring failed. Please retry.', '任务评分失败，请重试。')}
-                                                                                        </div>
-                                                                                        <div>
-                                                                                            <button
-                                                                                                type="button"
-                                                                                                onClick={() => retryQuestReview(log.id)}
-                                                                                                disabled={retryingQuestReviewId === log.id}
-                                                                                                style={{
-                                                                                                    border: 'none',
-                                                                                                    borderRadius: '999px',
-                                                                                                    padding: '5px 10px',
-                                                                                                    background: retryingQuestReviewId === log.id ? '#ffd8bf' : '#ff7a45',
-                                                                                                    color: '#fff',
-                                                                                                    cursor: retryingQuestReviewId === log.id ? 'not-allowed' : 'pointer',
-                                                                                                    fontSize: '11px',
-                                                                                                    fontWeight: 700,
-                                                                                                }}
-                                                                                            >
-                                                                                                {retryingQuestReviewId === log.id ? tx('Retrying...', '重试中...') : tx('Retry scoring only', '只重试评分')}
-                                                                                            </button>
-                                                                                        </div>
-                                                                                    </div>
-                                                                                ) : (
-                                                                                    <div style={{ fontSize: isMobile ? '11px' : '12px', color: '#8c5a12', lineHeight: 1.65 }}>
-                                                                                        {log.quest_review.comment || tx('This action has been scored by the Mayor judge.', '这次行动已由市长裁判完成评分。')}
-                                                                                    </div>
-                                                                                )}
-                                                                            </div>
-                                                                        )}
-                                                                    </div>
-                                                                </div>
-                                                            );
-                                                        })}
-                                                </div>
-                                            );
-                                        })
-                                )}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div
-                            className="city-log-population-panel"
-                            style={{
-                                flex: isMobile ? 'none' : 1,
-                                minHeight: isMobile ? '46vh' : 0,
-                                display: 'flex',
-                                flexDirection: 'column',
-                                backgroundColor: '#fff',
-                                borderRadius: '12px',
-                                boxShadow: '0 2px 10px rgba(0,0,0,0.05)',
-                                overflow: 'hidden',
-                            }}
-                        >
-                            <div className="city-log-population-header" style={{ padding: '12px 18px', borderBottom: '1px solid #eee' }}>
-                                <h3 style={{ margin: 0, fontSize: isMobile ? '14px' : '15px' }}>{tx('Population Status', '人口状态')}</h3>
-                            </div>
-                            <div className="city-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '8px' }}>
-                                {characters.map((c) => {
-                                    const status = getStatusDetails(c.city_status, isEn);
-                                    const emotion = deriveEmotion(c);
-                                    const physical = derivePhysicalState(c);
-                                    const pct = Math.min(100, Math.max(0, (c.calories / 4000) * 100));
-                                    const bagOpen = expandedBag === c.id;
-                                    const inventory = c.inventory || [];
-                                    const stateChips = [
-                                        { label: tx('Energy ⚡', '精力 ⚡'), value: c.energy ?? 100, color: getStateColor(c.energy ?? 100) },
-                                        { label: tx('Sleep Debt 😴', '睡眠债 😴'), value: c.sleep_debt ?? 0, color: getInvertedStateColor(c.sleep_debt ?? 0) },
-                                        { label: tx('Stress 🔥', '压力 🔥'), value: c.stress ?? 20, color: getInvertedStateColor(c.stress ?? 20) },
-                                        { label: tx('Social Need 💬', '社交需求 💬'), value: c.social_need ?? 50, color: getInvertedStateColor(c.social_need ?? 50) },
-                                        { label: tx('Health ❤️', '健康 ❤️'), value: c.health ?? 100, color: getStateColor(c.health ?? 100) },
-                                        { label: tx('Satiety 🍽️', '饱腹感 🍽️'), value: c.satiety ?? 45, color: getStateColor(c.satiety ?? 45) },
-                                        { label: tx('Stomach Load 🤰', '胃负担 🤰'), value: c.stomach_load ?? 0, color: getInvertedStateColor(c.stomach_load ?? 0) },
-                                    ];
-                                    return (
-                                        <div className="city-log-character-card" key={c.id} style={{ padding: isMobile ? '8px' : '10px', border: '1px solid #eee', borderRadius: '8px', marginBottom: '8px' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                                                <AvatarWithFrame
-                                                    size={isMobile ? 26 : 28}
-                                                    frame={c.avatar_frame}
-                                                    src={avatarSrc(c.avatar, apiUrl)}
-                                                    fallbackSrc={FALLBACK_AVATAR}
-                                                    alt=""
-                                                />
-                                                <span style={{ fontWeight: '500', flex: 1, minWidth: 0, fontSize: isMobile ? '12px' : '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
-                                                <span style={{ fontSize: '10px', color: emotion.color, fontWeight: '700', flexShrink: 0 }}>{emotion.emoji} {getEmotionLabel(emotion, isEn)}</span>
-                                                <span style={{ fontSize: '10px', color: physical.color, fontWeight: '700', flexShrink: 0 }}>{physical.emoji} {getPhysicalLabel(physical, isEn)}</span>
-                                                <span style={{ fontSize: '12px', fontWeight: '600', color: '#ff9800', flexShrink: 0 }}>{(c.wallet || 0).toFixed(0)}💰</span>
-                                            </div>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: isMobile ? '10px' : '11px', color: status.color, marginBottom: '6px', padding: '4px 6px', backgroundColor: `${status.color}12`, borderRadius: '4px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                                                {status.icon} {status.text} · {getLocalizedLocationName(c.location, isEn)}
-                                            </div>
-                                            <div style={{ width: '100%', height: '5px', backgroundColor: '#eee', borderRadius: '3px', overflow: 'hidden' }}>
-                                                <div style={{ width: `${pct}%`, height: '100%', backgroundColor: pct < 20 ? '#f44336' : pct < 50 ? '#ff9800' : '#4caf50', transition: 'width 0.3s' }} />
-                                            </div>
-                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '4px', marginTop: '6px' }}>
-                                                {stateChips.map((chip) => (
-                                                    <div key={chip.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '10px', padding: '3px 5px', borderRadius: '4px', backgroundColor: `${chip.color}12`, color: chip.color }}>
-                                                        <span>{chip.label}</span>
-                                                        <span style={{ fontWeight: '700' }}>{chip.value}</span>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
-                                                <span style={{ fontSize: '10px', color: '#aaa' }}>{c.calories}/4000 {tx('calories', '卡路里')}</span>
-                                                <button
-                                                    onClick={() => setExpandedBag(bagOpen ? null : c.id)}
-                                                    style={{ fontSize: '10px', color: inventory.length > 0 ? '#ff9800' : '#ccc', border: 'none', background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}
-                                                >
-                                                    <Package size={12} /> {tx('Inventory', '背包')} ({inventory.length})
-                                                </button>
-                                            </div>
-                                            {bagOpen && (
-                                                <div style={{ marginTop: '6px', padding: '6px', backgroundColor: '#fafafa', borderRadius: '6px', border: '1px dashed #ddd' }}>
-                                                    {inventory.length === 0 ? (
-                                                        <div style={{ fontSize: '11px', color: '#bbb', textAlign: 'center' }}>{tx('Empty inventory', '空背包')}</div>
-                                                    ) : (
-                                                        inventory.map((item) => (
-                                                            <div key={item.item_id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '3px 0', fontSize: '12px' }}>
-                                                                <span>{item.emoji}</span>
-                                                                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</span>
-                                                                <span style={{ color: '#999', fontSize: '11px', flexShrink: 0 }}>x{item.quantity}</span>
-                                                                {item.cal_restore > 0 && <span style={{ color: '#4caf50', fontSize: '10px', flexShrink: 0 }}>+{item.cal_restore}{tx('cal', '卡')}</span>}
-                                                            </div>
-                                                        ))
-                                                    )}
-                                                </div>
-                                            )}
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                        </div>
-                    </div>
+                    />
+                ) : loading && allRows.length === 0 ? (
+                    <div className="city-log-loading">{tx('Loading...', '加载中...')}</div>
+                ) : (
+                    <LogPage
+                        rows={visibleRows}
+                        totalRows={filteredRows.length}
+                        canLoadMore={visibleRows.length < filteredRows.length}
+                        onLoadMore={() => setVisibleRowLimit((current) => current + ROW_LIMIT_STEP)}
+                        categories={categories}
+                        category={category}
+                        setCategory={setCategory}
+                        selectedResident={selectedResident}
+                        setSelectedResident={setSelectedResident}
+                        residents={residents}
+                        apiUrl={apiUrl}
+                        tx={tx}
+                        isEn={isEn}
+                        currentWeather={currentWeather}
+                        weatherVisual={weatherVisual}
+                        visibleAnnouncements={visibleAnnouncements}
+                        events={events}
+                        onRefresh={fetchData}
+                        loading={loading}
+                        retryQuestReview={retryQuestReview}
+                        rerollCityLog={rerollCityLog}
+                        retryingQuestReviewId={retryingQuestReviewId}
+                        rerollingLogId={rerollingLogId}
+                        activityCount={activityLogs.length}
+                    />
                 )}
-            </div>
+            </AppShell>
         </div>
     );
 }

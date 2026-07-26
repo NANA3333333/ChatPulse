@@ -472,9 +472,9 @@ ${contextLine}
             || type === 'relationship';
         const hasLoveConfessionSignal = /(我喜欢你|我爱你|喜欢你|爱你|告白|表白|心动|暧昧|想和你在一起|对你有感觉|不是第一次说|说过很多次|反复示爱|明确示爱|关系确认|只喜欢你|只想要你)/i.test(text);
         const hasUserDemandSignal = /(答应我|你要答应|你得答应|别离开我|不要离开我|只准|不准|要一直陪我|必须回应我|你要记住|不许忘|你得哄我|你要陪我|别找别人|只能对我)/i.test(text);
-        const hasCurrentArcSignal = /(最近|这段时间|目前|现在|正在|打算|准备|计划|offer|startup|ceo|实习|面试|简历|求职|找工作|工作|公司|入职|考研|学校|项目|论文|焦虑|内耗|压力|病|身体|恢复)/i.test(text)
+        const hasCurrentArcSignal = /(最近|这段时间|目前|现在|正在|当时|当天|今天|昨天|前天|上次|这次|那次|几号|日期|时间|第一天|第\d+天|打算|准备|计划|offer|startup|ceo|实习|面试|简历|求职|找工作|工作|公司|入职|考研|学校|项目|论文|焦虑|内耗|压力|病|身体|恢复|不舒服)/i.test(text)
             || ['plan', 'emotion'].includes(type);
-        const hasIdentitySignal = /(学历|本科|专业|学校|背景|家庭|性格|偏好|喜欢|讨厌|习惯|口味|过敏|身体状况|健康问题|长期目标|价值观|梦想|身份|经历)/i.test(text)
+        const hasIdentitySignal = /(学历|本科|专业|学校|背景|家庭|性格|偏好|喜欢|讨厌|习惯|口味|过敏|慢性|长期健康|长期体质|长期目标|价值观|梦想|身份|经历)/i.test(text)
             || type === 'preference';
 
         if ((hasLoveConfessionSignal || hasUserDemandSignal) && (hasUser || hasCharacter)) {
@@ -909,9 +909,9 @@ ${contextLine}
 
     function resolveMemoryModelConfig(character) {
         return {
-            endpoint: character.memory_api_endpoint || '',
-            key: character.memory_api_key || '',
-            model: character.memory_model_name || ''
+            endpoint: character.memory_api_endpoint || character.api_endpoint || '',
+            key: character.memory_api_key || character.api_key || '',
+            model: character.memory_model_name || character.model_name || ''
         };
     }
 
@@ -2827,10 +2827,12 @@ WRITING STYLE:
 - Write "content" as 1 to 2 fuller Chinese sentences with key detail.
 - "event" is only an internal short tag, and can be shorter / more generic than summary.
 - Classify each memory from a user-centered perspective:
-  - "memory_focus": "user_profile" for stable personal information, traits, preferences, background
-  - "memory_focus": "user_current_arc" for what the user is currently dealing with, pursuing, waiting on, or worrying about
+  - "memory_focus": "user_profile" for stable identity, background, preferences, durable traits, long-term goals, or explicit durable constraints
+  - "memory_focus": "user_current_arc" for what the user is currently dealing with, pursuing, waiting on, worrying about, or going through as a time-bound event/state
   - "memory_focus": "relationship" for major user-character relationship dynamics, trust shifts, conflicts, closeness, jealousy, repair
   - "memory_focus": "general" for everything else
+- Non-stable facts such as one-off, dated, current, or situational states/events belong to "user_current_arc", not "user_profile".
+- If one memory mixes a specific occurrence with a recurring pattern, split it into separate atomic memories when possible.
 - Then assign "memory_tier":
   - "core" for the user's personal identity, current main life thread, or major relationship nodes that should be easy to recall later
   - "active" for currently relevant but more temporary memories
@@ -3309,10 +3311,12 @@ IMPORTANT:
 - Do not explain your answer outside the JSON array.
 - Routine city logs (eating, wandering, sitting around, heading home) should usually be omitted unless they create strong emotional, relational, financial, or survival-relevant developments.
 - Classify each memory from a user-centered perspective:
-  - "memory_focus": "user_profile" for stable personal info, preferences, background, or traits
-  - "memory_focus": "user_current_arc" for what the user is currently dealing with or pursuing
+  - "memory_focus": "user_profile" for stable identity, background, preferences, durable traits, long-term goals, or explicit durable constraints
+  - "memory_focus": "user_current_arc" for what the user is currently dealing with, pursuing, waiting on, worrying about, or going through as a time-bound event/state
   - "memory_focus": "relationship" for major user-character relationship dynamics
   - "memory_focus": "general" for everything else
+- Non-stable facts such as one-off, dated, current, or situational states/events belong to "user_current_arc", not "user_profile".
+- If one memory mixes a specific occurrence with a recurring pattern, split it into separate atomic memories when possible.
 - Then assign "memory_tier":
   - "core" for user identity, current main life thread, or key relationship nodes
   - "active" for currently relevant but more temporary memories
@@ -3803,10 +3807,12 @@ CRITICAL:
 - Score each memory on a "surprise" factor from 1 to 10.
 - Include the batch's real dialogue time range in your understanding.
 - Classify each memory from a user-centered perspective:
-  - "memory_focus": "user_profile" for stable personal info, preferences, background, or traits
-  - "memory_focus": "user_current_arc" for what the user is currently pursuing, waiting on, worrying about, or going through
+  - "memory_focus": "user_profile" for stable identity, background, preferences, durable traits, long-term goals, or explicit durable constraints
+  - "memory_focus": "user_current_arc" for what the user is currently pursuing, waiting on, worrying about, or going through as a time-bound event/state
   - "memory_focus": "relationship" for major user-character relationship dynamics
   - "memory_focus": "general" for everything else
+- Non-stable facts such as one-off, dated, current, or situational states/events belong to "user_current_arc", not "user_profile".
+- If one memory mixes a specific occurrence with a recurring pattern, split it into separate atomic memories when possible.
 - Then assign "memory_tier":
   - "core" for user identity, current main life thread, or key relationship nodes
   - "active" for currently relevant but more temporary memories

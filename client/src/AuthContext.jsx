@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import React, { createContext, useState, useContext } from 'react';
+import React, { createContext, useEffect, useState, useContext } from 'react';
 
 export const AuthContext = createContext();
 
@@ -25,9 +25,16 @@ function buildAuthUrl(apiUrl, path) {
     return `${apiBase}${path}`;
 }
 
-export function AuthProvider({ children }) {
+export function AuthProvider({ children, apiUrl }) {
     const [token, setToken] = useState(localStorage.getItem('cp_token'));
     const [user, setUser] = useState(() => readStoredUser());
+
+    const clearAuthState = () => {
+        setToken(null);
+        setUser(null);
+        localStorage.removeItem('cp_token');
+        localStorage.removeItem('cp_user');
+    };
 
     const login = (newToken, newUser) => {
         setToken(newToken);
@@ -40,6 +47,35 @@ export function AuthProvider({ children }) {
         setUser(nextUser);
         localStorage.setItem('cp_user', JSON.stringify(nextUser));
     };
+
+    useEffect(() => {
+        const currentToken = localStorage.getItem('cp_token');
+        if (!currentToken) return undefined;
+
+        const controller = new AbortController();
+        fetch(buildAuthUrl(apiUrl, '/auth/me'), {
+            headers: { Authorization: `Bearer ${currentToken}` },
+            signal: controller.signal
+        })
+            .then(async response => {
+                const data = await response.json().catch(() => ({}));
+                if (response.status === 401 || response.status === 403) {
+                    clearAuthState();
+                    return;
+                }
+                if (!response.ok || data.success === false) {
+                    throw new Error(data.error || `Auth validation failed ${response.status}`);
+                }
+                if (data.user) updateUser(data.user);
+            })
+            .catch(error => {
+                if (error.name !== 'AbortError') {
+                    console.warn('[AuthContext] Failed to validate stored token:', error.message);
+                }
+            });
+
+        return () => controller.abort();
+    }, [apiUrl]);
 
     const logout = async (apiUrl) => {
         const currentToken = localStorage.getItem('cp_token');
@@ -59,10 +95,7 @@ export function AuthProvider({ children }) {
                 clearTimeout(timeoutId);
             }
         }
-        setToken(null);
-        setUser(null);
-        localStorage.removeItem('cp_token');
-        localStorage.removeItem('cp_user');
+        clearAuthState();
         window.location.reload();
     };
 

@@ -1,5 +1,6 @@
 ﻿import React, { useState, useEffect, useCallback } from 'react';
 import {
+    AudioWaveform,
     Trash2,
     Edit3,
     Save,
@@ -7,22 +8,38 @@ import {
     Download,
     Upload,
     ChevronLeft,
+    ChevronRight,
+    CheckCircle2,
+    CircleCheck,
+    CircleDotDashed,
     Volume2,
     Wallet,
     CalendarDays,
     Heart,
+    House,
     Activity,
+    Database,
     ShieldCheck,
+    Shield,
     Cloud,
     Image as ImageIcon,
+    Info,
+    Laptop,
+    Monitor,
     Plus,
     FileText,
     MessageSquare,
+    Smartphone,
+    TriangleAlert,
+    UserRound,
+    UsersRound,
 } from 'lucide-react';
 import AvatarWithFrame, { AVATAR_FRAME_OPTIONS, normalizeAvatarFrameId } from './AvatarWithFrame';
 import { useLanguage } from '../LanguageContext';
 import { defaultAvatarUrl, resolveAvatarUrl } from '../utils/avatar';
 import { useAuth } from '../AuthContext';
+import { LOCAL_OLLAMA_MODEL_PRESET, withLocalModelOption } from '../utils/localModelPreset';
+import './SettingsPanel.css';
 
 const getDefaultGuidelines = (lang) => {
     if (lang === 'en') {
@@ -320,6 +337,18 @@ function SettingsPanel({
     const [tencentVoiceOptions, setTencentVoiceOptions] = useState([]);
     const [tencentVoiceSource, setTencentVoiceSource] = useState('');
     const [tencentVoiceError, setTencentVoiceError] = useState('');
+    const [activeSettingsScreen, setActiveSettingsScreen] = useState('characters');
+    const [activeCharacterTab, setActiveCharacterTab] = useState('persona');
+    const [ttsPreviewVerifiedIds, setTtsPreviewVerifiedIds] = useState(() => new Set());
+    const [sessions, setSessions] = useState([]);
+    const [sessionsLoading, setSessionsLoading] = useState(false);
+    const [sessionsError, setSessionsError] = useState('');
+    const [serviceDiagnostics, setServiceDiagnostics] = useState({ embedding: null, queue: null, cache: null });
+    const [serviceDiagnosticsLoading, setServiceDiagnosticsLoading] = useState(false);
+    const [serviceDiagnosticsError, setServiceDiagnosticsError] = useState('');
+    const [lastBackupAt, setLastBackupAt] = useState(() => Number(localStorage.getItem('cp_last_full_backup_at') || 0));
+    const [wipeModalOpen, setWipeModalOpen] = useState(false);
+    const [wipeConfirmText, setWipeConfirmText] = useState('');
 
     const getEditingTtsProviderConfig = useCallback((providerId) => {
         const config = getTtsProviderConfig(providerId);
@@ -399,6 +428,48 @@ function SettingsPanel({
             cancelled = true;
         };
     }, [apiUrl, contacts, selectedSettingsContactId, characterMessageStatsById, normalizeCharacterMessageStats]);
+
+    const loadServiceDiagnostics = useCallback(async () => {
+        const selectedId = selectedSettingsContactId || contacts[0]?.id || '';
+        setServiceDiagnosticsLoading(true);
+        setServiceDiagnosticsError('');
+        const authHeaders = { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` };
+        const fetchJson = async (path) => {
+            const res = await fetch(`${apiUrl}${path}`, { headers: authHeaders });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.success === false) throw new Error(data.error || `HTTP ${res.status}`);
+            return data;
+        };
+        try {
+            const tasks = [
+                fetchJson('/system/embedding-status'),
+                fetchJson('/system/background-queue'),
+                selectedId ? fetchJson(`/characters/${encodeURIComponent(selectedId)}/cache-stats`) : Promise.resolve(null)
+            ];
+            const [embeddingResult, queueResult, cacheResult] = await Promise.allSettled(tasks);
+            const errors = [];
+            const nextDiagnostics = {};
+            if (embeddingResult.status === 'fulfilled') nextDiagnostics.embedding = embeddingResult.value;
+            else errors.push(embeddingResult.reason?.message || 'embedding-status');
+            if (queueResult.status === 'fulfilled') nextDiagnostics.queue = queueResult.value;
+            else errors.push(queueResult.reason?.message || 'background-queue');
+            if (cacheResult.status === 'fulfilled') nextDiagnostics.cache = cacheResult.value;
+            else errors.push(cacheResult.reason?.message || 'cache-stats');
+            setServiceDiagnostics((prev) => ({ ...prev, ...nextDiagnostics }));
+            if (errors.length) {
+                setServiceDiagnosticsError(errors.join(' / '));
+            }
+        } finally {
+            setServiceDiagnosticsLoading(false);
+        }
+    }, [apiUrl, contacts, selectedSettingsContactId]);
+
+    useEffect(() => {
+        loadServiceDiagnostics().catch(err => {
+            setServiceDiagnosticsError(err.message);
+            setServiceDiagnosticsLoading(false);
+        });
+    }, [loadServiceDiagnostics]);
 
     const getSecretPlaceholder = useCallback((record, field, fallback = '') => {
         if (record?.[`${field}_clear`]) {
@@ -492,7 +563,7 @@ function SettingsPanel({
             const data = await res.json();
             if (!res.ok) throw new Error(data.error);
             setList(data.models || []);
-            if (!(data.models || []).length) setError(lang === 'en' ? 'No available models found.' : '未找到可用模型');
+            if (!(data.models || []).length) setError(lang === 'en' ? 'No remote models found. The local Ollama option is still available.' : '未找到远端模型；仍可选择本地 Ollama。');
         } catch (e) { setError((lang === 'en' ? 'Fetch failed: ' : '拉取失败: ') + e.message); }
         setFetching(false);
     };
@@ -519,6 +590,43 @@ function SettingsPanel({
             setTencentVoiceError(e.message || String(e));
         }
     }, [apiUrl, lang]);
+
+    const loadSessions = useCallback(async () => {
+        setSessionsLoading(true);
+        setSessionsError('');
+        try {
+            const res = await fetch(`${apiUrl}/auth/sessions`, {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` }
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.success === false) throw new Error(data.error || `HTTP ${res.status}`);
+            const list = Array.isArray(data.sessions) ? data.sessions : (Array.isArray(data) ? data : []);
+            setSessions(list);
+        } catch (e) {
+            setSessionsError(e.message || (lang === 'en' ? 'Failed to load sessions.' : '会话列表加载失败。'));
+        } finally {
+            setSessionsLoading(false);
+        }
+    }, [apiUrl, lang]);
+
+    const revokeSession = async (sessionId, isCurrent = false) => {
+        if (!sessionId) return;
+        const ok = window.confirm(isCurrent
+            ? (lang === 'en' ? 'Revoke the current session? You may need to sign in again.' : '确定撤销当前会话吗？你可能需要重新登录。')
+            : (lang === 'en' ? 'Revoke this login session?' : '确定撤销这个登录会话吗？'));
+        if (!ok) return;
+        try {
+            const res = await fetch(`${apiUrl}/auth/sessions/${encodeURIComponent(sessionId)}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` }
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.success === false) throw new Error(data.error || `HTTP ${res.status}`);
+            await loadSessions();
+        } catch (e) {
+            setSessionsError(e.message || (lang === 'en' ? 'Failed to revoke session.' : '撤销会话失败。'));
+        }
+    };
 
     useEffect(() => {
         // Fetch user profile
@@ -581,6 +689,10 @@ function SettingsPanel({
     useEffect(() => {
         loadTencentVoices(false);
     }, [loadTencentVoices]);
+
+    useEffect(() => {
+        loadSessions();
+    }, [loadSessions]);
 
     const handleSaveProfile = async () => {
         const updated = { ...profile, name: editName, avatar: editAvatar, avatar_frame: normalizeAvatarFrameId(editAvatarFrame), banner: editBanner, bio: editBio };
@@ -722,9 +834,90 @@ function SettingsPanel({
         }
     };
 
+    const handleExportCharacterData = async (id) => {
+        if (!id) return;
+        try {
+            const res = await fetch(`${apiUrl}/data/${encodeURIComponent(id)}/export`, {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` }
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                throw new Error(data.error || `HTTP ${res.status}`);
+            }
+            const disposition = res.headers.get('Content-Disposition') || '';
+            const filenameMatch = disposition.match(/filename="?([^"]+)"?/i);
+            const filename = filenameMatch ? filenameMatch[1] : `${id}_character_export.json`;
+            const blob = await res.blob();
+            const objectUrl = URL.createObjectURL(blob);
+            const downloadAnchorNode = document.createElement('a');
+            downloadAnchorNode.href = objectUrl;
+            downloadAnchorNode.download = filename;
+            document.body.appendChild(downloadAnchorNode);
+            downloadAnchorNode.click();
+            downloadAnchorNode.remove();
+            URL.revokeObjectURL(objectUrl);
+        } catch (e) {
+            alert((lang === 'en' ? 'Character export failed: ' : '角色导出失败：') + (e.message || e));
+        }
+    };
+
+    const handleImportCharacterData = async (id, event, mode = 'replace') => {
+        const input = event.target;
+        const file = input.files?.[0];
+        if (!id || !file) return;
+        const ok = window.confirm(mode === 'merge'
+            ? (lang === 'en' ? 'Merge this archive into the selected character?' : '确定把这个存档合并到当前角色吗？')
+            : (lang === 'en' ? 'Replace this character data with the archive? Existing messages and memories may be overwritten.' : '确定用这个存档替换当前角色数据吗？现有消息和记忆可能会被覆盖。'));
+        if (!ok) {
+            input.value = '';
+            return;
+        }
+        try {
+            const formData = new FormData();
+            formData.append('archive', file);
+            const res = await fetch(`${apiUrl}/data/${encodeURIComponent(id)}/import?mode=${encodeURIComponent(mode)}`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` },
+                body: formData
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.success === false) throw new Error(data.error || `HTTP ${res.status}`);
+            window.dispatchEvent(new Event('refresh_contacts'));
+            alert(lang === 'en' ? 'Character archive imported.' : '角色存档已导入。');
+            if (onCharactersUpdate) onCharactersUpdate({ type: 'imported', id });
+        } catch (e) {
+            alert((lang === 'en' ? 'Character import failed: ' : '角色导入失败：') + (e.message || e));
+        } finally {
+            input.value = '';
+        }
+    };
+
+    const handleResetPhysicalState = async (id) => {
+        if (!id) return;
+        if (!window.confirm(lang === 'en' ? 'Reset energy, sleep, stress, and pressure without touching memories or wallet?' : '确定重置体力、睡眠、压力等身体状态吗？不会影响记忆和钱包。')) return;
+        try {
+            const res = await fetch(`${apiUrl}/characters/${encodeURIComponent(id)}/reset-physical-state`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}` }
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.success === false) throw new Error(data.error || `HTTP ${res.status}`);
+            const character = data.character || null;
+            if (character) {
+                setContacts(prev => prev.map(item => String(item.id) === String(id) ? { ...item, ...character } : item));
+                setEditingContact(prev => prev && String(prev.id) === String(id) ? { ...prev, ...character } : prev);
+            }
+            window.dispatchEvent(new Event('refresh_contacts'));
+            alert(lang === 'en' ? 'Physical state reset.' : '身体状态已重置。');
+        } catch (e) {
+            alert((lang === 'en' ? 'Reset failed: ' : '重置失败：') + (e.message || e));
+        }
+    };
+
 
 
     const handleSaveContact = async () => {
+        if (!editingContact) return;
         try {
             const res = await fetch(`${apiUrl}/characters`, {
                 method: 'POST',  // Note: /characters POST handles updates too
@@ -742,6 +935,7 @@ function SettingsPanel({
                     if (index === -1) return [...prev, savedCharacter];
                     return prev.map(item => (String(item.id) === String(savedCharacter.id) ? { ...item, ...savedCharacter } : item));
                 });
+                setSelectedSettingsContactId(savedCharacter.id);
                 setEditingContact(null);
                 window.dispatchEvent(new Event('refresh_contacts'));
                 if (onCharactersUpdate) onCharactersUpdate({ type: 'updated', id: savedCharacter.id, character: savedCharacter });
@@ -847,17 +1041,20 @@ function SettingsPanel({
             downloadAnchorNode.click();
             downloadAnchorNode.remove();
             URL.revokeObjectURL(objectUrl);
+            const now = Date.now();
+            localStorage.setItem('cp_last_full_backup_at', String(now));
+            setLastBackupAt(now);
         } catch (e) {
             console.error('Export Error:', e);
             alert(lang === 'en' ? `Backup download failed: ${e.message}` : `备份下载失败：${e.message}`);
         }
     };
 
-    const handleSystemWipe = async () => {
-        if (!window.confirm(lang === 'en' ? 'DANGER: This will permanently wipe ALL characters, chats, and memories. Are you absolutely sure?' : '危险：这将永久清空所有角色、聊天、群聊和记忆。你确定要执行吗？')) return;
+    const handleSystemWipe = async (skipPrompt = false) => {
+        if (!skipPrompt && !window.confirm(lang === 'en' ? 'DANGER: This will permanently wipe ALL characters, chats, and memories. Are you absolutely sure?' : '危险：这将永久清空所有角色、聊天、群聊和记忆。你确定要执行吗？')) return;
 
         // Double check
-        if (!window.confirm(lang === 'en' ? 'Final confirmation: Wipe everything?' : '最后一次确认：真的要抹除所有数据吗？')) return;
+        if (!skipPrompt && !window.confirm(lang === 'en' ? 'Final confirmation: Wipe everything?' : '最后一次确认：真的要抹除所有数据吗？')) return;
 
         try {
             const res = await fetch(`${apiUrl}/system/wipe`, {
@@ -907,13 +1104,15 @@ function SettingsPanel({
         </div>
     );
 
-    const selectedSettingsContactBase = contacts.find(c => c.id === selectedSettingsContactId) || contacts[0] || null;
-    const selectedSettingsContact = selectedSettingsContactBase
-        ? {
-            ...selectedSettingsContactBase,
-            ...(characterMessageStatsById[selectedSettingsContactBase.id] || {})
-        }
-        : null;
+    const selectedSettingsContact = React.useMemo(() => {
+        const base = contacts.find(c => c.id === selectedSettingsContactId) || contacts[0] || null;
+        return base
+            ? {
+                ...base,
+                ...(characterMessageStatsById[base.id] || {})
+            }
+            : null;
+    }, [contacts, selectedSettingsContactId, characterMessageStatsById]);
     const selectedSettingsContactOnline = Boolean(
         selectedSettingsContact
         && String(selectedSettingsContact.api_endpoint || '').trim()
@@ -1093,6 +1292,148 @@ function SettingsPanel({
     const selectedWallpaperOption = wallpaperOptionList.find(option => option.id === desktopWallpaper) || wallpaperOptionList[0] || null;
     const getWallpaperOptionLabel = (option) => (lang === 'en' ? option?.labelEn : option?.labelZh) || option?.label || option?.id || '';
     const getWallpaperOptionDescription = (option) => (lang === 'en' ? option?.descriptionEn : option?.descriptionZh) || option?.description || '';
+    const screenLabels = {
+        profile: lang === 'en' ? 'Profile' : '个人资料',
+        security: lang === 'en' ? 'Account Security' : '账号安全',
+        characters: lang === 'en' ? 'Character Config' : '角色配置',
+        models: lang === 'en' ? 'Models & Voice' : '模型与声音',
+        backup: lang === 'en' ? 'Backup & Migration' : '备份与迁移'
+    };
+    const getCharacterReadiness = (character) => {
+        const mainModelReady = Boolean(
+            String(character?.api_endpoint || '').trim()
+            && character?.api_key_configured === true
+            && String(character?.model_name || '').trim()
+        );
+        const memoryModelReady = Boolean(
+            String(character?.memory_api_endpoint || '').trim()
+            && character?.memory_api_key_configured === true
+            && String(character?.memory_model_name || '').trim()
+        );
+        const personaReady = Boolean(String(character?.name || '').trim() && String(character?.persona || '').trim());
+        const ttsEnabled = character?.tts_enabled === 1;
+        const ttsConfigured = !ttsEnabled || Boolean(
+            character?.tts_provider
+            && (character?.tts_api_key_configured || character?.tts_provider === 'browser')
+            && character?.tts_voice
+        );
+        const ttsPreviewVerified = ttsEnabled && ttsConfigured && ttsPreviewVerifiedIds.has(character?.id);
+        return {
+            mainModelReady,
+            memoryModelReady,
+            personaReady,
+            ttsEnabled,
+            ttsConfigured,
+            ttsPreviewVerified,
+            ready: mainModelReady && personaReady
+        };
+    };
+    const profileReady = Boolean(String(profile?.name || '').trim() && (profile?.avatar || profile?.username));
+    const characterReadiness = contacts.map(character => ({ character, readiness: getCharacterReadiness(character) }));
+    const mainModelReadyCharacters = characterReadiness.filter(item => item.readiness.mainModelReady).length;
+    const ttsNeedsAttention = characterReadiness.filter(item => item.readiness.ttsEnabled && (!item.readiness.ttsConfigured || !item.readiness.ttsPreviewVerified));
+    const actionableAttention = [
+        ...characterReadiness
+            .filter(item => !item.readiness.mainModelReady)
+            .slice(0, 5)
+            .map(item => ({
+                key: `main-${item.character.id}`,
+                tone: 'warning',
+                title: lang === 'en' ? `${item.character.name}: main model is not connected` : `${item.character.name}：主模型未连接`,
+                detail: lang === 'en' ? 'This character cannot reliably reply in private chat, groups, or city actions.' : '角色可能无法正常私聊、群聊或执行商业街行动。',
+                action: lang === 'en' ? 'Connect model' : '去连接',
+                onClick: () => {
+                    setSelectedSettingsContactId(item.character.id);
+                    setActiveSettingsScreen('models');
+                }
+            })),
+        ...ttsNeedsAttention.slice(0, 4).map(item => ({
+            key: `tts-${item.character.id}`,
+            tone: 'pink',
+            title: !item.readiness.ttsConfigured
+                ? (lang === 'en' ? `${item.character.name}: voice is incomplete` : `${item.character.name}：声音配置不完整`)
+                : (lang === 'en' ? `${item.character.name}: voice needs a preview test` : `${item.character.name}：声音需要试听验证`),
+            detail: lang === 'en' ? 'TTS is optional, but enabled voices should be tested in this session.' : 'TTS 是可选能力，但已启用的声音应在当前会话试听一次。',
+            action: lang === 'en' ? 'Open voice' : '打开声音',
+            onClick: () => {
+                setSelectedSettingsContactId(item.character.id);
+                setActiveSettingsScreen('models');
+                openCharacterEditor(item.character);
+            }
+        })),
+        ...(!profileReady ? [{
+            key: 'profile',
+            tone: 'blue',
+            title: lang === 'en' ? 'Profile is missing a display name or avatar' : '用户资料缺少显示名或头像',
+            detail: lang === 'en' ? 'Complete your profile before sharing screenshots or exports.' : '先补齐资料，再分享截图或导出会更清楚。',
+            action: lang === 'en' ? 'Edit profile' : '编辑资料',
+            onClick: () => setActiveSettingsScreen('profile')
+        }] : []),
+        {
+            key: 'backup',
+            tone: 'blue',
+            title: lastBackupAt
+                ? (lang === 'en' ? 'A full backup exists in this browser' : '这个浏览器已记录过完整备份')
+                : (lang === 'en' ? 'Create regular full backups' : '建议定期创建完整备份'),
+            detail: lastBackupAt
+                ? formatSettingsDate(lastBackupAt)
+                : (lang === 'en' ? 'There is no backend metadata for the last backup time, so this only tracks exports made from this browser.' : '后端没有最近备份时间接口，这里只记录本浏览器导出的时间。'),
+            action: lang === 'en' ? 'Backup' : '创建备份',
+            onClick: () => setActiveSettingsScreen('backup')
+        }
+    ].slice(0, 8);
+    const setupSteps = [
+        {
+            key: 'profile',
+            done: profileReady,
+            label: lang === 'en' ? 'Profile' : '资料完整',
+            detail: profileReady ? (lang === 'en' ? 'Ready' : '已完成') : (lang === 'en' ? 'Needs profile' : '需要补充'),
+            screen: 'profile'
+        },
+        {
+            key: 'characters',
+            done: contacts.length > 0,
+            label: lang === 'en' ? 'Characters' : '角色已配置',
+            detail: `${contacts.length} ${lang === 'en' ? 'characters' : '位角色'}`,
+            screen: 'characters'
+        },
+        {
+            key: 'models',
+            done: contacts.length > 0 && mainModelReadyCharacters > 0,
+            label: lang === 'en' ? 'Main model' : '主模型已连接',
+            detail: `${mainModelReadyCharacters} / ${contacts.length || 0}`,
+            screen: 'models'
+        },
+        {
+            key: 'voice',
+            done: ttsNeedsAttention.length === 0,
+            label: lang === 'en' ? 'Voice' : '声音设置',
+            detail: ttsNeedsAttention.length === 0 ? (lang === 'en' ? 'No action' : '无需处理') : (lang === 'en' ? 'Needs attention' : '需要关注'),
+            screen: 'models'
+        }
+    ];
+    const completedSteps = setupSteps.filter(item => item.done).length;
+    const setupPercent = Math.round((completedSteps / setupSteps.length) * 100);
+    const settingsNavItems = [
+        { key: 'profile', icon: <UserRound size={16} />, label: screenLabels.profile, detail: lang === 'en' ? 'Avatar, bio, appearance' : '头像、签名和外观', notice: !profileReady },
+        { key: 'security', icon: <Shield size={16} />, label: screenLabels.security, detail: lang === 'en' ? 'Username, password, sessions' : '用户名、密码和会话' },
+        { key: 'characters', icon: <UsersRound size={16} />, label: screenLabels.characters, detail: lang === 'en' ? 'Persona, behavior, context' : '人设、行为与上下文', count: contacts.length },
+        { key: 'models', icon: <AudioWaveform size={16} />, label: screenLabels.models, detail: lang === 'en' ? 'Main, memory, TTS' : '主模型、记忆和 TTS', notice: ttsNeedsAttention.length > 0 || mainModelReadyCharacters < contacts.length },
+        { key: 'backup', icon: <Database size={16} />, label: screenLabels.backup, detail: lang === 'en' ? 'Import, export, reset' : '导入、导出和恢复' }
+    ];
+    const selectedTtsProviderLabel = getTtsProviderConfig(selectedSettingsContact?.tts_provider).label;
+    const activeCharacterForModel = selectedSettingsContact || contacts[0] || null;
+    const activeCharacterModelReadiness = activeCharacterForModel ? getCharacterReadiness(activeCharacterForModel) : null;
+    const formatSessionDevice = (session = {}) => session.device
+        || session.user_agent_summary
+        || session.userAgent
+        || session.user_agent
+        || session.platform
+        || (lang === 'en' ? 'Unknown device' : '未知设备');
+    const formatSessionMeta = (session = {}) => [
+        session.ip || session.ip_address,
+        formatSettingsDate(session.last_active_at || session.updated_at || session.created_at, lang === 'en' ? 'No activity recorded' : '暂无活跃记录')
+    ].filter(Boolean).join(' · ');
 
     const openCharacterEditor = (character) => {
         if (!character) return;
@@ -1107,16 +1448,389 @@ function SettingsPanel({
         });
     };
 
+    const activeCharacterDraft = editingContact || selectedSettingsContact;
+    const activePreviewContact = activeCharacterDraft || selectedSettingsContact;
+    const activeReadiness = activePreviewContact ? getCharacterReadiness(activePreviewContact) : null;
+    const ensureCharacterDraft = useCallback((patch = {}) => {
+        setEditingContact(prev => {
+            const base = prev || selectedSettingsContact || {
+                id: `character_${Date.now()}`,
+                name: lang === 'en' ? 'New Character' : '新角色',
+                avatar: '',
+                avatar_frame: 'none',
+                persona: '',
+                world_info: '',
+                system_prompt: getDefaultGuidelines(lang),
+                tts_provider: 'tencent',
+                tts_trigger_mode: 'tagged',
+                sys_proactive: 1,
+                sys_timer: 1,
+                sys_pressure: 1,
+                sys_jealousy: 1,
+                sys_survival: 1,
+                sys_city_social: 1,
+                llm_debug_capture: 1,
+                context_msg_limit: 60,
+                private_summary_threshold: 30,
+                interval_min: 10,
+                interval_max: 120,
+                max_tokens: 800,
+                wallet: 200
+            };
+            return {
+                ...base,
+                avatar_frame: normalizeAvatarFrameId(base.avatar_frame),
+                system_prompt: base.system_prompt || getDefaultGuidelines(lang),
+                tts_provider: base.tts_provider || 'tencent',
+                tts_trigger_mode: base.tts_trigger_mode || 'tagged',
+                ...patch
+            };
+        });
+    }, [lang, selectedSettingsContact]);
+
+    const updateCharacterDraft = useCallback((patch) => {
+        ensureCharacterDraft(patch);
+    }, [ensureCharacterDraft]);
+
+    const applyLocalModelPreset = useCallback((scope = 'main') => {
+        if (scope === 'memory') {
+            updateCharacterDraft({
+                memory_api_endpoint: LOCAL_OLLAMA_MODEL_PRESET.api_endpoint,
+                memory_api_key: LOCAL_OLLAMA_MODEL_PRESET.api_key,
+                memory_api_key_clear: false,
+                memory_model_name: LOCAL_OLLAMA_MODEL_PRESET.model_name
+            });
+            setMemModels(prev => withLocalModelOption(prev));
+            setMemModelError('');
+            return;
+        }
+        updateCharacterDraft({
+            api_endpoint: LOCAL_OLLAMA_MODEL_PRESET.api_endpoint,
+            api_key: LOCAL_OLLAMA_MODEL_PRESET.api_key,
+            api_key_clear: false,
+            model_name: LOCAL_OLLAMA_MODEL_PRESET.model_name
+        });
+        setMainModels(prev => withLocalModelOption(prev));
+        setMainModelError('');
+    }, [updateCharacterDraft]);
+
+    const handleMainModelSelect = useCallback((modelName) => {
+        if (modelName === LOCAL_OLLAMA_MODEL_PRESET.model_name) {
+            applyLocalModelPreset('main');
+            return;
+        }
+        updateCharacterDraft({ model_name: modelName });
+    }, [applyLocalModelPreset, updateCharacterDraft]);
+
+    const handleMemoryModelSelect = useCallback((modelName) => {
+        if (modelName === LOCAL_OLLAMA_MODEL_PRESET.model_name) {
+            applyLocalModelPreset('memory');
+            return;
+        }
+        updateCharacterDraft({ memory_model_name: modelName });
+    }, [applyLocalModelPreset, updateCharacterDraft]);
+
+    const selectControlCharacter = useCallback((character) => {
+        if (!character) return;
+        if (editingContact && String(editingContact.id || '') !== String(character.id || '')) {
+            const ok = window.confirm(lang === 'en'
+                ? 'Discard the current unsaved character draft and switch?'
+                : '放弃当前未保存的角色草稿并切换吗？');
+            if (!ok) return;
+            setEditingContact(null);
+        }
+        setSelectedSettingsContactId(character.id);
+        setActiveSettingsScreen('characters');
+    }, [editingContact, lang]);
+
+    const createCharacterDraft = () => {
+        const id = `char_${Date.now()}`;
+        setSelectedSettingsContactId(id);
+        setActiveSettingsScreen('characters');
+        setActiveCharacterTab('persona');
+        setEditingContact({
+            id,
+            name: lang === 'en' ? 'New Character' : '新角色',
+            avatar: '',
+            avatar_frame: 'none',
+            persona: '',
+            world_info: '',
+            system_prompt: getDefaultGuidelines(lang),
+            api_endpoint: '',
+            api_key: '',
+            model_name: '',
+            memory_api_endpoint: '',
+            memory_api_key: '',
+            memory_model_name: '',
+            tts_provider: 'tencent',
+            tts_trigger_mode: 'tagged',
+            tts_enabled: 0,
+            sys_proactive: 1,
+            sys_timer: 1,
+            sys_pressure: 1,
+            sys_jealousy: 1,
+            sys_survival: 1,
+            sys_city_social: 1,
+            llm_debug_capture: 1,
+            context_msg_limit: 60,
+            private_summary_threshold: 30,
+            interval_min: 10,
+            interval_max: 120,
+            max_tokens: 800,
+            wallet: 200,
+            affinity: 50,
+            energy: 100,
+            calories: 2000,
+            stress: 20,
+            pressure_level: 0
+        });
+    };
+
+    const compareDraftValue = (record, field) => {
+        if (field === 'system_prompt') return String(record?.system_prompt || getDefaultGuidelines(lang));
+        if (['sys_proactive', 'sys_timer', 'sys_pressure', 'sys_jealousy', 'sys_survival', 'sys_city_social', 'llm_debug_capture', 'tts_enabled', 'tts_autoplay'].includes(field)) {
+            return Number(record?.[field] ?? 0);
+        }
+        if ([
+            'max_tokens', 'context_msg_limit', 'private_summary_threshold', 'interval_min', 'interval_max',
+            'wallet', 'affinity', 'energy', 'calories', 'stress', 'pressure_level',
+            'sleep_debt', 'sleep_pressure', 'mood', 'social_need', 'health', 'satiety', 'stomach_load'
+        ].includes(field)) {
+            return Number(record?.[field] ?? 0);
+        }
+        return String(record?.[field] ?? '');
+    };
+    const draftCompareFields = [
+        'id', 'name', 'avatar', 'avatar_frame', 'persona', 'world_info', 'system_prompt',
+        'api_endpoint', 'model_name', 'memory_api_endpoint', 'memory_model_name',
+        'max_tokens', 'context_msg_limit', 'private_summary_threshold', 'interval_min', 'interval_max',
+        'sys_proactive', 'sys_timer', 'sys_pressure', 'sys_jealousy', 'sys_survival', 'sys_city_social',
+        'llm_debug_capture', 'wallet', 'affinity', 'energy', 'calories', 'stress', 'pressure_level',
+        'sleep_debt', 'sleep_pressure', 'mood', 'social_need', 'health', 'satiety', 'stomach_load',
+        'tts_provider', 'tts_voice', 'tts_model', 'tts_endpoint', 'tts_trigger_mode', 'tts_enabled', 'tts_autoplay'
+    ];
+    const selectedOriginalForDraft = selectedSettingsContact && editingContact && String(selectedSettingsContact.id) === String(editingContact.id)
+        ? selectedSettingsContact
+        : null;
+    const characterDraftChanged = Boolean(editingContact && (
+        !selectedOriginalForDraft
+        || draftCompareFields.some(field => compareDraftValue(editingContact, field) !== compareDraftValue(selectedOriginalForDraft, field))
+        || Boolean(editingContact.api_key || editingContact.api_key_clear || editingContact.memory_api_key || editingContact.memory_api_key_clear || editingContact.tts_api_key || editingContact.tts_api_key_clear)
+    ));
+    const controlHasContextLimitChange = Boolean(editingContact && selectedOriginalForDraft && Number(editingContact.context_msg_limit ?? 60) !== Number(selectedOriginalForDraft.context_msg_limit ?? 60));
+    const controlHasModelChange = Boolean(editingContact && selectedOriginalForDraft && (
+        compareDraftValue(editingContact, 'api_endpoint') !== compareDraftValue(selectedOriginalForDraft, 'api_endpoint')
+        || compareDraftValue(editingContact, 'model_name') !== compareDraftValue(selectedOriginalForDraft, 'model_name')
+        || compareDraftValue(editingContact, 'memory_api_endpoint') !== compareDraftValue(selectedOriginalForDraft, 'memory_api_endpoint')
+        || compareDraftValue(editingContact, 'memory_model_name') !== compareDraftValue(selectedOriginalForDraft, 'memory_model_name')
+        || Boolean(editingContact.api_key || editingContact.api_key_clear || editingContact.memory_api_key || editingContact.memory_api_key_clear)
+    ));
+    const controlHasTimerChange = Boolean(editingContact && selectedOriginalForDraft && (
+        compareDraftValue(editingContact, 'interval_min') !== compareDraftValue(selectedOriginalForDraft, 'interval_min')
+        || compareDraftValue(editingContact, 'interval_max') !== compareDraftValue(selectedOriginalForDraft, 'interval_max')
+        || compareDraftValue(editingContact, 'sys_proactive') !== compareDraftValue(selectedOriginalForDraft, 'sys_proactive')
+    ));
+    const controlHasVoiceChange = Boolean(editingContact && selectedOriginalForDraft && (
+        ['tts_provider', 'tts_voice', 'tts_model', 'tts_endpoint', 'tts_trigger_mode', 'tts_enabled', 'tts_autoplay'].some(field => compareDraftValue(editingContact, field) !== compareDraftValue(selectedOriginalForDraft, field))
+        || Boolean(editingContact.tts_api_key || editingContact.tts_api_key_clear)
+    ));
+    const controlChangeCount = [
+        characterDraftChanged,
+        controlHasModelChange,
+        controlHasTimerChange,
+        controlHasContextLimitChange,
+        controlHasVoiceChange
+    ].filter(Boolean).length;
+    const hasUnsavedSettings = characterDraftChanged || isEditing;
+    const activePreviewDescription = String(activePreviewContact?.persona || '').trim();
+    const activePreviewTtsProviderLabel = getTtsProviderConfig(activePreviewContact?.tts_provider).label;
+    const mainModelOptions = withLocalModelOption(mainModels);
+    const memModelOptions = withLocalModelOption(memModels);
+    const getModelOptionLabel = (model) => (
+        model === LOCAL_OLLAMA_MODEL_PRESET.model_name
+            ? `${model} · ${lang === 'en' ? 'Local Ollama' : '本地 Ollama'}`
+            : model
+    );
+
     return (
         <>
-            <div className="settings-panel-page settings-command-center-page">
-                {profileLoadError && (
-                    <div className="settings-inline-alert">
-                        {lang === 'en' ? 'Live profile sync is delayed. Showing local fallback data for now.' : '实时用户资料同步超时，当前先显示本地兜底数据。'}
-                        <div>{profileLoadError}</div>
+            <div className="settings-panel-page settings-control-center-page settings-guided-page">
+                <header className="settings-guided-header">
+                    <div className="settings-guided-brand">
+                        <span><Activity size={19} /></span>
+                        <strong>ChatPulse</strong>
+                        <em>{lang === 'en' ? 'Settings' : '设置'}</em>
                     </div>
-                )}
+                    <div className="settings-guided-breadcrumb">
+                        <span>{lang === 'en' ? 'Settings' : '设置'}</span>
+                        <ChevronRight size={14} />
+                        <strong>{screenLabels[activeSettingsScreen]}</strong>
+                    </div>
+                    <div className="settings-guided-save">
+                        <span className={hasUnsavedSettings ? 'is-dirty' : ''}>
+                            {hasUnsavedSettings ? <CircleDotDashed size={15} /> : <CheckCircle2 size={15} />}
+                            {hasUnsavedSettings
+                                ? (characterDraftChanged
+                                    ? (lang === 'en' ? `${controlChangeCount || 1} character changes` : `${controlChangeCount || 1} 项角色改动待保存`)
+                                    : (lang === 'en' ? 'Unsaved draft' : '有未保存草稿'))
+                                : (lang === 'en' ? 'Saved' : '所有更改已保存')}
+                        </span>
+                        <button
+                            type="button"
+                            onClick={async () => {
+                                if (characterDraftChanged) await handleSaveContact();
+                                if (isEditing) await handleSaveProfile();
+                            }}
+                            disabled={!hasUnsavedSettings}
+                        >
+                            <Save size={15} />{lang === 'en' ? 'Save' : '保存'}
+                        </button>
+                    </div>
+                </header>
 
+                <div className="settings-guided-shell">
+                    <aside className="settings-guided-sidebar">
+                        <nav>
+                            {settingsNavItems.map(item => (
+                                <button
+                                    type="button"
+                                    key={item.key}
+                                    className={activeSettingsScreen === item.key ? 'is-active' : ''}
+                                    onClick={() => {
+                                        setActiveSettingsScreen(item.key);
+                                        if (item.key === 'models') setActiveCharacterTab('model');
+                                    }}
+                                >
+                                    {item.icon}
+                                    <span>
+                                        <strong>{item.label}</strong>
+                                        {item.detail && <small>{item.detail}</small>}
+                                    </span>
+                                    {item.count !== undefined && <em>{item.count}</em>}
+                                    {item.notice && <i className="settings-guided-notice-dot" />}
+                                </button>
+                            ))}
+                        </nav>
+                        <div className="settings-guided-system-state">
+                            <span className="settings-guided-online-dot" />
+                            <div>
+                                <strong>{lang === 'en' ? 'Service running' : '服务运行正常'}</strong>
+                                <small>{lang === 'en' ? 'Synced from live API' : '来自真实接口数据'}</small>
+                            </div>
+                        </div>
+                    </aside>
+
+                    <main className="settings-guided-content">
+                        {profileLoadError && (
+                            <div className="settings-inline-alert">
+                                {lang === 'en' ? 'Live profile sync is delayed. Showing local fallback data for now.' : '实时用户资料同步超时，当前先显示本地兜底数据。'}
+                                <div>{profileLoadError}</div>
+                            </div>
+                        )}
+
+                        {activeSettingsScreen === 'overview' && (
+                            <section className="settings-guided-overview">
+                                <article className="settings-setup-hero">
+                                    <div className="settings-setup-copy">
+                                        <span className="settings-guided-kicker">SETUP PROGRESS</span>
+                                        <h1>{setupPercent >= 100 ? (lang === 'en' ? 'ChatPulse is ready' : '你的 ChatPulse 已准备就绪') : (lang === 'en' ? 'ChatPulse is almost ready' : '你的 ChatPulse 几乎准备就绪')}</h1>
+                                        <p>{lang === 'en' ? 'Finish the remaining tasks so profile, characters, models, memory, and voice stay reliable.' : '完成剩余任务，让资料、角色、模型、记忆和声音都保持可用。'}</p>
+                                    </div>
+                                    <div className="settings-setup-progress">
+                                        <span><strong>{completedSteps} / {setupSteps.length} {lang === 'en' ? 'done' : '已完成'}</strong><small>{lang === 'en' ? 'Overall setup' : '整体配置'}</small></span>
+                                        <i><b style={{ width: `${setupPercent}%` }} /></i>
+                                    </div>
+                                    <div className="settings-setup-steps">
+                                        {setupSteps.map(step => (
+                                            <button
+                                                type="button"
+                                                key={step.key}
+                                                className={step.done ? 'is-done' : 'needs-attention'}
+                                                onClick={() => setActiveSettingsScreen(step.screen)}
+                                            >
+                                                <span>{step.done ? <CheckCircle2 size={15} /> : <CircleDotDashed size={15} />}</span>
+                                                <strong>{step.label}</strong>
+                                                <small>{step.detail}</small>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </article>
+
+                                <section className="settings-readiness-section">
+                                    <div className="settings-section-heading">
+                                        <div>
+                                            <span className="settings-guided-kicker">CHARACTER READINESS</span>
+                                            <h2>{lang === 'en' ? 'Character readiness' : '角色就绪情况'}</h2>
+                                            <p>{lang === 'en' ? 'Core chat depends on persona and the main model. Memory and voice are shown separately.' : '核心聊天取决于人设和主模型；记忆与声音单独展示。'}</p>
+                                        </div>
+                                        <button type="button" className="settings-guided-text-button" onClick={() => setActiveSettingsScreen('characters')}>
+                                            {lang === 'en' ? 'Manage characters' : '管理全部角色'} <ChevronRight size={14} />
+                                        </button>
+                                    </div>
+                                    <div className="settings-readiness-table">
+                                        <div className="settings-readiness-head">
+                                            <span>{lang === 'en' ? 'Character' : '角色'}</span>
+                                            <span>{lang === 'en' ? 'Status' : '状态'}</span>
+                                            <span>{lang === 'en' ? 'Main' : '主模型'}</span>
+                                            <span>{lang === 'en' ? 'Memory' : '记忆模型'}</span>
+                                            <span>{lang === 'en' ? 'Voice' : '声音'}</span>
+                                            <span>{lang === 'en' ? 'Action' : '操作'}</span>
+                                        </div>
+                                        {characterReadiness.map(({ character, readiness }) => (
+                                            <button
+                                                type="button"
+                                                className={`settings-readiness-row ${selectedSettingsContact?.id === character.id ? 'is-selected' : ''} ${!readiness.ready ? 'has-error' : ''}`}
+                                                key={character.id}
+                                                onClick={() => {
+                                                    setSelectedSettingsContactId(character.id);
+                                                    setActiveSettingsScreen(readiness.ready ? 'characters' : 'models');
+                                                }}
+                                            >
+                                                <span className="settings-readiness-character">
+                                                    <AvatarWithFrame
+                                                        size={36}
+                                                        frame={character.avatar_frame}
+                                                        src={resolveAvatarUrl(character.avatar, apiUrl, character.name || character.id || 'User')}
+                                                        fallbackSrc={defaultAvatarUrl(character.name || character.id || 'User')}
+                                                        alt={character.name}
+                                                    />
+                                                    <span><strong>{character.name}</strong><small>{formatCompactInteraction(character)}</small></span>
+                                                </span>
+                                                <span><i className={`settings-status-pill ${readiness.ready ? 'ok' : 'warning'}`}>{readiness.ready ? (lang === 'en' ? 'Ready' : '可用') : (lang === 'en' ? 'Needs setup' : '待处理')}</i></span>
+                                                <span className={readiness.mainModelReady ? '' : 'settings-error-text'}>{readiness.mainModelReady ? character.model_name : (lang === 'en' ? 'Missing' : '未连接')}</span>
+                                                <span>{readiness.memoryModelReady ? character.memory_model_name : (lang === 'en' ? 'Optional' : '可选')}</span>
+                                                <span>{readiness.ttsEnabled ? (readiness.ttsConfigured ? (readiness.ttsPreviewVerified ? (lang === 'en' ? 'Verified' : '已试听') : (lang === 'en' ? 'Preview needed' : '待试听')) : (lang === 'en' ? 'Incomplete' : '不完整')) : (lang === 'en' ? 'Off' : '关闭')}</span>
+                                                <span className="settings-row-action">{readiness.ready ? (lang === 'en' ? 'Details' : '查看详情') : (lang === 'en' ? 'Fix' : '去处理')} <ChevronRight size={13} /></span>
+                                            </button>
+                                        ))}
+                                        {characterReadiness.length === 0 && (
+                                            <div className="settings-guided-empty">{lang === 'en' ? 'No characters yet. Create one from the contacts page.' : '还没有角色，请先在联系人页面创建角色。'}</div>
+                                        )}
+                                    </div>
+                                </section>
+
+                                <section className="settings-attention-section">
+                                    <div className="settings-section-heading compact">
+                                        <div>
+                                            <span className="settings-guided-kicker">NEEDS ATTENTION</span>
+                                            <h2>{lang === 'en' ? 'Needs attention' : '需要关注'}</h2>
+                                        </div>
+                                        <span className="settings-count-badge">{actionableAttention.length}</span>
+                                    </div>
+                                    <div className="settings-attention-list">
+                                        {actionableAttention.map(item => (
+                                            <button type="button" key={item.key} onClick={item.onClick}>
+                                                <span className={`settings-attention-icon ${item.tone}`}><TriangleAlert size={16} /></span>
+                                                <span><strong>{item.title}</strong><small>{item.detail}</small></span>
+                                                <em>{item.action} <ChevronRight size={13} /></em>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </section>
+                            </section>
+                        )}
+
+                        <div className="settings-guided-screen" hidden={activeSettingsScreen !== 'profile'}>
                 <section id="settings-profile-section" className="settings-card settings-command-profile-card">
                     {onBack && (
                         <button className="mobile-back-btn settings-command-back" onClick={onBack} title={lang === 'en' ? 'Back' : '返回'}>
@@ -1235,7 +1949,693 @@ function SettingsPanel({
                         </div>
                     </section>
                 )}
+                        </div>
 
+                        {['characters', 'models'].includes(activeSettingsScreen) && (
+                            <section className="settings-control-workbench">
+                                <div className="settings-control-screen-title">
+                                    <div>
+                                        <span className="settings-guided-kicker">CHARACTER WORKBENCH</span>
+                                        <h1>{lang === 'en' ? 'Character configuration workbench' : '角色配置工作台'}</h1>
+                                        <p>{lang === 'en' ? 'Choose a character, then edit persona, models, behavior, voice, and data actions in one place.' : '选择角色后，在这里集中管理人设、模型、行为、声音和角色数据。'}</p>
+                                    </div>
+                                    <button type="button" className="settings-control-ghost-button" onClick={createCharacterDraft}>
+                                        <Plus size={15} />{lang === 'en' ? 'New character' : '创建新角色'}
+                                    </button>
+                                </div>
+
+                                <div className="settings-control-character-strip">
+                                    {contacts.map(character => {
+                                        const stats = characterMessageStatsById[character.id] || {};
+                                        const readiness = getCharacterReadiness(character);
+                                        const selected = String(activePreviewContact?.id || '') === String(character.id);
+                                        return (
+                                            <button
+                                                type="button"
+                                                key={character.id}
+                                                className={`settings-control-character-chip ${selected ? 'is-active' : ''}`}
+                                                onClick={() => selectControlCharacter(character)}
+                                            >
+                                                <AvatarWithFrame
+                                                    size={38}
+                                                    frame={character.avatar_frame}
+                                                    src={resolveAvatarUrl(character.avatar, apiUrl, character.name || character.id || 'User')}
+                                                    fallbackSrc={defaultAvatarUrl(character.name || character.id || 'User')}
+                                                    alt=""
+                                                />
+                                                <span>
+                                                    <strong>{character.name || character.id}</strong>
+                                                    <small>
+                                                        <i className={`settings-status-dot ${readiness.ready ? 'online' : 'warning'}`} />
+                                                        {readiness.ready ? (lang === 'en' ? 'Ready' : '可用') : (lang === 'en' ? 'Needs setup' : '待配置')}
+                                                        {' · '}
+                                                        {Number(stats.private_message_count || character.private_message_count || 0)} {lang === 'en' ? 'messages' : '条消息'}
+                                                    </small>
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
+                                    {contacts.length === 0 && (
+                                        <div className="settings-guided-empty">{lang === 'en' ? 'No characters yet. Create one to begin.' : '还没有角色，创建一个角色后开始配置。'}</div>
+                                    )}
+                                </div>
+
+                                {activeCharacterDraft ? (
+                                    <>
+                                        <div className="settings-control-section-tabs">
+                                            {[
+                                                ['persona', lang === 'en' ? 'Persona' : '基础人设', <Heart size={15} />],
+                                                ['model', lang === 'en' ? 'Models' : '模型能力', <MessageSquare size={15} />],
+                                                ['behavior', lang === 'en' ? 'Behavior' : '行为与上下文', <Activity size={15} />],
+                                                ['voice', lang === 'en' ? 'Voice' : '声音', <AudioWaveform size={15} />],
+                                                ['data', lang === 'en' ? 'Data' : '角色数据', <Database size={15} />]
+                                            ].map(([key, label, icon]) => (
+                                                <button
+                                                    type="button"
+                                                    key={key}
+                                                    className={activeCharacterTab === key ? 'is-active' : ''}
+                                                    onClick={() => setActiveCharacterTab(key)}
+                                                >
+                                                    {icon}{label}
+                                                </button>
+                                            ))}
+                                        </div>
+
+                                        {activeCharacterTab === 'persona' && (
+                                            <div className="settings-control-form-stack">
+                                                <section className="settings-control-card">
+                                                    <div className="settings-control-card-title">
+                                                        <div>
+                                                            <span><UserRound size={18} /></span>
+                                                            <div>
+                                                                <h2>{lang === 'en' ? 'Identity and appearance' : '身份与外观'}</h2>
+                                                                <p>{lang === 'en' ? 'Used by chats, contact lists, groups, and city scenes.' : '聊天、联系人、群聊和商业街都会使用这些信息。'}</p>
+                                                            </div>
+                                                        </div>
+                                                        <em>{activeReadiness?.personaReady ? (lang === 'en' ? 'Complete' : '完整') : (lang === 'en' ? 'Incomplete' : '待补充')}</em>
+                                                    </div>
+                                                    <div className="settings-control-avatar-row">
+                                                        <AvatarWithFrame
+                                                            size={88}
+                                                            frame={activeCharacterDraft.avatar_frame}
+                                                            src={resolveAvatarUrl(activeCharacterDraft.avatar, apiUrl, activeCharacterDraft.name || activeCharacterDraft.id || 'User')}
+                                                            fallbackSrc={defaultAvatarUrl(activeCharacterDraft.name || activeCharacterDraft.id || 'User')}
+                                                            alt=""
+                                                        />
+                                                        <div>
+                                                            <strong>{activeCharacterDraft.name || activeCharacterDraft.id}</strong>
+                                                            <small>{lang === 'en' ? 'PNG, JPG, GIF, WebP or URL' : '支持 PNG、JPG、GIF、WebP 或 URL'}</small>
+                                                            <div className="settings-control-inline-actions">
+                                                                <label className="settings-control-ghost-button compact">
+                                                                    <Upload size={14} />{lang === 'en' ? 'Upload avatar' : '上传头像'}
+                                                                    <input type="file" accept="image/*" hidden onChange={(event) => handleFileUpload(event, (url) => updateCharacterDraft({ avatar: url }))} />
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="settings-control-form-grid two">
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'Character ID' : '角色 ID'} <em>{lang === 'en' ? 'Required' : '必填'}</em></span>
+                                                            <input value={activeCharacterDraft.id || ''} onChange={event => updateCharacterDraft({ id: event.target.value })} disabled={Boolean(selectedOriginalForDraft)} />
+                                                        </label>
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'Name' : '角色名称'}</span>
+                                                            <input value={activeCharacterDraft.name || ''} onChange={event => updateCharacterDraft({ name: event.target.value })} />
+                                                        </label>
+                                                        <label className="full">
+                                                            <span>{lang === 'en' ? 'Avatar URL' : '头像 URL'}</span>
+                                                            <input value={activeCharacterDraft.avatar || ''} onChange={event => updateCharacterDraft({ avatar: event.target.value })} placeholder="https://..." />
+                                                        </label>
+                                                        <label className="full">
+                                                            <span>{lang === 'en' ? 'Avatar frame' : '头像框'}</span>
+                                                            {renderAvatarFramePicker(activeCharacterDraft.avatar_frame, frameId => updateCharacterDraft({ avatar_frame: frameId }), activeCharacterDraft.avatar, activeCharacterDraft.name || activeCharacterDraft.id || 'User')}
+                                                        </label>
+                                                    </div>
+                                                </section>
+
+                                                <section className="settings-control-card">
+                                                    <div className="settings-control-card-title">
+                                                        <div>
+                                                            <span className="pink"><Heart size={18} /></span>
+                                                            <div>
+                                                                <h2>{lang === 'en' ? 'Persona and world' : '人格与世界观'}</h2>
+                                                                <p>{lang === 'en' ? 'Define how the character understands themself, you, and the story world.' : '决定角色如何理解自己、你和所在世界。'}</p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="settings-control-form-grid">
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'Persona' : '人物设定'} <em>Persona</em></span>
+                                                            <textarea rows={6} value={activeCharacterDraft.persona || ''} onChange={event => updateCharacterDraft({ persona: event.target.value })} />
+                                                            <small>{lang === 'en' ? 'Personality, expression habits, values, and relationship with the user.' : '描述性格、表达习惯、价值观以及和用户相处的方式。'}</small>
+                                                        </label>
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'World info' : '世界观'} <em>World Info</em></span>
+                                                            <textarea rows={6} value={activeCharacterDraft.world_info || ''} onChange={event => updateCharacterDraft({ world_info: event.target.value })} />
+                                                            <small>{lang === 'en' ? 'Places, people, rules, and background the character should know.' : '角色知道哪些地点、人物、规则和故事背景。'}</small>
+                                                        </label>
+                                                    </div>
+                                                </section>
+
+                                                <section className="settings-control-card">
+                                                    <div className="settings-control-card-title">
+                                                        <div>
+                                                            <span className="mint"><FileText size={18} /></span>
+                                                            <div>
+                                                                <h2>{lang === 'en' ? 'System behavior rules' : '系统行为准则'}</h2>
+                                                                <p>{lang === 'en' ? 'Advanced prompt rules affect private chat, groups, diaries, and proactive messages.' : '高级提示词会影响私聊、群聊、日记和主动消息。'}</p>
+                                                            </div>
+                                                        </div>
+                                                        <button type="button" className="settings-control-text-button" onClick={() => updateCharacterDraft({ system_prompt: getDefaultGuidelines(lang) })}>
+                                                            {lang === 'en' ? 'Restore default' : '恢复默认'}
+                                                        </button>
+                                                    </div>
+                                                    <label className="settings-control-field">
+                                                        <span>System Prompt</span>
+                                                        <textarea className="settings-control-code-area" rows={9} value={activeCharacterDraft.system_prompt || getDefaultGuidelines(lang)} onChange={event => updateCharacterDraft({ system_prompt: event.target.value })} />
+                                                    </label>
+                                                </section>
+                                            </div>
+                                        )}
+
+                                        {activeCharacterTab === 'model' && (
+                                            <div className="settings-control-form-stack">
+                                                <section className={`settings-control-model-card ${activeReadiness?.mainModelReady ? 'is-ready' : ''}`}>
+                                                    <div className="settings-control-model-head">
+                                                        <div>
+                                                            <span><MessageSquare size={18} /></span>
+                                                            <div>
+                                                                <span className="settings-guided-kicker">MAIN MODEL</span>
+                                                                <h2>{lang === 'en' ? 'Main chat model' : '主对话模型'}</h2>
+                                                                <p>{lang === 'en' ? 'Used by private chat, groups, diaries, and city actions.' : '负责私聊、群聊、日记和商业街行动。'}</p>
+                                                            </div>
+                                                        </div>
+                                                        <em><i className={`settings-status-dot ${activeReadiness?.mainModelReady ? 'online' : 'warning'}`} />{activeReadiness?.mainModelReady ? (lang === 'en' ? 'Ready' : '已连接') : (lang === 'en' ? 'Not ready' : '未连接')}</em>
+                                                    </div>
+                                                    <div className="settings-control-form-grid two">
+                                                        <label>
+                                                            <span>API Endpoint</span>
+                                                            <input value={activeCharacterDraft.api_endpoint || ''} onChange={event => updateCharacterDraft({ api_endpoint: event.target.value })} placeholder="https://api.openai.com/v1" />
+                                                            <button type="button" className="settings-control-text-button" onClick={() => applyLocalModelPreset('main')}>
+                                                                <Laptop size={12} />{lang === 'en' ? 'Use local Ollama' : '使用本地 Ollama'}
+                                                            </button>
+                                                        </label>
+                                                        <label>
+                                                            <span>API Key</span>
+                                                            <input type="password" value={editingContact?.api_key || ''} onChange={event => updateCharacterDraft({ api_key: event.target.value, api_key_clear: false })} placeholder={getSecretPlaceholder(activeCharacterDraft, 'api_key', 'sk-...')} />
+                                                            <small>{getSecretStatusText(activeCharacterDraft, 'api_key')}</small>
+                                                            {activeCharacterDraft.api_key_configured && (
+                                                                <button type="button" className="settings-control-text-button danger" onClick={() => updateCharacterDraft({ api_key: '', api_key_clear: true })}>
+                                                                    <Trash2 size={12} />{lang === 'en' ? 'Clear saved key' : '清除已保存 Key'}
+                                                                </button>
+                                                            )}
+                                                        </label>
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'Model' : '模型'}</span>
+                                                            <div className="settings-control-inline-field">
+                                                                <input value={activeCharacterDraft.model_name || ''} onChange={event => updateCharacterDraft({ model_name: event.target.value })} />
+                                                                <button type="button" onClick={() => fetchModels(activeCharacterDraft.api_endpoint, editingContact?.api_key || '', setMainModels, setMainModelFetching, setMainModelError, { characterId: activeCharacterDraft.id, scope: 'main', hasSavedKey: activeCharacterDraft.api_key_configured && !activeCharacterDraft.api_key_clear })} disabled={mainModelFetching}>
+                                                                    <RefreshCw size={14} />{mainModelFetching ? '...' : (lang === 'en' ? 'Fetch' : '获取')}
+                                                                </button>
+                                                            </div>
+                                                            {mainModelError && <small className="settings-control-error">{mainModelError}</small>}
+                                                            {mainModelOptions.length > 0 && (
+                                                                <select value="" onChange={event => handleMainModelSelect(event.target.value)}>
+                                                                    <option value="" disabled>{lang === 'en' ? 'Select a model' : '选择模型'}</option>
+                                                                    {mainModelOptions.map(model => <option key={model} value={model}>{getModelOptionLabel(model)}</option>)}
+                                                                </select>
+                                                            )}
+                                                        </label>
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'Max output' : '最大输出'}</span>
+                                                            <div className="settings-control-number-field">
+                                                                <input type="number" min="100" max="20000" value={activeCharacterDraft.max_tokens ?? 800} onChange={event => updateCharacterDraft({ max_tokens: Number(event.target.value || 800) })} />
+                                                                <span>tokens</span>
+                                                            </div>
+                                                        </label>
+                                                    </div>
+                                                </section>
+
+                                                <section className={`settings-control-model-card ${activeReadiness?.memoryModelReady ? 'is-ready' : ''}`}>
+                                                    <div className="settings-control-model-head">
+                                                        <div>
+                                                            <span className="pink"><FileText size={18} /></span>
+                                                            <div>
+                                                                <span className="settings-guided-kicker">MEMORY MODEL</span>
+                                                                <h2>{lang === 'en' ? 'Memory and summary model' : '记忆与总结模型'}</h2>
+                                                                <p>{lang === 'en' ? 'Used by long-term memory extraction, summaries, and relationship impressions.' : '负责长期记忆清扫、摘要和关系印象。'}</p>
+                                                            </div>
+                                                        </div>
+                                                        <em><i className={`settings-status-dot ${activeReadiness?.memoryModelReady ? 'online' : 'warning'}`} />{activeReadiness?.memoryModelReady ? (lang === 'en' ? 'Ready' : '已连接') : (lang === 'en' ? 'Optional' : '可选')}</em>
+                                                    </div>
+                                                    <div className="settings-control-form-grid two">
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'Memory API Endpoint' : '记忆 API Endpoint'}</span>
+                                                            <input value={activeCharacterDraft.memory_api_endpoint || ''} onChange={event => updateCharacterDraft({ memory_api_endpoint: event.target.value })} placeholder="https://api.openai.com/v1" />
+                                                            <button type="button" className="settings-control-text-button" onClick={() => applyLocalModelPreset('memory')}>
+                                                                <Laptop size={12} />{lang === 'en' ? 'Use local Ollama' : '使用本地 Ollama'}
+                                                            </button>
+                                                        </label>
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'Memory API Key' : '记忆 API Key'}</span>
+                                                            <input type="password" value={editingContact?.memory_api_key || ''} onChange={event => updateCharacterDraft({ memory_api_key: event.target.value, memory_api_key_clear: false })} placeholder={getSecretPlaceholder(activeCharacterDraft, 'memory_api_key', 'sk-...')} />
+                                                            <small>{getSecretStatusText(activeCharacterDraft, 'memory_api_key')}</small>
+                                                            {activeCharacterDraft.memory_api_key_configured && (
+                                                                <button type="button" className="settings-control-text-button danger" onClick={() => updateCharacterDraft({ memory_api_key: '', memory_api_key_clear: true })}>
+                                                                    <Trash2 size={12} />{lang === 'en' ? 'Clear saved key' : '清除已保存 Key'}
+                                                                </button>
+                                                            )}
+                                                        </label>
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'Memory model' : '记忆模型'}</span>
+                                                            <div className="settings-control-inline-field">
+                                                                <input value={activeCharacterDraft.memory_model_name || ''} onChange={event => updateCharacterDraft({ memory_model_name: event.target.value })} />
+                                                                <button type="button" onClick={() => fetchModels(activeCharacterDraft.memory_api_endpoint, editingContact?.memory_api_key || '', setMemModels, setMemModelFetching, setMemModelError, { characterId: activeCharacterDraft.id, scope: 'memory', hasSavedKey: activeCharacterDraft.memory_api_key_configured && !activeCharacterDraft.memory_api_key_clear })} disabled={memModelFetching}>
+                                                                    <RefreshCw size={14} />{memModelFetching ? '...' : (lang === 'en' ? 'Fetch' : '获取')}
+                                                                </button>
+                                                            </div>
+                                                            {memModelError && <small className="settings-control-error">{memModelError}</small>}
+                                                            {memModelOptions.length > 0 && (
+                                                                <select value="" onChange={event => handleMemoryModelSelect(event.target.value)}>
+                                                                    <option value="" disabled>{lang === 'en' ? 'Select a model' : '选择模型'}</option>
+                                                                    {memModelOptions.map(model => <option key={model} value={model}>{getModelOptionLabel(model)}</option>)}
+                                                                </select>
+                                                            )}
+                                                        </label>
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'Summary threshold' : '私聊摘要阈值'}</span>
+                                                            <div className="settings-control-number-field">
+                                                                <input type="number" min="5" max="100" value={activeCharacterDraft.private_summary_threshold ?? 30} onChange={event => updateCharacterDraft({ private_summary_threshold: Number(event.target.value || 30) })} />
+                                                                <span>{lang === 'en' ? 'messages' : '条消息'}</span>
+                                                            </div>
+                                                        </label>
+                                                    </div>
+                                                    <div className="settings-control-impact-note">
+                                                        <Info size={16} />
+                                                        <span>{lang === 'en' ? 'Changing context window clears summary, history window cache, and dialogue digest after saving.' : '修改上下文窗口后，保存会清理摘要、历史窗口缓存和对话 digest。'}</span>
+                                                    </div>
+                                                </section>
+                                            </div>
+                                        )}
+
+                                        {activeCharacterTab === 'behavior' && (
+                                            <div className="settings-control-form-stack">
+                                                <section className="settings-control-card">
+                                                    <div className="settings-control-card-title">
+                                                        <div>
+                                                            <span><Activity size={18} /></span>
+                                                            <div>
+                                                                <h2>{lang === 'en' ? 'Background behavior' : '角色会主动做什么？'}</h2>
+                                                                <p>{lang === 'en' ? 'These switches affect background actions, city participation, and API usage.' : '这些开关决定后台行为、城市参与和 API 消耗。'}</p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="settings-control-toggle-grid">
+                                                        {[
+                                                            ['sys_proactive', lang === 'en' ? 'Proactive messages' : '主动发消息', lang === 'en' ? 'The character may start private chats.' : '角色会在合适时主动开启私聊。', <MessageSquare size={16} />],
+                                                            ['sys_timer', lang === 'en' ? 'Timer checks' : '定时检查', lang === 'en' ? 'Background timer judges when to act.' : '按间隔判断是否需要行动。', <CalendarDays size={16} />],
+                                                            ['sys_pressure', lang === 'en' ? 'Pressure and body state' : '压力与生理状态', lang === 'en' ? 'Energy, sleep, and pressure can change.' : '启用体力、睡眠和压力变化。', <Activity size={16} />],
+                                                            ['sys_jealousy', lang === 'en' ? 'Jealousy reactions' : '嫉妒反应', lang === 'en' ? 'Relationship system may create jealousy.' : '允许关系系统产生嫉妒情绪。', <Heart size={16} />],
+                                                            ['sys_survival', lang === 'en' ? 'City activity' : '参与商业街', lang === 'en' ? 'Character joins city actions and social events.' : '角色会在城市中自主行动和社交。', <House size={16} />],
+                                                            ['llm_debug_capture', lang === 'en' ? 'LLM debug capture' : '记录 LLM 调试', lang === 'en' ? 'Keep recent prompt and response diagnostics.' : '保留最近的提示词与回复诊断。', <FileText size={16} />]
+                                                        ].map(([field, title, detail, icon]) => {
+                                                            const on = Number(activeCharacterDraft[field] ?? 1) !== 0;
+                                                            return (
+                                                                <label className="settings-control-toggle-row" key={field}>
+                                                                    <span>{icon}</span>
+                                                                    <div><strong>{title}</strong><small>{detail}</small></div>
+                                                                    <input type="checkbox" checked={on} onChange={event => updateCharacterDraft({ [field]: event.target.checked ? 1 : 0 })} />
+                                                                </label>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </section>
+
+                                                <section className="settings-control-card">
+                                                    <div className="settings-control-card-title">
+                                                        <div>
+                                                            <span className="pink"><CalendarDays size={18} /></span>
+                                                            <div>
+                                                                <h2>{lang === 'en' ? 'Proactive rhythm and context' : '主动消息节奏与上下文'}</h2>
+                                                                <p>{lang === 'en' ? 'Control how often the character checks and how much recent content they can see.' : '控制角色后台检查频率，以及每次回复能看到多少最近信息。'}</p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="settings-control-form-grid two">
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'Min interval' : '最短间隔'}</span>
+                                                            <div className="settings-control-number-field">
+                                                                <input type="number" min="0.1" max="120" step="0.1" value={activeCharacterDraft.interval_min ?? 10} onChange={event => updateCharacterDraft({ interval_min: Number(event.target.value || 0.1) })} />
+                                                                <span>{lang === 'en' ? 'min' : '分钟'}</span>
+                                                            </div>
+                                                        </label>
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'Max interval' : '最长间隔'}</span>
+                                                            <div className="settings-control-number-field">
+                                                                <input type="number" min="0.1" max="120" step="0.1" value={activeCharacterDraft.interval_max ?? 120} onChange={event => updateCharacterDraft({ interval_max: Number(event.target.value || 0.1) })} />
+                                                                <span>{lang === 'en' ? 'min' : '分钟'}</span>
+                                                            </div>
+                                                        </label>
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'Private context' : '私聊上下文'}</span>
+                                                            <div className="settings-control-number-field">
+                                                                <input type="number" min="10" max="200" value={activeCharacterDraft.context_msg_limit ?? 60} onChange={event => updateCharacterDraft({ context_msg_limit: Number(event.target.value || 60) })} />
+                                                                <span>{lang === 'en' ? 'messages' : '条消息'}</span>
+                                                            </div>
+                                                        </label>
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'City encounters' : '商业街相遇'}</span>
+                                                            <select value={Number(activeCharacterDraft.sys_city_social ?? 1) !== 0 ? '1' : '0'} onChange={event => updateCharacterDraft({ sys_city_social: Number(event.target.value) })}>
+                                                                <option value="1">{lang === 'en' ? 'Allowed' : '允许参与'}</option>
+                                                                <option value="0">{lang === 'en' ? 'Disabled' : '暂停参与'}</option>
+                                                            </select>
+                                                        </label>
+                                                    </div>
+                                                </section>
+
+                                                <section className="settings-control-card">
+                                                    <div className="settings-control-card-title">
+                                                        <div>
+                                                            <span className="mint"><Wallet size={18} /></span>
+                                                            <div>
+                                                                <h2>{lang === 'en' ? 'Wallet and state' : '钱包与状态'}</h2>
+                                                                <p>{lang === 'en' ? 'Editable numeric state used by chat, economy, and city systems.' : '聊天、经济和城市系统会读取这些数值状态。'}</p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="settings-control-form-grid three">
+                                                        {[
+                                                            ['wallet', lang === 'en' ? 'Wallet' : '钱包', 0, 1000000000],
+                                                            ['affinity', lang === 'en' ? 'Affinity' : '好感', 0, 100],
+                                                            ['energy', lang === 'en' ? 'Energy' : '体力', 0, 100],
+                                                            ['calories', lang === 'en' ? 'Calories' : '卡路里', 0, 4000],
+                                                            ['stress', lang === 'en' ? 'Stress' : '压力', 0, 100],
+                                                            ['pressure_level', lang === 'en' ? 'Pressure level' : '压力等级', 0, 4],
+                                                            ['sleep_debt', lang === 'en' ? 'Sleep debt' : '睡眠欠债', 0, 1000],
+                                                            ['sleep_pressure', lang === 'en' ? 'Sleep pressure' : '睡眠压力', 0, 100],
+                                                            ['mood', lang === 'en' ? 'Mood' : '心情', 0, 100]
+                                                        ].map(([field, label, min, max]) => (
+                                                            <label key={field}>
+                                                                <span>{label}</span>
+                                                                <input type="number" min={min} max={max} value={activeCharacterDraft[field] ?? 0} onChange={event => updateCharacterDraft({ [field]: Number(event.target.value || 0) })} />
+                                                            </label>
+                                                        ))}
+                                                    </div>
+                                                </section>
+                                            </div>
+                                        )}
+
+                                        {activeCharacterTab === 'voice' && (
+                                            <div className="settings-control-form-stack">
+                                                <section className="settings-control-voice-hero">
+                                                    <div>
+                                                        <span><AudioWaveform size={22} /></span>
+                                                        <div>
+                                                            <span className="settings-guided-kicker">TEXT TO SPEECH</span>
+                                                            <h2>{lang === 'en' ? `Give ${activeCharacterDraft.name || 'this character'} a voice` : `让 ${activeCharacterDraft.name || '这个角色'} 拥有自己的声音`}</h2>
+                                                            <p>{lang === 'en' ? 'Preview uses temporary config and does not create a chat message.' : '试听使用临时配置生成音频，不会写入聊天消息。'}</p>
+                                                        </div>
+                                                    </div>
+                                                    <label className="settings-control-switch">
+                                                        <input type="checkbox" checked={activeCharacterDraft.tts_enabled === 1} onChange={event => updateCharacterDraft({ tts_enabled: event.target.checked ? 1 : 0 })} />
+                                                        <span />
+                                                    </label>
+                                                </section>
+                                                <section className="settings-control-card">
+                                                    <div className="settings-control-form-grid two">
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'TTS provider' : 'TTS 服务'}</span>
+                                                            <select
+                                                                value={activeCharacterDraft.tts_provider || 'tencent'}
+                                                                onChange={event => {
+                                                                    const nextProvider = event.target.value;
+                                                                    const providerConfig = getTtsProviderConfig(nextProvider);
+                                                                    updateCharacterDraft({
+                                                                        tts_provider: nextProvider,
+                                                                        tts_voice: '',
+                                                                        tts_model: providerConfig.modelOptions?.[0]?.value || '',
+                                                                        tts_api_key: '',
+                                                                        tts_api_key_clear: false
+                                                                    });
+                                                                }}
+                                                            >
+                                                                {TTS_PROVIDERS.map(provider => {
+                                                                    const translated = translateTtsProviderConfig(provider, lang);
+                                                                    return <option value={provider.id} key={provider.id}>{translated.label}</option>;
+                                                                })}
+                                                            </select>
+                                                        </label>
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'Trigger mode' : '触发方式'}</span>
+                                                            <select value={activeCharacterDraft.tts_trigger_mode || 'tagged'} onChange={event => updateCharacterDraft({ tts_trigger_mode: event.target.value })}>
+                                                                <option value="tagged">{lang === 'en' ? 'Main-model TTS tag only' : '仅主模型 TTS 标签'}</option>
+                                                                <option value="all_private">{lang === 'en' ? 'Every private reply' : '每条私聊回复'}</option>
+                                                            </select>
+                                                        </label>
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'TTS API key' : 'TTS API 凭据'}</span>
+                                                            <input type="password" value={editingContact?.tts_api_key || ''} onChange={event => updateCharacterDraft({ tts_api_key: event.target.value, tts_api_key_clear: false })} placeholder={getSecretPlaceholder(activeCharacterDraft, 'tts_api_key', getEditingTtsProviderConfig(activeCharacterDraft.tts_provider).keyHint)} />
+                                                            <small>{getSecretStatusText(activeCharacterDraft, 'tts_api_key')}</small>
+                                                            {activeCharacterDraft.tts_api_key_configured && (
+                                                                <button type="button" className="settings-control-text-button danger" onClick={() => updateCharacterDraft({ tts_api_key: '', tts_api_key_clear: true })}>
+                                                                    <Trash2 size={12} />{lang === 'en' ? 'Clear saved key' : '清除已保存 Key'}
+                                                                </button>
+                                                            )}
+                                                        </label>
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'Voice' : '音色'}</span>
+                                                            <div className="settings-control-inline-field">
+                                                                <input value={activeCharacterDraft.tts_voice || ''} onChange={event => updateCharacterDraft({ tts_voice: event.target.value })} placeholder={getEditingTtsProviderConfig(activeCharacterDraft.tts_provider).voiceHint} />
+                                                                {activeCharacterDraft.tts_provider === 'tencent' && (
+                                                                    <button type="button" onClick={() => loadTencentVoices(true)}><RefreshCw size={14} />{lang === 'en' ? 'Voices' : '音色'}</button>
+                                                                )}
+                                                            </div>
+                                                            {getEditingTtsProviderConfig(activeCharacterDraft.tts_provider).voiceOptions?.length > 0 && (
+                                                                <select value="" onChange={event => updateCharacterDraft({ tts_voice: event.target.value, ...(activeCharacterDraft.tts_provider === 'tencent' ? { tts_model: inferTencentModelTier(getEditingTtsProviderConfig(activeCharacterDraft.tts_provider).voiceOptions.find(option => option.value === event.target.value)) || activeCharacterDraft.tts_model } : {}) })}>
+                                                                    <option value="" disabled>{lang === 'en' ? 'Select built-in voice' : '选择内置音色'}</option>
+                                                                    {getEditingTtsProviderConfig(activeCharacterDraft.tts_provider).voiceOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                                                                </select>
+                                                            )}
+                                                            {tencentVoiceError && <small className="settings-control-error">{tencentVoiceError}</small>}
+                                                            {!tencentVoiceError && tencentVoiceSource && <small>{tencentVoiceSourceLabel(tencentVoiceSource)}</small>}
+                                                        </label>
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'Model / tier' : '模型 / 档位'}</span>
+                                                            <input value={activeCharacterDraft.tts_model || ''} onChange={event => updateCharacterDraft({ tts_model: event.target.value })} placeholder={getEditingTtsProviderConfig(activeCharacterDraft.tts_provider).modelHint} />
+                                                        </label>
+                                                        <label>
+                                                            <span>{lang === 'en' ? 'Endpoint / region' : 'Endpoint / 地域'}</span>
+                                                            <input value={activeCharacterDraft.tts_endpoint || ''} onChange={event => updateCharacterDraft({ tts_endpoint: event.target.value })} placeholder="optional" />
+                                                        </label>
+                                                        <label className="settings-control-check-line">
+                                                            <input type="checkbox" checked={activeCharacterDraft.tts_autoplay === 1} onChange={event => updateCharacterDraft({ tts_autoplay: event.target.checked ? 1 : 0 })} />
+                                                            <span><strong>{lang === 'en' ? 'Auto-play when generated' : '生成后自动播放'}</strong><small>{lang === 'en' ? 'May be limited by browser autoplay policy.' : '可能受浏览器自动播放策略限制。'}</small></span>
+                                                        </label>
+                                                    </div>
+                                                </section>
+                                                <section className="settings-control-tts-preview">
+                                                    <div className="settings-control-preview-avatar">
+                                                        <AvatarWithFrame
+                                                            size={56}
+                                                            frame={activeCharacterDraft.avatar_frame}
+                                                            src={resolveAvatarUrl(activeCharacterDraft.avatar, apiUrl, activeCharacterDraft.name || activeCharacterDraft.id || 'User')}
+                                                            fallbackSrc={defaultAvatarUrl(activeCharacterDraft.name || activeCharacterDraft.id || 'User')}
+                                                            alt=""
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <strong>{ttsPreviewText(activeCharacterDraft.name)}</strong>
+                                                        <small>{lang === 'en' ? 'Preview returns an audio Blob and will not save a message.' : '试听返回音频 Blob，不会保存为消息。'}</small>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        disabled={activeCharacterDraft.tts_enabled !== 1 || !activeCharacterDraft.id}
+                                                        onClick={async () => {
+                                                            try {
+                                                                const res = await fetch(`${apiUrl}/tts/preview/${activeCharacterDraft.id}`, {
+                                                                    method: 'POST',
+                                                                    headers: {
+                                                                        'Authorization': `Bearer ${localStorage.getItem('cp_token') || ''}`,
+                                                                        'Content-Type': 'application/json'
+                                                                    },
+                                                                    body: JSON.stringify({
+                                                                        text: ttsPreviewText(activeCharacterDraft.name),
+                                                                        config: {
+                                                                            tts_provider: activeCharacterDraft.tts_provider || 'tencent',
+                                                                            tts_api_key: editingContact?.tts_api_key || '',
+                                                                            tts_voice: activeCharacterDraft.tts_voice || '',
+                                                                            tts_model: activeCharacterDraft.tts_model || '',
+                                                                            tts_endpoint: activeCharacterDraft.tts_endpoint || '',
+                                                                            tts_enabled: activeCharacterDraft.tts_enabled === 1 ? 1 : 0
+                                                                        }
+                                                                    })
+                                                                });
+                                                                if (!res.ok) {
+                                                                    const data = await res.json().catch(() => ({}));
+                                                                    throw new Error(data.error || `HTTP ${res.status}`);
+                                                                }
+                                                                const blob = await res.blob();
+                                                                const objectUrl = URL.createObjectURL(blob);
+                                                                const audio = new Audio(objectUrl);
+                                                                audio.onended = () => URL.revokeObjectURL(objectUrl);
+                                                                audio.onerror = () => URL.revokeObjectURL(objectUrl);
+                                                                await audio.play();
+                                                                setTtsPreviewVerifiedIds(prev => new Set(prev).add(activeCharacterDraft.id));
+                                                            } catch (e) {
+                                                                alert((lang === 'en' ? 'Preview failed: ' : '试听失败：') + (e.message || e));
+                                                            }
+                                                        }}
+                                                    >
+                                                        <Volume2 size={16} />{lang === 'en' ? 'Preview voice' : '试听声音'}
+                                                    </button>
+                                                </section>
+                                            </div>
+                                        )}
+
+                                        {activeCharacterTab === 'data' && (
+                                            <div className="settings-control-form-stack">
+                                                <section className="settings-control-card">
+                                                    <div className="settings-control-card-title">
+                                                        <div>
+                                                            <span><Database size={18} /></span>
+                                                            <div>
+                                                                <h2>{lang === 'en' ? 'Character archive' : '角色存档'}</h2>
+                                                                <p>{lang === 'en' ? 'Export or migrate this character settings, messages, memories, and diaries.' : '单独导出或迁移该角色的资料、消息、记忆与日记。'}</p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="settings-control-data-grid">
+                                                        <button type="button" onClick={() => handleExportCharacterData(activeCharacterDraft.id)} disabled={!selectedOriginalForDraft}>
+                                                            <span><Download size={18} /></span>
+                                                            <div><strong>{lang === 'en' ? 'Export character' : `导出 ${activeCharacterDraft.name || '角色'}`}</strong><small>chatpulse.character.v2 JSON</small></div>
+                                                            <ChevronRight size={15} />
+                                                        </button>
+                                                        <label className={!selectedOriginalForDraft ? 'is-disabled' : ''}>
+                                                            <span><Upload size={18} /></span>
+                                                            <div><strong>{lang === 'en' ? 'Import and replace' : '导入并替换'}</strong><small>{lang === 'en' ? 'Replace current character data.' : '用存档替换当前角色数据。'}</small></div>
+                                                            <ChevronRight size={15} />
+                                                            <input type="file" accept=".json,.zip,application/json,application/zip" hidden disabled={!selectedOriginalForDraft} onChange={event => handleImportCharacterData(activeCharacterDraft.id, event, 'replace')} />
+                                                        </label>
+                                                        <label className={!selectedOriginalForDraft ? 'is-disabled' : ''}>
+                                                            <span><Upload size={18} /></span>
+                                                            <div><strong>{lang === 'en' ? 'Import and merge' : '导入并合并'}</strong><small>{lang === 'en' ? 'Merge messages and memories where supported.' : '在支持的范围内合并消息与记忆。'}</small></div>
+                                                            <ChevronRight size={15} />
+                                                            <input type="file" accept=".json,.zip,application/json,application/zip" hidden disabled={!selectedOriginalForDraft} onChange={event => handleImportCharacterData(activeCharacterDraft.id, event, 'merge')} />
+                                                        </label>
+                                                        <button type="button" onClick={() => handleResetPhysicalState(activeCharacterDraft.id)} disabled={!selectedOriginalForDraft}>
+                                                            <span><RefreshCw size={18} /></span>
+                                                            <div><strong>{lang === 'en' ? 'Reset physical state' : '重置身体状态'}</strong><small>{lang === 'en' ? 'Keep memories, relationships, and wallet.' : '保留记忆、关系和钱包。'}</small></div>
+                                                            <ChevronRight size={15} />
+                                                        </button>
+                                                    </div>
+                                                </section>
+                                                <section className="settings-control-danger-card">
+                                                    <div>
+                                                        <span><TriangleAlert size={19} /></span>
+                                                        <div>
+                                                            <h2>{lang === 'en' ? 'Dangerous character actions' : '角色危险操作'}</h2>
+                                                            <p>{lang === 'en' ? 'These operations affect messages, memories, relationships, and vector indexes.' : '这些操作会影响消息、记忆、关系和向量索引。'}</p>
+                                                        </div>
+                                                    </div>
+                                                    <div>
+                                                        <button type="button" onClick={() => handleWipeData(activeCharacterDraft.id)} disabled={!selectedOriginalForDraft}>
+                                                            <span><strong>{lang === 'en' ? 'Deep-wipe character data' : '深度清空角色数据'}</strong><small>{lang === 'en' ? 'Keep the character shell, clear history.' : '保留角色本体，清空历史并恢复默认状态。'}</small></span>
+                                                            <em>{lang === 'en' ? 'Wipe data' : '清空数据'}</em>
+                                                        </button>
+                                                        <button type="button" onClick={() => handleDeleteContact(activeCharacterDraft.id)} disabled={!selectedOriginalForDraft}>
+                                                            <span><strong>{lang === 'en' ? 'Delete character permanently' : '永久删除角色'}</strong><small>{lang === 'en' ? 'Delete settings, messages, groups, and indexes.' : '同时删除设置、消息、群关系和索引。'}</small></span>
+                                                            <em>{lang === 'en' ? 'Delete' : '删除'}</em>
+                                                        </button>
+                                                    </div>
+                                                </section>
+                                            </div>
+                                        )}
+                                    </>
+                                ) : (
+                                    <div className="settings-guided-empty">{lang === 'en' ? 'Select or create a character to edit.' : '选择或创建角色后开始编辑。'}</div>
+                                )}
+                            </section>
+                        )}
+
+                        {activeSettingsScreen === 'legacy-models' && (
+                            <section className="settings-guided-screen settings-models-screen">
+                                <div className="settings-page-title">
+                                    <div>
+                                        <span className="settings-guided-kicker">MODELS & VOICE</span>
+                                        <h1>{lang === 'en' ? 'Models and voice' : '模型与声音'}</h1>
+                                        <p>{lang === 'en' ? 'Check real connection readiness first, then open the character editor for keys, model lists, and TTS preview.' : '先看真实连通状态，再进入角色编辑器配置密钥、模型列表和 TTS 试听。'}</p>
+                                    </div>
+                                    {activeCharacterForModel && (
+                                        <button type="button" className="settings-character-select-button" onClick={() => setActiveSettingsScreen('characters')}>
+                                            <AvatarWithFrame
+                                                size={32}
+                                                frame={activeCharacterForModel.avatar_frame}
+                                                src={resolveAvatarUrl(activeCharacterForModel.avatar, apiUrl, activeCharacterForModel.name || activeCharacterForModel.id || 'User')}
+                                                fallbackSrc={defaultAvatarUrl(activeCharacterForModel.name || activeCharacterForModel.id || 'User')}
+                                                alt=""
+                                            />
+                                            <span><strong>{activeCharacterForModel.name}</strong><small>{lang === 'en' ? 'Current character' : '当前角色'}</small></span>
+                                            <ChevronRight size={14} />
+                                        </button>
+                                    )}
+                                </div>
+                                <div className="settings-connection-summary">
+                                    <div className={activeCharacterModelReadiness?.mainModelReady ? 'is-ready' : 'needs-check'}>
+                                        <span><MessageSquare size={18} /></span>
+                                        <div>
+                                            <small>{lang === 'en' ? 'Main chat model' : '主对话模型'}</small>
+                                            <strong>{activeCharacterForModel?.model_name || (lang === 'en' ? 'Not configured' : '未配置')}</strong>
+                                            <em>{activeCharacterModelReadiness?.mainModelReady ? (lang === 'en' ? 'Ready' : '已连接') : (lang === 'en' ? 'Needs endpoint, key, and model' : '需要 endpoint、key 和模型')}</em>
+                                        </div>
+                                        {activeCharacterForModel && <button type="button" onClick={() => openCharacterEditor(activeCharacterForModel)}>{lang === 'en' ? 'Edit' : '编辑'}</button>}
+                                    </div>
+                                    <div className={activeCharacterModelReadiness?.memoryModelReady ? 'is-ready' : 'needs-check'}>
+                                        <span><Database size={18} /></span>
+                                        <div>
+                                            <small>{lang === 'en' ? 'Memory model' : '记忆模型'}</small>
+                                            <strong>{activeCharacterForModel?.memory_model_name || (lang === 'en' ? 'Optional' : '可选')}</strong>
+                                            <em>{activeCharacterModelReadiness?.memoryModelReady ? (lang === 'en' ? 'Ready' : '已连接') : (lang === 'en' ? 'Affects long-term memory tasks' : '影响长期记忆任务')}</em>
+                                        </div>
+                                        {activeCharacterForModel && <button type="button" onClick={() => openCharacterEditor(activeCharacterForModel)}>{lang === 'en' ? 'Edit' : '编辑'}</button>}
+                                    </div>
+                                    <div className={activeCharacterModelReadiness?.ttsEnabled && (!activeCharacterModelReadiness?.ttsConfigured || !activeCharacterModelReadiness?.ttsPreviewVerified) ? 'needs-check' : 'is-ready'}>
+                                        <span><AudioWaveform size={18} /></span>
+                                        <div>
+                                            <small>{lang === 'en' ? 'Voice' : '声音'}</small>
+                                            <strong>{activeCharacterModelReadiness?.ttsEnabled ? `${selectedTtsProviderLabel}${activeCharacterForModel?.tts_voice ? ` · ${activeCharacterForModel.tts_voice}` : ''}` : (lang === 'en' ? 'Off' : '关闭')}</strong>
+                                            <em>{activeCharacterModelReadiness?.ttsEnabled
+                                                ? (activeCharacterModelReadiness.ttsPreviewVerified ? (lang === 'en' ? 'Preview verified this session' : '本会话已试听') : (lang === 'en' ? 'Preview in character editor' : '在角色编辑器里试听'))
+                                                : (lang === 'en' ? 'Optional' : '可选')}</em>
+                                        </div>
+                                        {activeCharacterForModel && <button type="button" onClick={() => openCharacterEditor(activeCharacterForModel)}>{lang === 'en' ? 'Open' : '打开'}</button>}
+                                    </div>
+                                </div>
+                                <section className="settings-model-task-panel">
+                                    <div className="settings-task-panel-title">
+                                        <div>
+                                            <span className="settings-guided-kicker">CONFIG TASKS</span>
+                                            <h2>{lang === 'en' ? 'Configuration path' : '配置路径'}</h2>
+                                        </div>
+                                    </div>
+                                    <div className="settings-task-list">
+                                        {[
+                                            [activeCharacterModelReadiness?.mainModelReady, lang === 'en' ? 'Main model' : '主模型', lang === 'en' ? 'Endpoint, key, model name, max output.' : 'Endpoint、Key、模型名称、最大输出。'],
+                                            [activeCharacterModelReadiness?.memoryModelReady, lang === 'en' ? 'Memory model' : '记忆模型', lang === 'en' ? 'Small model for memory extraction and maintenance.' : '用于记忆提取和维护的小模型。'],
+                                            [!activeCharacterModelReadiness?.ttsEnabled || activeCharacterModelReadiness?.ttsConfigured, lang === 'en' ? 'TTS config' : 'TTS 配置', lang === 'en' ? 'Provider, credentials, voice, model tier, trigger mode.' : '厂商、凭证、音色、模型档位和触发方式。'],
+                                            [!activeCharacterModelReadiness?.ttsEnabled || activeCharacterModelReadiness?.ttsPreviewVerified, lang === 'en' ? 'Voice preview' : '声音试听', lang === 'en' ? 'Preview success is tracked only for this frontend session.' : '试听成功只在当前前端会话标记。']
+                                        ].map(([done, title, detail]) => (
+                                            <button type="button" key={title} className={done ? 'is-done' : 'needs-attention'} onClick={() => activeCharacterForModel && openCharacterEditor(activeCharacterForModel)}>
+                                                {done ? <CircleCheck size={16} /> : <CircleDotDashed size={16} />}
+                                                <span><strong>{title}</strong><small>{detail}</small></span>
+                                                <em>{lang === 'en' ? 'Edit' : '编辑'}</em>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </section>
+                            </section>
+                        )}
+
+                        <div className={`settings-guided-screen settings-guided-existing-workspace is-${activeSettingsScreen}`} hidden={activeSettingsScreen !== 'security'}>
                 <div className="settings-command-workspace">
                     <main className="settings-command-main">
                         <section id="settings-characters-section" className="settings-card settings-characters-card settings-command-characters-card">
@@ -1454,7 +2854,53 @@ function SettingsPanel({
                         </section>
                     )}
                 </div>
+                        </div>
 
+                        {activeSettingsScreen === 'security' && (
+                            <section className="settings-card settings-sessions-card">
+                                <div className="settings-card-title settings-card-title-row">
+                                    <div>
+                                        <h2><Monitor size={20} /> {lang === 'en' ? 'Login Sessions' : '登录会话'}</h2>
+                                        <p>{lang === 'en' ? 'Revoke unfamiliar devices without touching character data.' : '发现陌生设备时，可以只撤销对应会话，不影响角色数据。'}</p>
+                                    </div>
+                                    <button type="button" className="settings-secondary-button" onClick={loadSessions} disabled={sessionsLoading}>
+                                        <RefreshCw size={15} /> {sessionsLoading ? (lang === 'en' ? 'Refreshing' : '刷新中') : (lang === 'en' ? 'Refresh' : '刷新')}
+                                    </button>
+                                </div>
+                                {sessionsError && <div className="settings-form-error">{sessionsError}</div>}
+                                <div className="settings-session-list">
+                                    {sessions.slice(0, 12).map((session, index) => {
+                                        const sessionId = session.id || session.session_id || session.token_id || String(index);
+                                        const isCurrent = session.current === true || session.is_current === true;
+                                        const Icon = /android|iphone|mobile|phone/i.test(formatSessionDevice(session)) ? Smartphone : (/mac|windows|linux|desktop|edge|chrome/i.test(formatSessionDevice(session)) ? Monitor : Laptop);
+                                        return (
+                                            <div className="settings-session-row" key={sessionId}>
+                                                <span><Icon size={18} /></span>
+                                                <div>
+                                                    <strong>{formatSessionDevice(session)}</strong>
+                                                    <small>{formatSessionMeta(session)}</small>
+                                                </div>
+                                                {isCurrent ? <em>{lang === 'en' ? 'Current' : '当前会话'}</em> : (
+                                                    <button type="button" onClick={() => revokeSession(sessionId, isCurrent)}>{lang === 'en' ? 'Revoke' : '撤销'}</button>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                    {!sessionsLoading && sessions.length === 0 && (
+                                        <div className="settings-guided-empty">{lang === 'en' ? 'No session records returned by the backend.' : '后端没有返回会话记录。'}</div>
+                                    )}
+                                    {sessions.length > 12 && (
+                                        <div className="settings-guided-empty">
+                                            {lang === 'en'
+                                                ? `${sessions.length - 12} older sessions are hidden here. Use Refresh after revoking recent sessions.`
+                                                : `还有 ${sessions.length - 12} 条更早的会话已折叠；撤销近期会话后可刷新查看。`}
+                                        </div>
+                                    )}
+                                </div>
+                            </section>
+                        )}
+
+                        <div className="settings-guided-screen" hidden={activeSettingsScreen !== 'backup'}>
                 <section id="settings-backup-section" className="settings-card settings-backup-card settings-command-backup-card">
                     <div className="settings-card-title settings-card-title-row">
                         <div>
@@ -1478,7 +2924,7 @@ function SettingsPanel({
                             </span>
                             <input type="file" accept=".zip,.db,application/zip,application/x-sqlite3,application/octet-stream" style={{ display: 'none' }} onChange={handleImportDatabase} />
                         </label>
-                        <button type="button" className="settings-backup-action settings-backup-action--danger" onClick={handleSystemWipe}>
+                        <button type="button" className="settings-backup-action settings-backup-action--danger" onClick={() => setWipeModalOpen(true)}>
                             <span className="settings-backup-icon"><Trash2 size={20} /></span>
                             <span>
                                 <strong>{lang === 'en' ? 'Factory Reset' : '恢复出厂设置'}</strong>
@@ -1486,11 +2932,167 @@ function SettingsPanel({
                             </span>
                         </button>
                     </div>
+                    <section className="settings-danger-zone">
+                        <div>
+                            <span><TriangleAlert size={20} /></span>
+                            <div>
+                                <h2>{lang === 'en' ? 'Wipe all data for this account' : '清空当前账号全部数据'}</h2>
+                                <p>{lang === 'en' ? 'This permanently deletes characters, chats, memories, uploads, and generated files. Type DELETE ALL before continuing.' : '这会永久删除角色、聊天、记忆、上传和生成文件。继续前必须输入 DELETE ALL。'}</p>
+                            </div>
+                        </div>
+                        <button type="button" onClick={() => setWipeModalOpen(true)}>{lang === 'en' ? 'Wipe all data' : '清空全部数据'}</button>
+                    </section>
                 </section>
+                        </div>
+                    </main>
+
+                    <aside className="settings-guided-context">
+                        <div className="settings-context-heading">
+                            <span className="settings-guided-kicker">LIVE PREVIEW</span>
+                            <h2>{activePreviewContact?.name || (lang === 'en' ? 'No character selected' : '未选择角色')}</h2>
+                        </div>
+                        {activePreviewContact ? (
+                            <>
+                                <section className="settings-context-preview">
+                                    <div className="settings-context-portrait">
+                                        <AvatarWithFrame
+                                            size={86}
+                                            frame={activePreviewContact.avatar_frame}
+                                            src={resolveAvatarUrl(activePreviewContact.avatar, apiUrl, activePreviewContact.name || activePreviewContact.id || 'User')}
+                                            fallbackSrc={defaultAvatarUrl(activePreviewContact.name || activePreviewContact.id || 'User')}
+                                            alt={activePreviewContact.name}
+                                        />
+                                    </div>
+                                    <div>
+                                        <h3>{activePreviewContact.name}</h3>
+                                        <span className={`settings-character-status ${activeReadiness?.ready ? 'online' : 'offline'}`}><i />{activeReadiness?.ready ? (lang === 'en' ? 'Ready' : '可用') : (lang === 'en' ? 'Needs setup' : '待处理')}</span>
+                                        <p>{activePreviewDescription || (lang === 'en' ? 'No persona description yet.' : '暂未填写角色描述。')}</p>
+                                    </div>
+                                </section>
+                                <section className="settings-context-panel">
+                                    <h3>{lang === 'en' ? 'Readiness check' : '就绪检查'}</h3>
+                                    <div className="settings-context-checks">
+                                        {[
+                                            [activeReadiness?.personaReady, lang === 'en' ? 'Persona complete' : '人设完整'],
+                                            [activeReadiness?.mainModelReady, `${lang === 'en' ? 'Main model' : '主模型'} ${activePreviewContact.model_name || ''}`],
+                                            [activeReadiness?.memoryModelReady, `${lang === 'en' ? 'Memory model' : '记忆模型'} ${activePreviewContact.memory_model_name || ''}`],
+                                            [!activeReadiness?.ttsEnabled || activeReadiness?.ttsConfigured, activeReadiness?.ttsEnabled ? `${lang === 'en' ? 'Voice configured' : '声音已配置'} ${activePreviewTtsProviderLabel}` : (lang === 'en' ? 'Voice optional' : '声音未启用')],
+                                            [!activeReadiness?.ttsEnabled || activeReadiness?.ttsPreviewVerified, lang === 'en' ? 'Voice preview in this session' : '本会话声音试听']
+                                        ].map(([done, label]) => (
+                                            <p key={label} className={done ? '' : 'warning'}>
+                                                {done ? <CircleCheck size={15} /> : <TriangleAlert size={15} />}
+                                                <span>{label}</span>
+                                            </p>
+                                        ))}
+                                    </div>
+                                </section>
+                                <section className="settings-context-panel">
+                                    <h3>{lang === 'en' ? 'What changes affect' : '更改将影响的内容'}</h3>
+                                    {controlHasContextLimitChange && (
+                                        <article>
+                                            <span><FileText size={16} /></span>
+                                            <div><strong>{lang === 'en' ? 'Context window changed' : '上下文窗口已改动'}</strong><p>{lang === 'en' ? 'Saving clears summary cache and dialogue digest for this character.' : '保存后会清理该角色的摘要缓存和对话 digest。'}</p></div>
+                                        </article>
+                                    )}
+                                    {controlHasModelChange && (
+                                        <article>
+                                            <span><MessageSquare size={16} /></span>
+                                            <div><strong>{lang === 'en' ? 'Model credentials changed' : '模型连接已改动'}</strong><p>{lang === 'en' ? 'Blank keys keep saved credentials; clear actions remove them explicitly.' : '空白 Key 会保留旧凭证；只有清除操作会显式删除。'}</p></div>
+                                        </article>
+                                    )}
+                                    {controlHasVoiceChange && (
+                                        <article>
+                                            <span><AudioWaveform size={16} /></span>
+                                            <div><strong>{lang === 'en' ? 'Voice config changed' : '声音配置已改动'}</strong><p>{lang === 'en' ? 'Use preview to verify the Blob response before relying on TTS in chat.' : '建议先试听确认 Blob 音频可用，再在聊天里使用 TTS。'}</p></div>
+                                        </article>
+                                    )}
+                                    <article>
+                                        <span><RefreshCw size={16} /></span>
+                                        <div><strong>{lang === 'en' ? 'Saving character settings' : '保存角色设置'}</strong><p>{lang === 'en' ? 'The proactive timer is stopped and rescheduled, but no AI reply is triggered immediately.' : '会停止并重排主动消息计时器，但不会立即触发 AI 回复。'}</p></div>
+                                    </article>
+                                </section>
+                                <section className="settings-context-panel settings-diagnostics-panel">
+                                    <div className="settings-diagnostics-head">
+                                        <h3>{lang === 'en' ? 'Service diagnostics' : '服务诊断'}</h3>
+                                        <button type="button" onClick={loadServiceDiagnostics} disabled={serviceDiagnosticsLoading}>
+                                            <RefreshCw size={14} />{serviceDiagnosticsLoading ? (lang === 'en' ? 'Checking' : '检查中') : (lang === 'en' ? 'Refresh' : '刷新')}
+                                        </button>
+                                    </div>
+                                    {serviceDiagnosticsError && <p className="settings-diagnostics-error">{serviceDiagnosticsError}</p>}
+                                    <div className="settings-diagnostics-grid">
+                                        <article>
+                                            <span><Database size={16} /></span>
+                                            <div>
+                                                <strong>{lang === 'en' ? 'Embedding' : 'Embedding'}</strong>
+                                                <p>{serviceDiagnostics.embedding?.embedding?.extractorState || (lang === 'en' ? 'Unknown' : '未知')}</p>
+                                                <small>{lang === 'en' ? 'Active' : '活跃'} {serviceDiagnostics.embedding?.embedding?.activeCount ?? '-'} · cache {serviceDiagnostics.embedding?.embedding?.cacheSize ?? '-'}</small>
+                                            </div>
+                                        </article>
+                                        <article>
+                                            <span><Activity size={16} /></span>
+                                            <div>
+                                                <strong>{lang === 'en' ? 'Background queue' : '后台队列'}</strong>
+                                                <p>{lang === 'en' ? 'Pending' : '待执行'} {serviceDiagnostics.queue?.stats?.pendingTasks ?? '-'}</p>
+                                                <small>{lang === 'en' ? 'Workers' : 'Worker'} {serviceDiagnostics.queue?.stats?.activeWorkers ?? '-'} / {serviceDiagnostics.queue?.stats?.globalConcurrency ?? '-'}</small>
+                                            </div>
+                                        </article>
+                                        <article>
+                                            <span><Cloud size={16} /></span>
+                                            <div>
+                                                <strong>{lang === 'en' ? 'Character cache' : '角色缓存'}</strong>
+                                                <p>{lang === 'en' ? 'LLM entries' : 'LLM 条目'} {serviceDiagnostics.cache?.stats?.entries_count ?? '-'}</p>
+                                                <small>{lang === 'en' ? 'Hits' : '命中'} {serviceDiagnostics.cache?.stats?.hit_count ?? '-'} · digest {serviceDiagnostics.cache?.stats?.digest_entries_count ?? '-'}</small>
+                                            </div>
+                                        </article>
+                                    </div>
+                                </section>
+                                <div className="settings-context-actions">
+                                    <button type="button" onClick={() => setActiveSettingsScreen('characters')}><UsersRound size={15} />{lang === 'en' ? 'Characters' : '查看角色'}</button>
+                                    <button type="button" className="primary" onClick={() => {
+                                        setActiveSettingsScreen('characters');
+                                        openCharacterEditor(activePreviewContact);
+                                    }}><Edit3 size={15} />{lang === 'en' ? 'Edit' : '编辑'}</button>
+                                </div>
+                            </>
+                        ) : (
+                            <div className="settings-guided-empty">{lang === 'en' ? 'Create or select a character to see setup context.' : '创建或选择角色后，这里会显示配置上下文。'}</div>
+                        )}
+                    </aside>
+                </div>
             </div>
 
-            {/* Character Edit Modal */}
-            {editingContact && (
+            {wipeModalOpen && (
+                <div className="settings-wipe-modal">
+                    <div>
+                        <span><TriangleAlert size={24} /></span>
+                        <h2>{lang === 'en' ? 'Confirm full wipe?' : '确认清空全部数据？'}</h2>
+                        <p>{lang === 'en' ? 'This deletes characters, private chats, group chats, memories, uploads, and generated files. Type DELETE ALL to continue.' : '这会删除角色、私聊、群聊、记忆、上传和生成文件。请输入 DELETE ALL 继续。'}</p>
+                        <input
+                            value={wipeConfirmText}
+                            onChange={event => setWipeConfirmText(event.target.value)}
+                            placeholder="DELETE ALL"
+                        />
+                        <section>
+                            <button type="button" onClick={() => { setWipeModalOpen(false); setWipeConfirmText(''); }}>{lang === 'en' ? 'Cancel' : '取消'}</button>
+                            <button
+                                type="button"
+                                className="danger"
+                                disabled={wipeConfirmText !== 'DELETE ALL'}
+                                onClick={() => {
+                                    setWipeModalOpen(false);
+                                    setWipeConfirmText('');
+                                    handleSystemWipe(true);
+                                }}
+                            >
+                                {lang === 'en' ? 'Wipe permanently' : '永久清空'}
+                            </button>
+                        </section>
+                    </div>
+                </div>
+            )}
+
+            {/* Legacy character modal is kept unreachable while the control-center workbench owns editing. */}
+            {activeSettingsScreen === 'legacy-character-modal' && editingContact && (
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
                     <div style={{ backgroundColor: '#fff', padding: '20px', borderRadius: '8px', width: '90%', maxWidth: '500px', display: 'flex', flexDirection: 'column', gap: '15px', maxHeight: '90vh', overflowY: 'auto' }}>
                         <h3 style={{ margin: 0 }}>Edit Character Setting: {editingContact.name}</h3>
@@ -1849,6 +3451,7 @@ function SettingsPanel({
                                         audio.onended = () => URL.revokeObjectURL(objectUrl);
                                         audio.onerror = () => URL.revokeObjectURL(objectUrl);
                                         await audio.play();
+                                        setTtsPreviewVerifiedIds(prev => new Set(prev).add(editingContact.id));
                                     } catch (e) {
                                         alert((lang === 'en' ? 'Preview failed: ' : '试听失败：') + (e.message || e));
                                     }
