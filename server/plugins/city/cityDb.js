@@ -526,6 +526,7 @@ module.exports = function initCityDb(db) {
         'GIVE_ITEM',
         'MAYOR',
         'EVENT',
+        'HOSPITAL',
         'QUEST',
         'ANNOUNCE',
         'BUY',

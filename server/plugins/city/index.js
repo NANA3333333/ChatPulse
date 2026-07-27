@@ -1359,6 +1359,100 @@ ${districtSpecificRule ? districtSpecificRule + '\n' : ''}严格返回 JSON：
         return questService.buildQuestResolutionNarrations(char, quest, district, db, outcome);
     }
 
+    async function buildEmergencyHospitalNarrations(char, hospital, db, details = {}) {
+        if (!(char?.api_endpoint && char?.api_key && char?.model_name)) {
+            throw createCityError('急救送医文案生成缺少模型 URL/Key/模型名，请补全后重试。', 400, true);
+        }
+
+        const state = normalizeSurvivalState(char);
+        const locationLabel = String(details.locationLabel || '商业街').trim();
+        const requestedDistrict = details.requestedDistrict || null;
+        const actionCode = String(details.actionCode || hospital?.id || 'hospital').trim().toUpperCase();
+        const reason = String(details.reason || '身体透支到撑不住').trim();
+        const walletAfter = Number(details.walletAfter || 0);
+        const walletText = walletAfter < 0
+            ? `急救费 ${EMERGENCY_HOSPITAL_FEE} 金币已经记账，醒来时账面变成 ${walletAfter} 金币负债。`
+            : `急救费 ${EMERGENCY_HOSPITAL_FEE} 金币已经扣除，醒来时钱包剩下 ${walletAfter} 金币。`;
+        const requestedLine = requestedDistrict?.name
+            ? `\n原本还想去：${requestedDistrict.emoji || ''}${requestedDistrict.name}。`
+            : '';
+        const recentAntiRepeat = buildRecentNarrationAntiRepeatBlock(db, char, hospital || { id: 'hospital', type: 'medical' });
+        const privateChatAntiRepeat = buildRecentPrivateChatAntiRepeatBlock(db, char);
+        const prompt = `你是 ${char.name}，这是一轮真实发生的商业街事件。
+
+已经确定的事实：
+- 你在 ${locationLabel} 因为「${reason}」失去意识。${requestedLine}
+- 你被附近的人、工作人员或急救人员送到 ${hospital?.emoji || '🏥'}${hospital?.name || '医院'}。
+- 你醒来时面对陌生的医院环境，以及一张急救账单。
+- ${walletText}
+- 体力从 ${Number(details.beforeCalories || 0)}/4000 被急救稳定到 ${Number(details.nextCalories || 0)}/4000，接下来需要在医院观察约 ${Number(details.medicalStayMinutes || 60)} 分钟。
+- 当前身体状态：精力 ${state.energy}/100，睡眠债 ${state.sleep_debt}/100，心情 ${state.mood}/100，压力 ${state.stress}/100，健康 ${state.health}/100。
+${recentAntiRepeat}${privateChatAntiRepeat}
+
+要求：
+- log 只写这次昏倒、被送医、醒来面对陌生环境和账单的具体经过，不要写成系统总结。
+- 不要使用“因为饥饿晕倒了”“饿晕了”“眼前一黑倒了下去”这类固定句式。
+- 具体细节由你按角色性格、身体状态和现场处境自由决定；可以写环境、动作、反应、账单压力或醒来后的迟钝感。
+- chat / diary 只有自然需要时才写，可以留空；不要默认求助，不要套固定求救话术。
+- 不要照抄上面的事实句，把事实转成角色自己的事件记录。
+- 返回必须是合法 JSON 对象，包含 action、log、chat、diary 四个字段；action 固定为 [${actionCode}]。不要返回 JSON 之外的任何内容。`;
+
+        const messages = [
+            { role: 'system', content: '你是角色自己的现实行动记录器。只返回合法 JSON 对象，不要输出任何额外解释、markdown、前言或后记。' },
+            { role: 'user', content: prompt }
+        ];
+        recordCityLlmDebug(db, char, 'input', 'city_emergency_hospital_narration', messages, {
+            model: char.model_name,
+            reason,
+            actionCode,
+            location: char.location || ''
+        });
+        let reply = '';
+        try {
+            reply = await callLLM({
+                endpoint: char.api_endpoint,
+                key: char.api_key,
+                model: char.model_name,
+                messages,
+                maxTokens: 2200,
+                temperature: 0.9,
+                presencePenalty: 0.2,
+                frequencyPenalty: 0.35,
+                debugAttempt: buildCityAttemptRecorder(db, char, 'city_emergency_hospital_narration', {
+                    reason,
+                    actionCode,
+                    location: char.location || ''
+                })
+            });
+        } catch (err) {
+            throw createCityError(`急救送医文案生成请求失败，请重试：${err.message}`, 502, true);
+        }
+        recordCityLlmDebug(db, char, 'output', 'city_emergency_hospital_narration', reply, {
+            model: char.model_name,
+            reason,
+            actionCode,
+            location: char.location || ''
+        });
+
+        let parsed = null;
+        try {
+            parsed = tryParseCityActionReply(reply);
+        } catch (err) {
+            throw createCityError(`急救送医返回的 JSON 无法解析，请重试：${err.message || 'parse_failed'}`, 502, true);
+        }
+        if (!parsed || String(parsed.action || '').trim().toUpperCase() !== `[${actionCode}]`) {
+            throw createCityError('急救送医返回缺少有效 action。', 502, true);
+        }
+        if (!String(parsed.log || '').trim()) {
+            throw createCityError('急救送医返回缺少可用 log。', 502, true);
+        }
+        return {
+            log: String(parsed.log || '').trim(),
+            chat: String(parsed.chat || '').trim(),
+            diary: String(parsed.diary || '').trim()
+        };
+    }
+
     async function buildBusyPenaltyNarration(char, kind, amount, districtName, db) {
         const penaltyAmount = Number(amount || 0);
         if (!Number.isFinite(penaltyAmount) || penaltyAmount <= 0) {
@@ -4859,7 +4953,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         return `${parts.join('，')}，身体已经撑不住`;
     }
 
-    async function settleEmergencyHospitalTransfer(char, db, userId, currentCals, reason, config, requestedDistrict = null) {
+    async function settleEmergencyHospitalTransfer(char, db, userId, currentCals, reason, config, requestedDistrict = null, options = {}) {
         const hospital = db.city.getDistrict('hospital')
             || db.city.getEnabledDistricts().find(d => d.type === 'medical')
             || { id: 'hospital', name: '医院', emoji: '🏥', duration_ticks: 1, cal_reward: 1500 };
@@ -4896,14 +4990,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         const locationLabel = locationDistrict
             ? `${locationDistrict.emoji || ''}${locationDistrict.name || locationDistrict.id || ''}`
             : (char.location || '商业街');
-        const targetText = requestedDistrict?.name
-            ? `原本还想去${requestedDistrict.emoji || ''}${requestedDistrict.name}，`
-            : '';
-        const debtText = walletAfter < 0
-            ? `余额不够，账上显示 ${walletAfter} 金币的负债。`
-            : `钱包剩下 ${walletAfter} 金币。`;
-        const log = `${char.name}在${locationLabel}${targetText}${reason}，眼前一黑倒了下去。路人和工作人员把人送到${hospital.emoji || '🏥'}${hospital.name || '医院'}，急救处先按急救费扣了 ${EMERGENCY_HOSPITAL_FEE} 金币；${debtText}`;
-        const hospitalActionType = String(hospital.id || 'hospital').toUpperCase();
+        const hospitalActionType = String(options.actionType || hospital.id || 'hospital').toUpperCase();
 
         db.updateCharacter(char.id, patch);
         logEmotionTransitionToState(
@@ -4913,15 +5000,28 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             'city_emergency_hospital',
             `角色因体力或疲劳透支昏倒，被送往医院并产生 ${EMERGENCY_HOSPITAL_FEE} 金币急救费用。`
         );
+        const richNarrations = await buildEmergencyHospitalNarrations(char, hospital, db, {
+            actionCode: hospitalActionType,
+            reason,
+            locationLabel,
+            requestedDistrict,
+            beforeCalories,
+            nextCalories,
+            walletBefore,
+            walletAfter,
+            medicalStayMinutes
+        });
+        const log = String(richNarrations.log || '').trim();
         db.city.logAction(char.id, hospitalActionType, log, nextCalories - beforeCalories, -EMERGENCY_HOSPITAL_FEE, hospital.id || 'hospital');
         broadcastCityEvent(userId, char.id, hospitalActionType, log);
+        broadcastCityToChat(userId, char, log, hospitalActionType, richNarrations);
         const wsClients = getWsClients(userId);
         const engine = getEngine(userId);
         if (engine && typeof engine.broadcastWalletSync === 'function') {
             engine.broadcastWalletSync(wsClients, char.id);
         }
         console.log(`[City] ${char.name} 🚑 急救送医，费用 ${EMERGENCY_HOSPITAL_FEE}，钱包 ${walletBefore} -> ${walletAfter}`);
-        return { log, patch };
+        return { log, patch, richNarrations };
     }
 
     async function simulateCharacter(char, db, userId, districts, config, metabolismRate) {
@@ -4947,25 +5047,24 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             Object.assign(char, releaseMedicalPatch);
         }
 
-        const emergencyReason = getEmergencyHospitalReason(char, currentCals);
+        const emergencyReason = currentCals === 0
+            ? '体力归零、极度饥饿到失去意识'
+            : getEmergencyHospitalReason(char, currentCals);
         if (emergencyReason) {
-            await settleEmergencyHospitalTransfer(char, db, userId, currentCals, emergencyReason, config);
-            return;
-        }
-
-        if (currentCals === 0) {
-            const comaState = applyStateEffectsToCharacter(char, { energy: -15, stress: 10, health: -8, mood: -10 });
-            const starvePatch = { calories: 0, city_status: 'coma', ...comaState };
-            db.updateCharacter(char.id, starvePatch);
-            logEmotionTransitionToState(
-                db,
-                char,
-                { ...char, ...starvePatch },
-                'city_starvation',
-                '角色在商业街中因极度饥饿接近崩溃，情绪和生理状态明显恶化。'
-            );
-            db.city.logAction(char.id, 'STARVE', `${char.name} 因为饥饿晕倒了 😵`, -metabolismRate, 0);
-            broadcastCityEvent(userId, char.id, 'STARVE', `${char.name} 饿晕了！`);
+            try {
+                await settleEmergencyHospitalTransfer(char, db, userId, currentCals, emergencyReason, config, null, {
+                    actionType: currentCals === 0 ? 'STARVE' : 'HOSPITAL'
+                });
+            } catch (e) {
+                console.error(`[City] ${char.name} 急救送医文案生成失败: ${e.message}`);
+                const hospitalDistrict = db.city.getDistrict('hospital')
+                    || districts.find(d => d.type === 'medical')
+                    || null;
+                logActionParseError(db, userId, char, e, {
+                    district: hospitalDistrict,
+                    locationLabel: hospitalDistrict?.name || '医院'
+                });
+            }
             return;
         }
 

@@ -228,6 +228,8 @@ function getActionEmoji(type) {
             return '🎁';
         case 'ORGANIZE_BAG':
             return '🎒';
+        case 'HOSPITAL':
+            return '🏥';
         case 'SOCIAL':
             return '💬';
         case 'QUEST':
