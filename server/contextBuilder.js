@@ -986,6 +986,67 @@ function buildAvailableCityDistrictSignalGuide(db) {
     return ['[可用商业街地点信号]', '如果你要触发 CITY_ACTION / CITY_INTENT，优先从下面这些真实地点里选，不要自己编地点名。', ...lines].join('\n');
 }
 
+function ensureContextCityDb(db) {
+    if (!db || db.city) return db?.city || null;
+    try {
+        const initCityDb = require('./plugins/city/cityDb');
+        db.city = initCityDb(typeof db.getRawDb === 'function' ? db.getRawDb() : db);
+    } catch (e) {
+        return null;
+    }
+    return db.city || null;
+}
+
+function getInventoryContextSourceParts(db, character) {
+    const cityDb = ensureContextCityDb(db);
+    const limit = Number(cityDb?.getInventorySlotLimit?.() || 10);
+    const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? limit : 10;
+    let inventory = [];
+    try {
+        inventory = cityDb?.getInventory?.(character.id) || [];
+    } catch (e) {
+        inventory = [];
+    }
+    return {
+        limit: safeLimit,
+        slots: inventory.length,
+        items: inventory.slice(0, safeLimit).map(item => {
+            const quantity = Math.max(0, Number(item.quantity || 0));
+            const giftedQty = Math.min(quantity, Math.max(0, Number(item.user_gifted_quantity || item.gifted_quantity || 0)));
+            return {
+                item_id: String(item.item_id || item.id || '').trim(),
+                name: String(item.name || '').trim(),
+                emoji: String(item.emoji || '').trim(),
+                category: String(item.category || '').trim(),
+                quantity,
+                user_gifted_quantity: giftedQty,
+                cal_restore: Number(item.cal_restore || 0)
+            };
+        })
+    };
+}
+
+function formatInventoryContextItem(item = {}) {
+    const quantity = Math.max(0, Number(item.quantity || 0));
+    const giftedQty = Math.min(quantity, Math.max(0, Number(item.user_gifted_quantity || 0)));
+    const giftText = giftedQty > 0 ? `，用户送的x${giftedQty}` : '';
+    const calText = Number(item.cal_restore || 0) > 0 ? `，+${Number(item.cal_restore)}体力` : '';
+    return `${item.emoji || ''}${item.name || item.item_id || '物品'}x${quantity}${giftText}${calText}`;
+}
+
+function buildInventoryContextBlock(snapshot = {}) {
+    const limit = Number(snapshot.limit || 10);
+    const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? limit : 10;
+    const slots = Math.max(0, Number(snapshot.slots || 0));
+    const items = Array.isArray(snapshot.items) ? snapshot.items : [];
+    const itemText = items.length ? items.map(formatInventoryContextItem).join('、') : '空';
+    const overflowText = slots > safeLimit ? `\n- 只展示前 ${safeLimit} 种，剩余 ${slots - safeLimit} 种不展开。` : '';
+    const fullText = slots >= safeLimit
+        ? '\n- 背包已满：如果你想买入新的物品种类，必须把一轮商业街活动用于整理背包，丢掉不需要的东西；不要同一轮既整理又购买。'
+        : '';
+    return `[角色当前背包（你自己）]: ${slots}/${safeLimit} 种物品；同一种物品合并为一格。\n- 背包物品: ${itemText}${overflowText}\n- 用户送的物品会标注“用户送的”；它们对关系更敏感，丢弃前要更慎重。\n- 你要控制背包数量，不要无限囤货。${fullText}\n`;
+}
+
 async function buildUniversalContext(context, character, recentInput = '', isGroupContext = false, activeTargets = []) {
     const {
         getUserDb,
@@ -1039,6 +1100,7 @@ async function buildUniversalContext(context, character, recentInput = '', isGro
     const emotionGuidance = getEmotionFeelingGuidance(character);
     const physicalGuidance = getPhysicalFeelingGuidance(character);
     const housingSourceParts = getHousingContextSourceParts(db, character);
+    const inventoryContext = getInventoryContextSourceParts(db, character);
     let jealousyActive = false;
     try {
         const jeal = db.getJealousyState(character.id);
@@ -1050,7 +1112,7 @@ async function buildUniversalContext(context, character, recentInput = '', isGro
         character.id,
         isGroupContext ? 'runtime_state_group' : 'runtime_state_private',
         {
-            template_version: 4,
+            template_version: 5,
             isGroupContext: !!isGroupContext,
             wallet: character.wallet ?? 0,
             calories: character.calories,
@@ -1081,6 +1143,7 @@ async function buildUniversalContext(context, character, recentInput = '', isGro
             city_post_ignore_reaction: character.city_post_ignore_reaction || 0,
             diary_password: character.diary_password || '',
             housing_context: housingSourceParts,
+            inventory_context: inventoryContext,
             relationship_anchors: getRelationshipAnchorSourceParts(db, character, activeTargets)
         },
         () => {
@@ -1126,6 +1189,7 @@ async function buildUniversalContext(context, character, recentInput = '', isGro
                 block += `[角色胃负担（你自己）]: ${character.stomach_load}/100\n`;
                 block += compactLine('胃负担影响', getStomachLoadHint(character.stomach_load));
             }
+            block += buildInventoryContextBlock(inventoryContext);
             block += buildHousingContextBlock(db, character);
             block += buildCompactEmotionImpact(emotionGuidance);
             if (jealousyActive) {

@@ -223,6 +223,8 @@ function getActionEmoji(type) {
             return '🗓️';
         case 'GIVE_ITEM':
             return '🎁';
+        case 'ORGANIZE_BAG':
+            return '🎒';
         case 'SOCIAL':
             return '💬';
         case 'QUEST':
@@ -403,7 +405,7 @@ function getCategoryForLog(log) {
         return 'exception';
     }
     if (type === 'SOCIAL') return 'social';
-    if (['BUY', 'EAT', 'GIFT', 'GIVE_ITEM', 'FED', 'BROKE'].includes(type)) return 'trade';
+    if (['BUY', 'EAT', 'GIFT', 'GIVE_ITEM', 'FED', 'BROKE', 'ORGANIZE_BAG'].includes(type)) return 'trade';
     return 'action';
 }
 
@@ -432,6 +434,7 @@ function getLogActionTitle(log, content, tx) {
     if (type === 'SOCIAL') return tx('Social encounter', '社交偶遇');
     if (type === 'BUY') return tx('Bought an item', '购买物品');
     if (type === 'EAT') return tx('Had a meal', '吃饭恢复');
+    if (type === 'ORGANIZE_BAG') return tx('Organized backpack', '整理背包');
     if (type === 'QUEST') return tx('Quest progress', '任务推进');
     return type || tx('City activity', '城市行动');
 }
@@ -740,14 +743,14 @@ function CityBrief({ currentWeather, weatherVisual, visibleAnnouncements, events
                     <div className="detail-metrics">
                         <div><span>{tx('Coins', '金币')}</span><strong>{selected.wallet.toFixed(0)}</strong></div>
                         <div><span>{tx('Energy', '精力')}</span><strong>{selected.energy}</strong></div>
-                        <div><span>{tx('Inventory', '背包')}</span><strong>{inventory.length}/15</strong></div>
+                        <div><span>{tx('Inventory', '背包')}</span><strong>{inventory.length}/10</strong></div>
                     </div>
                     <div className="progress"><span style={{ width: `${selected.energy}%` }} /></div>
                     <div className="inventory-preview">
                         <span>{tx('Inventory preview', '背包预览')}</span>
                         <div>
                             {inventory.slice(0, 6).length > 0 ? inventory.slice(0, 6).map((item, index) => (
-                                <i key={`${selected.id}-item-${item.item_id || item.id || index}`} title={item.name || item.item_name || tx('Item', '物品')}>
+                                <i key={`${selected.id}-item-${item.item_id || item.id || index}`} title={`${item.name || item.item_name || tx('Item', '物品')}${Number(item.user_gifted_quantity || item.gifted_quantity || 0) > 0 ? ` · ${tx('Gifted by user', '用户送的')}` : ''}`}>
                                     {item.emoji || item.name?.slice(0, 1) || item.item_name?.slice(0, 1) || <Package size={14} />}
                                 </i>
                             )) : <i>--</i>}

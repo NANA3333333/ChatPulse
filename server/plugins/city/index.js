@@ -33,6 +33,13 @@ const CITY_ENABLE_SOCIAL_COLLISIONS = process.env.CP_CITY_SOCIAL !== '0';
 const MEDICAL_RECOVERY_INTERVAL_MINUTES = 5;
 const MEDICAL_RECOVERY_INTERVAL_MS = MEDICAL_RECOVERY_INTERVAL_MINUTES * 60 * 1000;
 const MEDICAL_STAY_MINUTES_PER_TICK = 60;
+const EMERGENCY_HOSPITAL_FEE = 50;
+const EMERGENCY_HUNGER_CALORIES = 300;
+const EMERGENCY_EXHAUSTION_ENERGY = 20;
+const EMERGENCY_SLEEP_DEBT = 75;
+const EMERGENCY_CRITICAL_ENERGY = 10;
+const EMERGENCY_CRITICAL_SLEEP_DEBT = 90;
+const EMERGENCY_STABILIZE_CALORIES = 300;
 const BEHAVIOR_CONTEXT_DEFAULT_Q = 8;
 const BEHAVIOR_CONTEXT_DEFAULT_P = 12;
 const BEHAVIOR_CONTEXT_MIN_Q = 1;
@@ -708,6 +715,28 @@ ${candidates.map(d => `- ${d.id}: ${d.emoji} ${d.name} (${d.type})`).join('\n')}
         }).join('、');
     }
 
+    function formatInventoryItemForPrompt(item = {}) {
+        const quantity = Math.max(0, Number(item.quantity || 0));
+        const giftedQty = Math.min(quantity, Math.max(0, Number(item.user_gifted_quantity || item.gifted_quantity || 0)));
+        const giftText = giftedQty > 0 ? `，用户送的x${giftedQty}` : '';
+        const calText = Number(item.cal_restore || 0) > 0 ? `，+${Number(item.cal_restore)}体力` : '';
+        return `${item.emoji || ''}${item.name || item.item_id || item.id || '物品'}x${quantity}${giftText}${calText}`;
+    }
+
+    function buildInventoryPromptBlock(db, inventory = []) {
+        const limit = Number(db?.city?.getInventorySlotLimit?.() || 10);
+        const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? limit : 10;
+        const slots = Array.isArray(inventory) ? inventory.length : 0;
+        const lines = Array.isArray(inventory)
+            ? inventory.slice(0, safeLimit).map(formatInventoryItemForPrompt).filter(Boolean)
+            : [];
+        const overflowText = slots > safeLimit ? `\n- 只展示前 ${safeLimit} 种，剩余 ${slots - safeLimit} 种不展开。` : '';
+        const fullText = slots >= safeLimit
+            ? '\n- 背包已满：如果想买入新的物品种类，必须把这一轮商业街活动用于整理背包，丢掉不需要的东西；不能同一轮既整理又购买。'
+            : '';
+        return `[当前背包]\n- 容量=${slots}/${safeLimit} 种物品；同一种物品的数量合并为一格。\n- 物品=${lines.length ? lines.join('、') : '空'}${overflowText}\n- 用户送的物品会标注“用户送的”，丢弃前要更慎重。\n- 你要控制背包数量，不要无限囤货。${fullText}`;
+    }
+
     function pickSettledShopItemFromNarrations(shopItems = [], richNarrations = null) {
         if (!Array.isArray(shopItems) || shopItems.length === 0) return null;
         const haystack = [
@@ -821,7 +850,8 @@ ${candidates.map(d => `- ${d.id}: ${d.emoji} ${d.name} (${d.type})`).join('\n')}
         const currentLocation = char.location ? db.city.getDistrict(char.location) : null;
         const currentLocationLabel = currentLocation ? `${currentLocation.emoji}${currentLocation.name}` : (char.location || '未知地点');
         const walletBefore = Number(char.wallet || 0);
-        const walletAfter = Math.max(0, walletBefore + Number(outcome.moneyDelta || 0));
+        const rawWalletAfter = +(walletBefore + Number(outcome.moneyDelta || 0)).toFixed(2);
+        const walletAfter = walletBefore < 0 ? rawWalletAfter : Math.max(0, rawWalletAfter);
         const styleText = styleHint && typeof styleHint === 'object'
             ? [styleHint.log, styleHint.diary, styleHint.chat].map(v => String(v || '').trim()).filter(Boolean)[0] || ''
             : '';
@@ -1724,12 +1754,19 @@ ${recentSameKindBlock}
             }
         }
 
+        const inventoryLimit = Number(promptDb?.city?.getInventorySlotLimit?.() || 10);
+        const safeInventoryLimit = Number.isSafeInteger(inventoryLimit) && inventoryLimit > 0 ? inventoryLimit : 10;
+        const inventorySlots = Array.isArray(inventory) ? inventory.length : 0;
+        const isInventoryFull = inventorySlots >= safeInventoryLimit;
+        const inventoryBlock = buildInventoryPromptBlock(promptDb, inventory);
         const foodItems = inventory.filter(i => i.cal_restore > 0);
         const optionsBlock = getCachedCityPromptBlock(
             context.getUserDb(char.user_id || 'default'),
             char.id,
             'city_survival_options_v1',
             {
+                inventory_limit: safeInventoryLimit,
+                inventory_slots: inventorySlots,
                 districts: districts.map(d => ({
                     id: d.id,
                     name: d.name,
@@ -1764,6 +1801,9 @@ ${recentSameKindBlock}
                     const foodList = foodItems.map(f => `${f.emoji}${f.name}x${f.quantity}(+${f.cal_restore})`).join(', ');
                     options += `[EAT_ITEM] 🍜 吃背包食物 | ${foodList}\n`;
                 }
+                if (isInventoryFull) {
+                    options += `[ORGANIZE_BAG] 🎒 整理背包 | 背包已满时先整理并丢掉不要的东西；这一轮不买新物品，下一轮再购物\n`;
+                }
                 return options.trim();
             }
         );
@@ -1786,16 +1826,10 @@ ${recentSameKindBlock}
 
         if (wallet <= 10) stateFlags.push('钱包状态=极度拮据');
 
-        const forcedRestReason = String(options?.forcedRestReason || '').trim();
         let taskInstruction = '【自由探索】在别饿晕、别破产的前提下，按性格/身体/钱包/最近经历决定下一步去哪。';
         if (targetDistrict) {
-            taskInstruction = forcedRestReason
-                ? `【强制休整】${forcedRestReason} 你已经决定先去 [${targetDistrict.id.toUpperCase()}] ${targetDistrict.name} 休息/补觉。这一轮不要继续推进公告任务、日程或高消耗行动；身体状态已经高于任务优先级。当前位置标签也必须跟随这次真实去到的地点。`
-                : `【既定意愿】你已经决定要去 [${targetDistrict.id.toUpperCase()}] ${targetDistrict.name}。身体状态、情绪和钱包只影响你到了之后的表现、效率和后果，不改变目的地本身。当前位置标签也必须跟随这次真实去到的地点。`;
+            taskInstruction = `【既定意愿】你已经决定要去 [${targetDistrict.id.toUpperCase()}] ${targetDistrict.name}。身体状态、情绪和钱包只影响你到了之后的表现、效率和后果，不改变目的地本身。当前位置标签也必须跟随这次真实去到的地点。`;
         }
-        const forcedRestQuestRule = forcedRestReason
-            ? '\n- 当前是强制休整轮，优先级高于公告任务/日程；本轮不要带 quest_intent，也不要写继续施工、交付任务或硬撑完成任务。'
-            : '';
         const questOpenBlock = questContext?.openTasks?.length > 0 ? `\n[公告栏悬赏]\n${questContext.openTasks.join('\n')}` : '';
         const personalQuestBlock = questContext?.personalTask || '';
         const promptHistoryDb = promptDb || ensureCityDb(context.getUserDb(char.user_id || 'default'));
@@ -1864,6 +1898,7 @@ ${universalContext?.preamble || ''}
 精力=${state.energy} 睡眠债=${state.sleep_debt} 心情=${state.mood} 压力=${state.stress}
 社交需求=${state.social_need} 健康=${state.health} 饱腹=${state.satiety} 胃负担=${state.stomach_load}
 身体等级=${physicalCondition.label} | 后果=${physicalCondition.summary}${stateFlags.length > 0 ? `\n状态标签=${stateFlags.join(' / ')}` : ''}${eventInfo}
+${inventoryBlock}
 ${housingPromptBlock ? '\n' + housingPromptBlock : ''}
 
 ${taskInstruction}
@@ -1872,7 +1907,7 @@ ${taskInstruction}
 - 如果你想去接某个公告任务，就在输出里额外带上 quest_intent：{"quest_id":任务ID,"stage":"claim"}，并让 action 去往对应地点。
 - 如果你已经在做任务，并且本轮行动地点就是任务目标地点，优先推进任务，必须带 stage="progress"；不要写成普通地点玩法。
 - 如果你准备交付任务、领取赏金，就额外带上 quest_intent：{"quest_id":任务ID,"stage":"report"}。
-- 不要把 quest_intent 当系统说明写进 log，log 仍然必须像普通商业街活动。${forcedRestQuestRule}${questOpenBlock}${personalQuestBlock}
+- 不要把 quest_intent 当系统说明写进 log，log 仍然必须像普通商业街活动。${questOpenBlock}${personalQuestBlock}
 - 如果本轮行动意图是“接下某个公告任务 / 开始执行某个公告任务 / 推进手上已有任务 / 交付任务”，就要在 JSON 里同步带 quest_intent；不要只在自然文案里表达这个意图却漏掉标签。
 - 如果只是看见公告、犹豫、评估要不要接，且没有明确行动，可以不带 quest_intent。
 - 任务推进必须贴合任务内容：采购/配送要写拿货、送达；清理/维修要写动手处理；调查类要写打听、寻找、发现；巡逻/护送要写陪同、盯守、来回查看。
@@ -1975,8 +2010,8 @@ ${districtList}
     function buildSocialPrompt(charA, charB, district, relAB, relBA, inventoryA, inventoryB, universalContextA, universalContextB) {
         const personaA = (charA.persona || charA.system_prompt || '普通人').substring(0, 120);
         const personaB = (charB.persona || charB.system_prompt || '普通人').substring(0, 120);
-        const invAStr = inventoryA.slice(0, 5).map(i => `${i.emoji}${i.name}x${i.quantity}`).join(', ') || '空';
-        const invBStr = inventoryB.slice(0, 5).map(i => `${i.emoji}${i.name}x${i.quantity}`).join(', ') || '空';
+        const invAStr = inventoryA.slice(0, 5).map(formatInventoryItemForPrompt).join(', ') || '空';
+        const invBStr = inventoryB.slice(0, 5).map(formatInventoryItemForPrompt).join(', ') || '空';
         const affinityAB = relAB?.affinity ?? 50;
         const affinityBA = relBA?.affinity ?? 50;
         const impressionAB = relAB?.impression ? `印象: "${relAB.impression}"` : '';
@@ -4649,54 +4684,104 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
 
     // Core simulation
 
-    function getExhaustionRestOverride(char, currentCals, districts, requestedDistrict = null) {
-        if (!Array.isArray(districts) || districts.length === 0) return null;
+    function isEmergencyHighDemandDistrict(district = null) {
+        const districtType = String(district?.type || '').trim();
+        return ['work', 'education', 'gambling', 'leisure', 'wander', 'shopping'].includes(districtType);
+    }
+
+    function getEmergencyHospitalReason(char, currentCals, requestedDistrict = null) {
         const state = normalizeSurvivalState(char);
-        const districtType = String(requestedDistrict?.type || '').trim();
         const calories = Number(currentCals ?? char.calories ?? 2000);
-        const isAlreadyRecovery = ['rest', 'food', 'medical'].includes(districtType);
-        if (calories <= 0 || char.city_status === 'coma') return null;
-        if (calories < 500) return null;
-        if (isAlreadyRecovery) return null;
-
-        const extremeExhaustion = state.energy <= 10
-            || state.sleep_debt >= 90
-            || (state.energy <= 20 && state.sleep_debt >= 75);
-        const heavyDistrict = ['work', 'education', 'gambling', 'leisure', 'wander', 'shopping'].includes(districtType);
-        const tooTiredForRequestedAction = requestedDistrict
-            && heavyDistrict
-            && (state.energy < 20 || state.sleep_debt > 75);
-        const shouldForceRest = requestedDistrict
-            ? (extremeExhaustion || tooTiredForRequestedAction)
-            : (state.energy < 20 || state.sleep_debt > 75);
-
-        if (!shouldForceRest) return null;
-        return districts.find(d => d.type === 'rest')
-            || districts.find(d => d.id === 'home')
-            || null;
-    }
-
-    function buildExhaustionRestReason(char, currentCals, originalDistrict = null) {
-        const state = normalizeSurvivalState(char);
         const parts = [];
-        if (state.energy <= 10) parts.push(`精力=${state.energy}/100`);
-        else if (state.energy < 20) parts.push(`精力偏低=${state.energy}/100`);
-        if (state.sleep_debt >= 90) parts.push(`睡眠债=${state.sleep_debt}/100`);
-        else if (state.sleep_debt > 75) parts.push(`睡眠债偏高=${state.sleep_debt}/100`);
-        if (Number(currentCals ?? char.calories ?? 2000) < 900) parts.push('体力库存偏低');
-        const source = originalDistrict?.name ? `原本想去 ${originalDistrict.name}，但` : '';
-        return `${source}${parts.join('，') || '状态透支'}，继续活动会明显恶化。`;
+        if (calories <= EMERGENCY_HUNGER_CALORIES) {
+            parts.push(`体力只剩 ${Math.max(0, Math.round(calories))}/4000`);
+        }
+        if (state.energy <= EMERGENCY_CRITICAL_ENERGY) {
+            parts.push(`精力跌到 ${state.energy}/100`);
+        } else if (!requestedDistrict && state.energy < EMERGENCY_EXHAUSTION_ENERGY) {
+            parts.push(`精力只剩 ${state.energy}/100`);
+        }
+        if (state.sleep_debt >= EMERGENCY_CRITICAL_SLEEP_DEBT) {
+            parts.push(`睡眠债堆到 ${state.sleep_debt}/100`);
+        } else if (!requestedDistrict && state.sleep_debt > EMERGENCY_SLEEP_DEBT) {
+            parts.push(`睡眠债已经到 ${state.sleep_debt}/100`);
+        }
+
+        if (
+            requestedDistrict &&
+            isEmergencyHighDemandDistrict(requestedDistrict) &&
+            (calories < 500 || state.energy < EMERGENCY_EXHAUSTION_ENERGY || state.sleep_debt > EMERGENCY_SLEEP_DEBT)
+        ) {
+            parts.push(`还想硬撑去${requestedDistrict.name || requestedDistrict.id || '高消耗地点'}`);
+        }
+
+        if (parts.length === 0) return '';
+        return `${parts.join('，')}，身体已经撑不住`;
     }
 
-    function buildForcedRestNarrations(char, originalDistrict, restDistrict, currentCals) {
-        const reason = buildExhaustionRestReason(char, currentCals, originalDistrict);
-        const restName = restDistrict?.name || '能休息的地方';
-        return {
-            action: `[${String(restDistrict?.id || 'home').toUpperCase()}]`,
-            log: `${char.name}${reason}最后还是停了下来，转身去${restName}先补觉。眼皮沉得厉害，脚步也慢，能撑到躺下已经算是把自己从透支边缘拽回来。`,
-            chat: '',
-            diary: '不是不想把事情做完，是身体已经不太听使唤。先睡一会儿，醒了再说。'
+    async function settleEmergencyHospitalTransfer(char, db, userId, currentCals, reason, config, requestedDistrict = null) {
+        const hospital = db.city.getDistrict('hospital')
+            || db.city.getEnabledDistricts().find(d => d.type === 'medical')
+            || { id: 'hospital', name: '医院', emoji: '🏥', duration_ticks: 1, cal_reward: 1500 };
+        const cityNowMs = getCityDate(config).getTime();
+        const beforeCalories = clamp(Math.round(Number(currentCals ?? char.calories ?? 0) || 0), 0, 4000);
+        const nextCalories = clamp(Math.max(beforeCalories, EMERGENCY_STABILIZE_CALORIES), 0, 4000);
+        const walletBefore = Number(char.wallet || 0);
+        const walletAfter = +(walletBefore - EMERGENCY_HOSPITAL_FEE).toFixed(2);
+        const state = normalizeSurvivalState(char);
+        const nextState = {
+            energy: Math.max(state.energy, 5),
+            sleep_debt: state.sleep_debt,
+            mood: clamp(state.mood - 6, 0, 100),
+            stress: clamp(state.stress + 10, 0, 100),
+            social_need: state.social_need,
+            health: clamp(state.health - 2, 0, 100),
+            satiety: state.satiety,
+            stomach_load: state.stomach_load
         };
+        const medicalStayMinutes = getMedicalStayMinutes(hospital);
+        const patch = {
+            calories: nextCalories,
+            city_status: 'medical',
+            location: hospital.id || 'hospital',
+            wallet: walletAfter,
+            city_status_started_at: cityNowMs,
+            city_status_until_at: cityNowMs + medicalStayMinutes * 60 * 1000,
+            city_medical_last_recovery_at: cityNowMs,
+            work_distraction: 0,
+            sleep_disruption: 0,
+            ...nextState
+        };
+        const locationDistrict = char.location ? db.city.getDistrict(char.location) : null;
+        const locationLabel = locationDistrict
+            ? `${locationDistrict.emoji || ''}${locationDistrict.name || locationDistrict.id || ''}`
+            : (char.location || '商业街');
+        const targetText = requestedDistrict?.name
+            ? `原本还想去${requestedDistrict.emoji || ''}${requestedDistrict.name}，`
+            : '';
+        const debtText = walletAfter < 0
+            ? `余额不够，账上显示 ${walletAfter} 金币的负债。`
+            : `钱包剩下 ${walletAfter} 金币。`;
+        const log = `${char.name}在${locationLabel}${targetText}${reason}，眼前一黑倒了下去。路人和工作人员把人送到${hospital.emoji || '🏥'}${hospital.name || '医院'}，急救处先按急救费扣了 ${EMERGENCY_HOSPITAL_FEE} 金币；${debtText}`;
+        const hospitalActionType = String(hospital.id || 'hospital').toUpperCase();
+
+        db.updateCharacter(char.id, patch);
+        logEmotionTransitionToState(
+            db,
+            char,
+            { ...char, ...patch },
+            'city_emergency_hospital',
+            `角色因体力或疲劳透支昏倒，被送往医院并产生 ${EMERGENCY_HOSPITAL_FEE} 金币急救费用。`
+        );
+        db.city.logAction(char.id, hospitalActionType, log, nextCalories - beforeCalories, -EMERGENCY_HOSPITAL_FEE, hospital.id || 'hospital');
+        broadcastCityEvent(userId, char.id, hospitalActionType, log);
+        const wsClients = getWsClients(userId);
+        const engine = getEngine(userId);
+        if (engine && typeof engine.broadcastWalletSync === 'function') {
+            engine.broadcastWalletSync(wsClients, char.id);
+        }
+        console.log(`[City] ${char.name} 🚑 急救送医，费用 ${EMERGENCY_HOSPITAL_FEE}，钱包 ${walletBefore} -> ${walletAfter}`);
+        return { log, patch };
     }
 
     async function simulateCharacter(char, db, userId, districts, config, metabolismRate) {
@@ -4722,39 +4807,10 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             Object.assign(char, releaseMedicalPatch);
         }
 
-        // Auto-eat from backpack when very hungry
-        if (currentCals < 800) {
-            const foodItems = db.city.getInventoryFoodItems(char.id);
-            if (foodItems.length > 0) {
-                const food = foodItems[0]; // eat the most calorie-dense item
-                db.city.removeFromInventory(char.id, food.item_id, 1);
-                currentCals = Math.min(4000, currentCals + food.cal_restore);
-                const satietyBoost = clamp(Math.round((food.cal_restore || 0) / 18), 8, 28);
-                const loadBoost = clamp(Math.round((food.cal_restore || 0) / 24), 6, 22);
-                const eatState = applyStateEffectsToCharacter(char, {
-                    energy: 8,
-                    stress: -4,
-                    mood: 3,
-                    health: 1,
-                    satiety: satietyBoost,
-                    stomach_load: loadBoost,
-                    sleep_debt: Math.round(loadBoost * 0.6)
-                });
-                db.city.logAction(char.id, 'EAT', `${char.name} 从背包里吃了 ${food.emoji}${food.name} (+${food.cal_restore}卡) 🍜`, food.cal_restore, 0, char.location || 'home');
-                broadcastCityEvent(userId, char.id, 'EAT', `${char.name} 吃了 ${food.emoji}${food.name}`);
-                if (Math.random() < 0.1) broadcastCityToChat(userId, char, `刚吃了 ${food.emoji}${food.name}，感觉好多了。`, 'EAT');
-                currentCityStatus = currentCals > 500 ? 'idle' : 'hungry';
-                const autoEatPatch = { calories: currentCals, city_status: currentCityStatus, ...eatState };
-                db.updateCharacter(char.id, autoEatPatch);
-                logEmotionTransitionToState(
-                    db,
-                    char,
-                    { ...char, ...autoEatPatch },
-                    'city_auto_eat',
-                    `角色因为饥饿自动吃了 ${food.name}，生理状态和主情绪随之改变。`
-                );
-                return; // eating takes one tick
-            }
+        const emergencyReason = getEmergencyHospitalReason(char, currentCals);
+        if (emergencyReason) {
+            await settleEmergencyHospitalTransfer(char, db, userId, currentCals, emergencyReason, config);
+            return;
         }
 
         if (currentCals === 0) {
@@ -4870,16 +4926,8 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             }
         }
 
-        let forcedRestReason = '';
-        const restOverride = getExhaustionRestOverride(char, currentCals, districts, targetDistrict);
-        if (restOverride) {
-            forcedRestReason = buildExhaustionRestReason(char, currentCals, targetDistrict);
-            targetDistrict = restOverride;
-        }
-
         if (targetDistrict) {
-            const intentLabel = forcedRestReason ? '透支休整' : '按日程';
-            console.log(`[City] ${char.name} 📅 ${intentLabel}前往 ${targetDistrict.emoji} ${targetDistrict.name} (准备生成文案)`);
+            console.log(`[City] ${char.name} 📅 按日程前往 ${targetDistrict.emoji} ${targetDistrict.name} (准备生成文案)`);
         }
 
         // LLM decision with inventory awareness + active event context
@@ -4889,7 +4937,7 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         const lastQuestReview = activeQuestClaim ? db.city.getLatestQuestProgressReviewForClaim?.(activeQuestClaim, char.id) : null;
         const recentQuestReviews = activeQuestClaim ? db.city.getRecentQuestProgressReviewsForClaim?.(activeQuestClaim, char.id, 4) || [] : [];
         const questContext = buildQuestPromptContext(db.city.getActiveQuests(), activeQuestClaim, lastQuestReview, recentQuestReviews);
-        const prompt = buildSurvivalPrompt(districts, { ...char, calories: currentCals }, inventory, activeEvents, universalResult, targetDistrict, questContext, db, { forcedRestReason });
+        const prompt = buildSurvivalPrompt(districts, { ...char, calories: currentCals }, inventory, activeEvents, universalResult, targetDistrict, questContext, db);
         let actionDistrict = targetDistrict || null;
         try {
             const messages = [
@@ -4954,17 +5002,29 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
                 return;
             }
 
+            if (codeMatch === 'organize_bag') {
+                const organizeDistrict = targetDistrict
+                    || db.city.getDistrict?.(char.location || '')
+                    || districts.find(d => d.id === 'street')
+                    || districts[0]
+                    || { id: 'street', name: '商业街', emoji: '🎒', type: 'shopping', cal_cost: 2 };
+                await actionService.organizeInventoryAction(char, db, userId, currentCals, config, richNarrations, {
+                    district: organizeDistrict
+                });
+                console.log(`[City] ${char.name} -> 🎒 整理背包`);
+                return;
+            }
+
             const district = districts.find(d => d.id === codeMatch);
             if (!district) {
                 throw new Error(`商业街行动生成失败：action 不在可选地点中 (${codeMatch})，请重试。`);
             }
             actionDistrict = district;
 
-            const postChoiceRestOverride = getExhaustionRestOverride(char, currentCals, districts, district);
-            if (postChoiceRestOverride && postChoiceRestOverride.id !== district.id) {
-                const restNarrations = buildForcedRestNarrations(char, district, postChoiceRestOverride, currentCals);
-                console.log(`[City] ${char.name} 🛌 状态透支，覆盖 ${district.name} -> ${postChoiceRestOverride.name}`);
-                await applyDecision(postChoiceRestOverride, char, db, userId, currentCals, config, activeEvents, restNarrations, { preserveDirectedDistrict: true });
+            const postChoiceEmergencyReason = getEmergencyHospitalReason(char, currentCals, district);
+            if (postChoiceEmergencyReason) {
+                console.log(`[City] ${char.name} 🚑 状态透支，${district.name} 行动改为急救送医`);
+                await settleEmergencyHospitalTransfer(char, db, userId, currentCals, postChoiceEmergencyReason, config, district);
                 return;
             }
 
@@ -5022,14 +5082,18 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         const state = normalizeSurvivalState(char);
         const emotionState = deriveEmotion(char).state;
         const physicalState = derivePhysicalState(char).state;
-        // Check if char has food in inventory first
+        if (cals < EMERGENCY_HUNGER_CALORIES || state.energy < EMERGENCY_EXHAUSTION_ENERGY || state.sleep_debt > EMERGENCY_SLEEP_DEBT) {
+            return districts.find(d => d.type === 'medical')
+                || districts.find(d => d.id === 'hospital')
+                || districts[0];
+        }
         if (cals < 500 && wallet >= 15) return districts.find(d => d.type === 'food') || districts[0];
         if (state.energy < 20) {
             return districts.find(d => d.type === 'rest')
                 || districts.find(d => d.type === 'food')
                 || districts[0];
         }
-        if (cals < 300 || state.energy < 35 || state.sleep_debt > 75) return districts.find(d => d.type === 'rest') || districts[0];
+        if (state.energy < 35) return districts.find(d => d.type === 'rest') || districts[0];
         if (state.health < 35) return districts.find(d => d.type === 'medical') || districts[0];
         if (physicalState === 'unwell' || physicalState === 'severe_unwell') return districts.find(d => d.type === 'medical') || districts.find(d => d.type === 'rest') || districts[0];
         if (physicalState === 'sleepy' || physicalState === 'fatigued') return districts.find(d => d.type === 'rest') || districts[0];
@@ -5089,15 +5153,6 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
 
     async function applyDecision(district, char, db, userId, currentCals, config, activeEvents, richNarrations = null, options = {}) {
         return actionService.applyDecision(district, char, db, userId, currentCals, config, activeEvents, richNarrations, options);
-    }
-
-    function districtsFallbackForExhaustion(char, db) {
-        const districts = db.city.getEnabledDistricts();
-        return districts.find(d => d.type === 'rest')
-            || districts.find(d => d.type === 'food')
-            || districts.find(d => d.id === char.location)
-            || districts[0]
-            || null;
     }
 
     // Phase 5: social collision detection
@@ -5551,7 +5606,6 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
 
     const actionService = createActionService({
         normalizeSurvivalState,
-        districtsFallbackForExhaustion,
         getDistrictStateEffects,
         buildGamblingOutcomeNarrations,
         broadcastCityToChat,

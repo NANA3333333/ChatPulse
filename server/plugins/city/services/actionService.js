@@ -7,10 +7,58 @@ function normalizeCityActionConfigNumber(config, key, fallback) {
     return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function getWalletAfterDelta(currentWallet, delta) {
+    const current = Number(currentWallet || 0);
+    const next = current + Number(delta || 0);
+    if (current < 0) return +next.toFixed(2);
+    return +Math.max(0, next).toFixed(2);
+}
+
+const INVENTORY_SLOT_LIMIT_FALLBACK = 10;
+
+function getInventorySlotLimit(db) {
+    const limit = Number(db?.city?.getInventorySlotLimit?.() || INVENTORY_SLOT_LIMIT_FALLBACK);
+    return Number.isSafeInteger(limit) && limit > 0 ? limit : INVENTORY_SLOT_LIMIT_FALLBACK;
+}
+
+function getInventoryItemId(item = {}) {
+    return String(item.item_id || item.id || '').trim();
+}
+
+function formatInventoryItemLabel(item = {}) {
+    const giftedQty = Number(item.user_gifted_quantity || item.gifted_quantity || 0);
+    const giftText = giftedQty > 0 ? `，用户送的x${giftedQty}` : '';
+    return `${item.emoji || ''}${item.name || getInventoryItemId(item) || '物品'}x${Number(item.quantity || 1)}${giftText}`;
+}
+
+function pickDiscardCandidate(inventory = []) {
+    const rows = Array.isArray(inventory) ? inventory.filter((item) => getInventoryItemId(item) && Number(item.quantity || 0) > 0) : [];
+    if (!rows.length) return null;
+    const score = (item) => {
+        let value = 0;
+        const giftedQty = Number(item.user_gifted_quantity || item.gifted_quantity || 0);
+        if (giftedQty > 0) value += 10000;
+        if (Number(item.cal_restore || 0) > 0) value += 1000;
+        value += Math.max(0, Number(item.buy_price || 0));
+        return value;
+    };
+    return rows.slice().sort((a, b) => score(a) - score(b))[0] || null;
+}
+
+function getInventoryStateForNewItem(db, charId, itemId) {
+    const inventory = db?.city?.getInventory?.(charId) || [];
+    const limit = getInventorySlotLimit(db);
+    const hasItem = inventory.some((entry) => getInventoryItemId(entry) === String(itemId || '').trim());
+    return {
+        inventory,
+        limit,
+        hasItem,
+        fullForNewItem: !hasItem && inventory.length >= limit
+    };
+}
+
 function createActionService(deps = {}) {
     const {
-        normalizeSurvivalState,
-        districtsFallbackForExhaustion,
         getDistrictStateEffects,
         buildGamblingOutcomeNarrations,
         broadcastCityToChat,
@@ -35,23 +83,66 @@ function createActionService(deps = {}) {
         maybeRunCityWebSearchActivity
     } = deps;
 
+    async function organizeInventoryAction(char, db, userId, currentCals, config, richNarrations = null, options = {}) {
+        const inventory = db?.city?.getInventory?.(char.id) || [];
+        const limit = getInventorySlotLimit(db);
+        const district = options.district
+            || db?.city?.getDistrict?.(char.location || '')
+            || { id: char.location || 'street', name: '商业街', emoji: '🎒', cal_cost: 2, type: 'shopping' };
+        const desiredItem = options.desiredItem || null;
+        const shouldDiscard = inventory.length >= limit || options.forceDiscard;
+        const candidate = shouldDiscard ? pickDiscardCandidate(inventory) : null;
+        const discarded = candidate && typeof db?.city?.discardInventorySlot === 'function'
+            ? db.city.discardInventorySlot(char.id, getInventoryItemId(candidate))
+            : null;
+        const desiredText = desiredItem ? `${desiredItem.emoji || ''}${desiredItem.name || desiredItem.id || '新物品'}` : '';
+        const discardedText = discarded ? formatInventoryItemLabel(discarded) : '';
+        const defaultLog = discarded
+            ? `${char.name} 本来想买${desiredText || '新东西'}，但背包已经满到 ${inventory.length}/${limit} 格，只好先停下来整理，把${discardedText}清了出去，给之后的补给腾出位置。`
+            : shouldDiscard
+                ? `${char.name} 翻了翻背包，发现里面已经满到 ${inventory.length}/${limit} 格，这一轮先专心整理背包，没有继续买新东西。`
+                : `${char.name} 翻了翻背包，把随身物品重新归位，确认现在还有 ${inventory.length}/${limit} 格在用，没有急着添置新东西。`;
+        const explicitLog = options.forceDefaultLog ? '' : String(richNarrations?.log || '').trim();
+        const organizeLog = explicitLog || defaultLog;
+        const organizeNarrations = options.forceDefaultLog
+            ? { log: organizeLog, chat: '', diary: '' }
+            : { ...(richNarrations || {}), log: organizeLog };
+        const dCal = -Math.min(20, Math.max(1, Number(district.cal_cost || 2)));
+        const newCals = Math.min(4000, Math.max(0, Number(currentCals || 0) + dCal));
+        const nextState = applyStateEffectsToCharacter(char, {
+            energy: -2,
+            stress: 2,
+            mood: discarded ? 0 : -1,
+            social_need: 0,
+            health: 0,
+            satiety: 0,
+            stomach_load: 0,
+            sleep_debt: 0
+        });
+        const patch = {
+            calories: newCals,
+            city_status: newCals < 500 ? 'hungry' : 'idle',
+            location: district.id,
+            ...nextState
+        };
+        db.updateCharacter(char.id, patch);
+        const actionLogId = db.city.logAction(char.id, 'ORGANIZE_BAG', organizeLog, dCal, 0, district.id);
+        broadcastCityEvent(userId, char.id, 'ORGANIZE_BAG', organizeLog);
+        broadcastCityToChat(userId, char, organizeLog, 'ORGANIZE_BAG', organizeNarrations);
+        logEmotionTransitionToState(
+            db,
+            char,
+            { ...char, ...patch },
+            'city_organize_bag',
+            discarded
+                ? `角色背包已满，整理背包并丢弃了 ${discarded.name || discarded.item_id || '一个物品'}。`
+                : '角色背包已满，优先整理背包而不是继续购买。'
+        );
+        return { actionLogId, discarded };
+    }
+
     async function applyDecision(district, char, db, userId, currentCals, config, activeEvents, richNarrations = null, options = {}) {
-        const currentState = normalizeSurvivalState(char);
-        const preserveDirectedDistrict = !!options.preserveDirectedDistrict;
         const cityNowMs = Number(options.cityNowMs || 0) || Number(getCityNowMs?.(config) || 0) || Date.now();
-        if (!preserveDirectedDistrict) {
-            if (
-                currentState.energy < 20 &&
-                ['work', 'education', 'gambling', 'leisure', 'wander'].includes(district.type)
-            ) {
-                district = districtsFallbackForExhaustion(char, db) || district;
-            } else if (
-                currentState.energy < 35 &&
-                ['work', 'education', 'gambling'].includes(district.type)
-            ) {
-                district = districtsFallbackForExhaustion(char, db) || district;
-            }
-        }
 
         const inflation = normalizeCityActionConfigNumber(config, 'inflation', 1.0);
         const workBonus = normalizeCityActionConfigNumber(config, 'work_bonus', 1.0);
@@ -127,7 +218,7 @@ function createActionService(deps = {}) {
             const bonusCalories = Number(questOutcome?.bonusCalories || 0);
             if (bonusMoney || bonusCalories) {
                 const patch = {
-                    wallet: Math.max(0, (char.wallet || 0) + bonusMoney),
+                    wallet: getWalletAfterDelta(char.wallet, bonusMoney),
                     calories: Math.min(4000, Math.max(0, currentCals + bonusCalories))
                 };
                 db.updateCharacter(char.id, patch);
@@ -184,73 +275,97 @@ function createActionService(deps = {}) {
                 shopItems = shopItems.filter(i => i.stock === -1 || i.stock > 0);
 
                 if (shopItems.length > 0) {
-                    const settledNarratedItem = pickSettledShopItemFromNarrations(shopItems, richNarrations);
-                    const item = settledNarratedItem || shopItems[Math.floor(Math.random() * shopItems.length)];
-                    const itemCost = item.buy_price * inflation;
-                    if ((char.wallet || 0) >= itemCost) {
-                        if (!richNarrations || isWeakCityNarration(richNarrations?.log, char, district)) {
-                            richNarrations = await regenerateActionNarrations(char, district, db, richNarrations || {}, {
-                                item,
-                                currentCals
-                            });
-                        }
-                        db.city.decreaseItemStock(item.id, 1);
+                    const item = pickSettledShopItemFromNarrations(shopItems, richNarrations);
+                    if (item) {
+                        const itemCost = item.buy_price * inflation;
+                        if ((char.wallet || 0) >= itemCost) {
+                            if (district.id !== 'restaurant') {
+                                const inventoryState = getInventoryStateForNewItem(db, char.id, item.id);
+                                if (inventoryState.fullForNewItem) {
+                                    await organizeInventoryAction(char, db, userId, currentCals, config, null, {
+                                        district,
+                                        desiredItem: item,
+                                        forceDefaultLog: true
+                                    });
+                                    return;
+                                }
+                            }
+                            if (!richNarrations || isWeakCityNarration(richNarrations?.log, char, district)) {
+                                richNarrations = await regenerateActionNarrations(char, district, db, richNarrations || {}, {
+                                    item,
+                                    currentCals
+                                });
+                            }
+                            if (district.id === 'restaurant') {
+                                db.city.decreaseItemStock(item.id, 1);
+                                dMoney = -itemCost;
+                                dCal = -(district.cal_cost || 0) + (item.cal_restore || 0);
+                                const satietyBoost = clamp(Math.round((item.cal_restore || 0) / 18), 10, 30);
+                                const loadBoost = clamp(Math.round((item.cal_restore || 0) / 24), 8, 24);
+                                stateEffects = {
+                                    ...stateEffects,
+                                    energy: stateEffects.energy + 6,
+                                    stress: stateEffects.stress - 2,
+                                    mood: stateEffects.mood + 2,
+                                    satiety: (stateEffects.satiety || 0) + satietyBoost,
+                                    stomach_load: (stateEffects.stomach_load || 0) + loadBoost,
+                                    sleep_debt: (stateEffects.sleep_debt || 0) + Math.round(loadBoost * 0.6)
+                                };
+                                const eatLog = getLogText(buildCollapsedCityLog(char, '进食文案生成失败', { district }), { allowWeak: true });
+                                primaryActionLogId = db.city.logAction(char.id, 'EAT', eatLog, dCal, dMoney, district.id);
+                                broadcastCityEvent(userId, char.id, 'EAT', eatLog);
+                                broadcastCityToChat(userId, char, eatLog, 'EAT', richNarrations);
+                            } else {
+                                try {
+                                    db.city.addToInventory(char.id, item.id, 1);
+                                } catch (e) {
+                                    if (e?.code === 'CITY_INVENTORY_FULL') {
+                                        await organizeInventoryAction(char, db, userId, currentCals, config, null, {
+                                            district,
+                                            desiredItem: item,
+                                            forceDefaultLog: true
+                                        });
+                                        return;
+                                    }
+                                    throw e;
+                                }
+                                db.city.decreaseItemStock(item.id, 1);
+                                dMoney = -itemCost;
+                                dCal = -(district.cal_cost || 0);
+                                const buyLog = getLogText(buildCollapsedCityLog(char, '购物文案生成失败', { district }), { allowWeak: true });
+                                primaryActionLogId = db.city.logAction(char.id, 'BUY', buyLog, dCal, dMoney, district.id);
+                                broadcastCityEvent(userId, char.id, 'BUY', buyLog);
+                                broadcastCityToChat(userId, char, buyLog, 'BUY', richNarrations);
+                            }
 
-                        if (district.id === 'restaurant') {
-                            dMoney = -itemCost;
-                            dCal = -(district.cal_cost || 0) + (item.cal_restore || 0);
-                            const satietyBoost = clamp(Math.round((item.cal_restore || 0) / 18), 10, 30);
-                            const loadBoost = clamp(Math.round((item.cal_restore || 0) / 24), 8, 24);
-                            stateEffects = {
-                                ...stateEffects,
-                                energy: stateEffects.energy + 6,
-                                stress: stateEffects.stress - 2,
-                                mood: stateEffects.mood + 2,
-                                satiety: (stateEffects.satiety || 0) + satietyBoost,
-                                stomach_load: (stateEffects.stomach_load || 0) + loadBoost,
-                                sleep_debt: (stateEffects.sleep_debt || 0) + Math.round(loadBoost * 0.6)
+                            const questOutcome = await handleQuestLifecycleAfterAction(db, char, district, richNarrations, { actionLogId: primaryActionLogId });
+                            const newCals = Math.min(4000, Math.max(0, currentCals + dCal + Number(questOutcome.bonusCalories || 0)));
+                            const newWallet = getWalletAfterDelta(char.wallet, dMoney + Number(questOutcome.bonusMoney || 0));
+                            const nextState = applyStateEffectsToCharacter(char, stateEffects);
+                            const shoppingPatch = {
+                                calories: newCals,
+                                city_status: newCals < 500 ? 'hungry' : 'idle',
+                                location: district.id,
+                                wallet: newWallet,
+                                ...nextState
                             };
-                            const eatLog = getLogText(buildCollapsedCityLog(char, '进食文案生成失败', { district }), { allowWeak: true });
-                            primaryActionLogId = db.city.logAction(char.id, 'EAT', eatLog, dCal, dMoney, district.id);
-                            broadcastCityEvent(userId, char.id, 'EAT', eatLog);
-                            broadcastCityToChat(userId, char, eatLog, 'EAT', richNarrations);
-                        } else {
-                            db.city.addToInventory(char.id, item.id, 1);
-                            dMoney = -itemCost;
-                            dCal = -(district.cal_cost || 0);
-                            const buyLog = getLogText(buildCollapsedCityLog(char, '购物文案生成失败', { district }), { allowWeak: true });
-                            primaryActionLogId = db.city.logAction(char.id, 'BUY', buyLog, dCal, dMoney, district.id);
-                            broadcastCityEvent(userId, char.id, 'BUY', buyLog);
-                            broadcastCityToChat(userId, char, buyLog, 'BUY', richNarrations);
+                            db.updateCharacter(char.id, shoppingPatch);
+                            logEmotionTransitionToState(
+                                db,
+                                char,
+                                { ...char, ...shoppingPatch },
+                                `city_action_${district.type}`,
+                                `角色在商业街 ${district.name} 完成了一次${district.type === 'food' ? '进食' : '消费'}行为，状态与主情绪随之变化。`
+                            );
+
+                            const wsClients = getWsClients(userId);
+                            const engine = getEngine(userId);
+                            if (engine && typeof engine.broadcastWalletSync === 'function') {
+                                engine.broadcastWalletSync(wsClients, char.id);
+                            }
+
+                            return;
                         }
-
-                        const questOutcome = await handleQuestLifecycleAfterAction(db, char, district, richNarrations, { actionLogId: primaryActionLogId });
-                        const newCals = Math.min(4000, Math.max(0, currentCals + dCal + Number(questOutcome.bonusCalories || 0)));
-                        const newWallet = Math.max(0, (char.wallet || 0) + dMoney + Number(questOutcome.bonusMoney || 0));
-                        const nextState = applyStateEffectsToCharacter(char, stateEffects);
-                        const shoppingPatch = {
-                            calories: newCals,
-                            city_status: newCals < 500 ? 'hungry' : 'idle',
-                            location: district.id,
-                            wallet: newWallet,
-                            ...nextState
-                        };
-                        db.updateCharacter(char.id, shoppingPatch);
-                        logEmotionTransitionToState(
-                            db,
-                            char,
-                            { ...char, ...shoppingPatch },
-                            `city_action_${district.type}`,
-                            `角色在商业街 ${district.name} 完成了一次${district.type === 'food' ? '进食' : '消费'}行为，状态与主情绪随之变化。`
-                        );
-
-                        const wsClients = getWsClients(userId);
-                        const engine = getEngine(userId);
-                        if (engine && typeof engine.broadcastWalletSync === 'function') {
-                            engine.broadcastWalletSync(wsClients, char.id);
-                        }
-
-                        return;
                     }
                 }
             }
@@ -321,7 +436,7 @@ function createActionService(deps = {}) {
         const totalCalDelta = dCal + Number(questOutcome.bonusCalories || 0) + Number(webActivityOutcome?.calorieDelta || 0);
         const totalMoneyDelta = dMoney + Number(questOutcome.bonusMoney || 0) + Number(webActivityOutcome?.moneyDelta || 0);
         const newCals = Math.min(4000, Math.max(0, currentCals + totalCalDelta));
-        const newWallet = Math.max(0, (char.wallet || 0) + totalMoneyDelta);
+        const newWallet = getWalletAfterDelta(char.wallet, totalMoneyDelta);
         const webStateEffects = webActivityOutcome?.stateEffects || {};
         const mergedStateEffects = { ...stateEffects };
         for (const [key, value] of Object.entries(webStateEffects)) {
@@ -367,7 +482,7 @@ function createActionService(deps = {}) {
         }
     }
 
-    return { applyDecision };
+    return { applyDecision, organizeInventoryAction };
 }
 
 module.exports = { createActionService };

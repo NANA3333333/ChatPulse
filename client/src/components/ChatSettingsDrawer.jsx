@@ -924,7 +924,7 @@ function ChatSettingsDrawer({ contact, contacts = [], apiUrl, onClose, onClearHi
                                     <div style={{ fontSize: '18px', marginRight: '10px' }}>{item.emoji || '📦'}</div>
                                     <div style={{ flex: 1 }}>
                                         <div style={{ fontSize: '14px', fontWeight: '500', color: '#333' }}>{item.name}</div>
-                                        {(item.description || item.effect) && <div style={{ fontSize: '11px', color: '#888', marginTop: '2px' }}>{item.description || item.effect}</div>}
+                                        {(item.description || item.effect || Number(item.user_gifted_quantity || item.gifted_quantity || 0) > 0) && <div style={{ fontSize: '11px', color: '#888', marginTop: '2px' }}>{Number(item.user_gifted_quantity || item.gifted_quantity || 0) > 0 ? (lang === 'en' ? `Gifted by user x${Number(item.user_gifted_quantity || item.gifted_quantity || 0)}` : `用户送的 x${Number(item.user_gifted_quantity || item.gifted_quantity || 0)}`) : (item.description || item.effect)}</div>}
                                     </div>
                                     <div style={{ fontSize: '13px', fontWeight: '600', color: '#666' }}>x{item.quantity}</div>
                                 </div>

@@ -14,6 +14,8 @@ const {
     MAX_CITY_ANNOUNCEMENT_QUERY_LIMIT
 } = require('./utils/inputGuards');
 
+const CITY_INVENTORY_SLOT_LIMIT = 10;
+
 module.exports = function initCityDb(db) {
     function quoteSqlIdentifier(identifier) {
         const value = String(identifier || '');
@@ -35,6 +37,10 @@ module.exports = function initCityDb(db) {
         const safeColumnName = quoteSqlIdentifier(columnName);
         db.prepare(`ALTER TABLE ${safeTableName} ADD COLUMN ${safeColumnName} ${definition}`).run();
         return true;
+    }
+
+    function hasTable(tableName) {
+        return !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1").get(tableName);
     }
 
     function normalizeQuestProgressInteger(value, fallback = 0) {
@@ -215,6 +221,7 @@ module.exports = function initCityDb(db) {
             character_id TEXT NOT NULL,
             item_id TEXT NOT NULL,
             quantity INTEGER DEFAULT 1,
+            user_gifted_quantity INTEGER DEFAULT 0,
             acquired_at INTEGER NOT NULL,
             FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE,
             FOREIGN KEY (item_id) REFERENCES city_items(id) ON DELETE CASCADE,
@@ -236,6 +243,7 @@ module.exports = function initCityDb(db) {
             UNIQUE(character_id, plan_date)
         );
     `);
+    addColumnIfMissing('city_inventory', 'user_gifted_quantity', 'INTEGER DEFAULT 0');
 
     // ═══════════════════════════════════════════════════════════════════════
     //  8. ★ City Events (城市事件 — 天气/经济/随机事件)
@@ -438,6 +446,73 @@ module.exports = function initCityDb(db) {
         updateNameStmt.run(cn.name, cn.desc, cn.action, id, '%' + cn.name + '%');
     }
 
+    function migrateInventoryGiftMarkers() {
+        try {
+            if (!hasTable('city_inventory') || !hasTable('city_items') || !hasTable('city_logs') || !hasTable('city_config')) return;
+            const migrationKey = 'inventory_gift_marker_backfill_v1';
+            if (db.prepare('SELECT 1 FROM city_config WHERE key = ? LIMIT 1').get(migrationKey)) return;
+            const inventoryRows = db.prepare(`
+                SELECT character_id, item_id, quantity, COALESCE(user_gifted_quantity, 0) AS user_gifted_quantity
+                FROM city_inventory
+                WHERE quantity > 0
+            `).all();
+            const giftLogs = db.prepare(`
+                SELECT character_id, content
+                FROM city_logs
+                WHERE upper(action_type) = 'GIVE_ITEM'
+            `).all();
+            if (!inventoryRows.length || !giftLogs.length) {
+                db.prepare('INSERT INTO city_config (key, value) VALUES (?, ?)').run(migrationKey, 'empty');
+                return;
+            }
+            const items = db.prepare('SELECT id, name, emoji FROM city_items ORDER BY length(name) DESC').all();
+            const giftCounts = new Map();
+            const addGiftCount = (characterId, itemId, quantity) => {
+                if (!characterId || !itemId || quantity < 1) return;
+                const key = `${characterId}\u0000${itemId}`;
+                giftCounts.set(key, (giftCounts.get(key) || 0) + quantity);
+            };
+            for (const log of giftLogs) {
+                const content = String(log.content || '');
+                if (!content) continue;
+                const quantity = Math.max(1, Number(content.match(/\bx\s*(\d+)/i)?.[1] || 1));
+                const matched = items.find(item => {
+                    const name = String(item.name || '').trim();
+                    const emojiName = `${String(item.emoji || '').trim()}${name}`;
+                    return name && (content.includes(emojiName) || content.includes(name));
+                });
+                if (matched) addGiftCount(String(log.character_id || '').trim(), matched.id, quantity);
+            }
+            let updated = 0;
+            const updateStmt = db.prepare(`
+                UPDATE city_inventory
+                SET user_gifted_quantity = ?
+                WHERE character_id = ? AND item_id = ?
+            `);
+            const tx = db.transaction(() => {
+                for (const row of inventoryRows) {
+                    const key = `${row.character_id}\u0000${row.item_id}`;
+                    const inferredGifted = Number(giftCounts.get(key) || 0);
+                    if (inferredGifted < 1) continue;
+                    const quantity = Math.max(0, Number(row.quantity || 0));
+                    const currentGifted = Math.min(quantity, Math.max(0, Number(row.user_gifted_quantity || 0)));
+                    const nextGifted = Math.min(quantity, Math.max(currentGifted, inferredGifted));
+                    if (nextGifted > currentGifted) {
+                        updateStmt.run(nextGifted, row.character_id, row.item_id);
+                        updated += 1;
+                    }
+                }
+                db.prepare('INSERT INTO city_config (key, value) VALUES (?, ?)').run(migrationKey, `updated:${updated}`);
+            });
+            tx();
+            if (updated > 0) console.log(`[City DB] 已回填旧用户赠送物品标记 ${updated} 条`);
+        } catch (e) {
+            console.warn('[City DB] 回填旧用户赠送物品标记失败:', e.message);
+        }
+    }
+
+    migrateInventoryGiftMarkers();
+
     console.log('[City DB] Schema verified and updated.');
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -455,6 +530,7 @@ module.exports = function initCityDb(db) {
         'ANNOUNCE',
         'BUY',
         'EAT',
+        'ORGANIZE_BAG',
         'STARVE',
         'BROKE'
     ]);
@@ -1131,42 +1207,101 @@ module.exports = function initCityDb(db) {
     }
 
     // --- Inventory (背包) ---
+    function getInventorySlotLimit() {
+        return CITY_INVENTORY_SLOT_LIMIT;
+    }
+
+    function normalizeInventoryRow(row) {
+        if (!row) return row;
+        const quantity = Math.max(0, Number(row.quantity || 0));
+        const userGiftedQuantity = Math.min(quantity, Math.max(0, Number(row.user_gifted_quantity || 0)));
+        return {
+            ...row,
+            quantity,
+            user_gifted_quantity: userGiftedQuantity,
+            gifted_quantity: userGiftedQuantity,
+            is_user_gifted: userGiftedQuantity > 0 ? 1 : 0,
+            source_label: userGiftedQuantity > 0 ? '用户送的' : ''
+        };
+    }
+
     function getInventory(charId) {
         return db.prepare(`
-            SELECT inv.*, it.name, it.emoji, it.category, it.cal_restore, it.buy_price, it.description as item_desc
+            SELECT inv.*, it.name, it.emoji, it.category, it.cal_restore, it.buy_price, it.description, it.description as item_desc
             FROM city_inventory inv
             JOIN city_items it ON inv.item_id = it.id
             WHERE inv.character_id = ?
             ORDER BY inv.acquired_at DESC
-        `).all(charId);
+        `).all(charId).map(normalizeInventoryRow);
     }
-    function addToInventory(charId, itemId, qty = 1) {
+
+    function getInventorySlotCount(charId) {
+        return db.prepare('SELECT COUNT(*) AS c FROM city_inventory WHERE character_id = ? AND quantity > 0').get(charId)?.c || 0;
+    }
+
+    function canAddInventoryItem(charId, itemId) {
+        const existing = db.prepare('SELECT id FROM city_inventory WHERE character_id = ? AND item_id = ? AND quantity > 0').get(charId, itemId);
+        return !!existing || getInventorySlotCount(charId) < CITY_INVENTORY_SLOT_LIMIT;
+    }
+
+    function addToInventory(charId, itemId, qty = 1, options = {}) {
         const safeQty = Number(qty);
         if (!Number.isSafeInteger(safeQty) || safeQty < 1) throw new Error('物品数量无效');
+        const source = String(options.source || options.source_type || '').trim().toLowerCase();
+        const userGiftedQty = ['user_gift', 'gift_from_user', 'admin_gift'].includes(source) ? safeQty : 0;
         const existing = db.prepare('SELECT * FROM city_inventory WHERE character_id = ? AND item_id = ?').get(charId, itemId);
         if (existing) {
-            return db.prepare('UPDATE city_inventory SET quantity = quantity + ? WHERE id = ?').run(safeQty, existing.id).changes || 0;
+            return db.prepare(`
+                UPDATE city_inventory
+                SET quantity = quantity + ?,
+                    user_gifted_quantity = COALESCE(user_gifted_quantity, 0) + ?,
+                    acquired_at = ?
+                WHERE id = ?
+            `).run(safeQty, userGiftedQty, Date.now(), existing.id).changes || 0;
         }
-        return db.prepare('INSERT INTO city_inventory (character_id, item_id, quantity, acquired_at) VALUES (?, ?, ?, ?)').run(charId, itemId, safeQty, Date.now()).changes || 0;
+        if (getInventorySlotCount(charId) >= CITY_INVENTORY_SLOT_LIMIT) {
+            const err = new Error(`背包已满，最多只能携带 ${CITY_INVENTORY_SLOT_LIMIT} 种物品`);
+            err.code = 'CITY_INVENTORY_FULL';
+            throw err;
+        }
+        return db.prepare('INSERT INTO city_inventory (character_id, item_id, quantity, user_gifted_quantity, acquired_at) VALUES (?, ?, ?, ?, ?)').run(charId, itemId, safeQty, userGiftedQty, Date.now()).changes || 0;
     }
-    function removeFromInventory(charId, itemId, qty = 1) {
+    function removeFromInventory(charId, itemId, qty = 1, options = {}) {
         const existing = db.prepare('SELECT * FROM city_inventory WHERE character_id = ? AND item_id = ?').get(charId, itemId);
         if (!existing) return false;
-        if (existing.quantity <= qty) {
+        const safeQty = Math.max(1, Number(qty || 1));
+        if (Number(existing.quantity || 0) <= safeQty) {
             db.prepare('DELETE FROM city_inventory WHERE id = ?').run(existing.id);
         } else {
-            db.prepare('UPDATE city_inventory SET quantity = quantity - ? WHERE id = ?').run(qty, existing.id);
+            const currentGifted = Math.min(Number(existing.quantity || 0), Math.max(0, Number(existing.user_gifted_quantity || 0)));
+            const nonGifted = Math.max(0, Number(existing.quantity || 0) - currentGifted);
+            const removeGifted = options.preferUserGift
+                ? Math.min(currentGifted, safeQty)
+                : Math.max(0, safeQty - nonGifted);
+            const nextGifted = Math.max(0, currentGifted - removeGifted);
+            db.prepare('UPDATE city_inventory SET quantity = quantity - ?, user_gifted_quantity = ? WHERE id = ?').run(safeQty, nextGifted, existing.id);
         }
         return true;
     }
+    function discardInventorySlot(charId, itemId) {
+        const existing = db.prepare(`
+            SELECT inv.*, it.name, it.emoji, it.category, it.cal_restore, it.buy_price, it.description, it.description as item_desc
+            FROM city_inventory inv
+            JOIN city_items it ON inv.item_id = it.id
+            WHERE inv.character_id = ? AND inv.item_id = ?
+        `).get(charId, itemId);
+        if (!existing) return null;
+        db.prepare('DELETE FROM city_inventory WHERE id = ?').run(existing.id);
+        return normalizeInventoryRow(existing);
+    }
     function getInventoryFoodItems(charId) {
         return db.prepare(`
-            SELECT inv.*, it.name, it.emoji, it.cal_restore
+            SELECT inv.*, it.name, it.emoji, it.category, it.cal_restore, it.buy_price, it.description, it.description as item_desc
             FROM city_inventory inv
             JOIN city_items it ON inv.item_id = it.id
             WHERE inv.character_id = ? AND it.cal_restore > 0 AND inv.quantity > 0
             ORDER BY it.cal_restore DESC
-        `).all(charId);
+        `).all(charId).map(normalizeInventoryRow);
     }
 
     // --- Schedules (日程) ---
@@ -1467,7 +1602,7 @@ module.exports = function initCityDb(db) {
         getDistricts, getDistrict, getEnabledDistricts, upsertDistrict, deleteDistrict,
         getConfig, setConfig, getEconomyStats,
         getItems, getItem, getItemsAtDistrict, upsertItem, deleteItem, decreaseItemStock,
-        getInventory, addToInventory, removeFromInventory, getInventoryFoodItems,
+        getInventory, getInventorySlotLimit, getInventorySlotCount, canAddInventoryItem, addToInventory, removeFromInventory, discardInventorySlot, getInventoryFoodItems,
         getSchedule, claimScheduleGeneration, releaseScheduleGeneration, saveSchedule, getTodaySchedule,
         // ★ Events & Quests
         getActiveEvents, getAllEvents, createEvent, expireEvents, deleteEvent,

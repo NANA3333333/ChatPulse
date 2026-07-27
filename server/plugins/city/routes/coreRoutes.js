@@ -353,7 +353,7 @@ function registerCoreCityRoutes(app, deps) {
             const userName = String(req.db.getUserProfile?.()?.name || '用户').trim() || '用户';
             const safeQuantity = normalizeCityItemQuantity(quantity);
             if (!safeQuantity) return res.status(400).json({ error: '无效的物品数量' });
-            req.db.city.addToInventory(characterId, itemId, safeQuantity);
+            req.db.city.addToInventory(characterId, itemId, safeQuantity, { source: 'user_gift' });
             req.db.city.logAction(characterId, 'GIVE_ITEM', `${userName}给 ${char.name} 送了 ${item.emoji}${item.name} x${safeQuantity} 🎁`, 0, 0);
             await triggerAdminGrantChat(req.user.id, req.db.getCharacter(characterId) || char, 'item', {
                 itemName: item.name,
@@ -361,7 +361,9 @@ function registerCoreCityRoutes(app, deps) {
                 quantity: safeQuantity
             });
             res.json({ success: true, inventory: req.db.city.getInventory(characterId) });
-        } catch (e) { res.status(500).json({ error: e.message }); }
+        } catch (e) {
+            res.status(e.code === 'CITY_INVENTORY_FULL' ? 409 : 500).json({ error: e.message });
+        }
     });
 
     app.get('/api/city/schedule/:charId', authMiddleware, (req, res) => {
