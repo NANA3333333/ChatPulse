@@ -1010,6 +1010,7 @@ function getInventoryContextSourceParts(db, character) {
     return {
         limit: safeLimit,
         slots: inventory.length,
+        total_quantity: inventory.reduce((sum, item) => sum + Math.max(0, Number(item.quantity || 0)), 0),
         items: inventory.slice(0, safeLimit).map(item => {
             const quantity = Math.max(0, Number(item.quantity || 0));
             const giftedQty = Math.min(quantity, Math.max(0, Number(item.user_gifted_quantity || item.gifted_quantity || 0)));
@@ -1038,13 +1039,14 @@ function buildInventoryContextBlock(snapshot = {}) {
     const limit = Number(snapshot.limit || 10);
     const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? limit : 10;
     const slots = Math.max(0, Number(snapshot.slots || 0));
+    const totalQuantity = Math.max(0, Number(snapshot.total_quantity ?? slots));
     const items = Array.isArray(snapshot.items) ? snapshot.items : [];
     const itemText = items.length ? items.map(formatInventoryContextItem).join('、') : '空';
-    const overflowText = slots > safeLimit ? `\n- 只展示前 ${safeLimit} 种，剩余 ${slots - safeLimit} 种不展开。` : '';
-    const fullText = slots >= safeLimit
-        ? '\n- 背包已满：如果你想买入新的物品种类，必须把一轮商业街活动用于整理背包，丢掉不需要的东西；不要同一轮既整理又购买。'
+    const overflowText = slots > safeLimit ? `\n- 只展示前 ${safeLimit} 行物品，剩余 ${slots - safeLimit} 行不展开。` : '';
+    const fullText = totalQuantity > safeLimit
+        ? '\n- 背包超重：物品总数超过 10 件时，必须立刻把一轮商业街活动用于整理背包；你只能保留 10 件物品，其他由你自己处理。'
         : '';
-    return `[角色当前背包（你自己）]: ${slots}/${safeLimit} 种物品；同一种物品合并为一格。\n- 背包物品: ${itemText}${overflowText}\n- 用户送的物品会标注“用户送的”；它们对关系更敏感，丢弃前要更慎重。\n- 你要控制背包数量，不要无限囤货。${fullText}\n`;
+    return `[角色当前背包（你自己）]: ${totalQuantity}/${safeLimit} 件物品；同一种物品合并显示，但数量都计入总数。\n- 背包物品: ${itemText}${overflowText}\n- 用户送的物品会标注“用户送的”；它们对关系更敏感，处理前要更慎重。\n- 你要控制背包数量，不要无限囤货。${fullText}\n`;
 }
 
 async function buildUniversalContext(context, character, recentInput = '', isGroupContext = false, activeTargets = []) {
@@ -1112,7 +1114,7 @@ async function buildUniversalContext(context, character, recentInput = '', isGro
         character.id,
         isGroupContext ? 'runtime_state_group' : 'runtime_state_private',
         {
-            template_version: 5,
+            template_version: 6,
             isGroupContext: !!isGroupContext,
             wallet: character.wallet ?? 0,
             calories: character.calories,

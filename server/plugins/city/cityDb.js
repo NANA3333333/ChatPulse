@@ -1239,9 +1239,27 @@ module.exports = function initCityDb(db) {
         return db.prepare('SELECT COUNT(*) AS c FROM city_inventory WHERE character_id = ? AND quantity > 0').get(charId)?.c || 0;
     }
 
-    function canAddInventoryItem(charId, itemId) {
-        const existing = db.prepare('SELECT id FROM city_inventory WHERE character_id = ? AND item_id = ? AND quantity > 0').get(charId, itemId);
-        return !!existing || getInventorySlotCount(charId) < CITY_INVENTORY_SLOT_LIMIT;
+    function getInventoryItemCount(charId) {
+        return Number(db.prepare('SELECT COALESCE(SUM(quantity), 0) AS c FROM city_inventory WHERE character_id = ? AND quantity > 0').get(charId)?.c || 0);
+    }
+
+    function getInventoryCapacityState(charId) {
+        const limit = CITY_INVENTORY_SLOT_LIMIT;
+        const totalQuantity = getInventoryItemCount(charId);
+        const slots = getInventorySlotCount(charId);
+        return {
+            limit,
+            total_quantity: totalQuantity,
+            item_count: totalQuantity,
+            slots,
+            over_limit: totalQuantity > limit,
+            excess_quantity: Math.max(0, totalQuantity - limit)
+        };
+    }
+
+    function canAddInventoryItem(charId, itemId, qty = 1) {
+        const safeQty = Math.max(1, Number(qty || 1));
+        return getInventoryItemCount(charId) + safeQty <= CITY_INVENTORY_SLOT_LIMIT;
     }
 
     function addToInventory(charId, itemId, qty = 1, options = {}) {
@@ -1258,11 +1276,6 @@ module.exports = function initCityDb(db) {
                     acquired_at = ?
                 WHERE id = ?
             `).run(safeQty, userGiftedQty, Date.now(), existing.id).changes || 0;
-        }
-        if (getInventorySlotCount(charId) >= CITY_INVENTORY_SLOT_LIMIT) {
-            const err = new Error(`背包已满，最多只能携带 ${CITY_INVENTORY_SLOT_LIMIT} 种物品`);
-            err.code = 'CITY_INVENTORY_FULL';
-            throw err;
         }
         return db.prepare('INSERT INTO city_inventory (character_id, item_id, quantity, user_gifted_quantity, acquired_at) VALUES (?, ?, ?, ?, ?)').run(charId, itemId, safeQty, userGiftedQty, Date.now()).changes || 0;
     }
@@ -1283,6 +1296,33 @@ module.exports = function initCityDb(db) {
         }
         return true;
     }
+    function discardInventoryQuantity(charId, itemId, qty = 1, options = {}) {
+        const existing = db.prepare(`
+            SELECT inv.*, it.name, it.emoji, it.category, it.cal_restore, it.buy_price, it.description, it.description as item_desc
+            FROM city_inventory inv
+            JOIN city_items it ON inv.item_id = it.id
+            WHERE inv.character_id = ? AND inv.item_id = ?
+        `).get(charId, itemId);
+        if (!existing) return null;
+        const currentQuantity = Math.max(0, Number(existing.quantity || 0));
+        const safeQty = Math.min(currentQuantity, Math.max(1, Number(qty || 1)));
+        const currentGifted = Math.min(currentQuantity, Math.max(0, Number(existing.user_gifted_quantity || 0)));
+        const nonGifted = Math.max(0, currentQuantity - currentGifted);
+        const removeGifted = options.preferUserGift
+            ? Math.min(currentGifted, safeQty)
+            : Math.max(0, safeQty - nonGifted);
+        const nextGifted = Math.max(0, currentGifted - removeGifted);
+        if (currentQuantity <= safeQty) {
+            db.prepare('DELETE FROM city_inventory WHERE id = ?').run(existing.id);
+        } else {
+            db.prepare('UPDATE city_inventory SET quantity = quantity - ?, user_gifted_quantity = ? WHERE id = ?').run(safeQty, nextGifted, existing.id);
+        }
+        return normalizeInventoryRow({
+            ...existing,
+            quantity: safeQty,
+            user_gifted_quantity: removeGifted
+        });
+    }
     function discardInventorySlot(charId, itemId) {
         const existing = db.prepare(`
             SELECT inv.*, it.name, it.emoji, it.category, it.cal_restore, it.buy_price, it.description, it.description as item_desc
@@ -1291,8 +1331,7 @@ module.exports = function initCityDb(db) {
             WHERE inv.character_id = ? AND inv.item_id = ?
         `).get(charId, itemId);
         if (!existing) return null;
-        db.prepare('DELETE FROM city_inventory WHERE id = ?').run(existing.id);
-        return normalizeInventoryRow(existing);
+        return discardInventoryQuantity(charId, itemId, Number(existing.quantity || 1));
     }
     function getInventoryFoodItems(charId) {
         return db.prepare(`
@@ -1602,7 +1641,7 @@ module.exports = function initCityDb(db) {
         getDistricts, getDistrict, getEnabledDistricts, upsertDistrict, deleteDistrict,
         getConfig, setConfig, getEconomyStats,
         getItems, getItem, getItemsAtDistrict, upsertItem, deleteItem, decreaseItemStock,
-        getInventory, getInventorySlotLimit, getInventorySlotCount, canAddInventoryItem, addToInventory, removeFromInventory, discardInventorySlot, getInventoryFoodItems,
+        getInventory, getInventorySlotLimit, getInventorySlotCount, getInventoryItemCount, getInventoryCapacityState, canAddInventoryItem, addToInventory, removeFromInventory, discardInventoryQuantity, discardInventorySlot, getInventoryFoodItems,
         getSchedule, claimScheduleGeneration, releaseScheduleGeneration, saveSchedule, getTodaySchedule,
         // ★ Events & Quests
         getActiveEvents, getAllEvents, createEvent, expireEvents, deleteEvent,

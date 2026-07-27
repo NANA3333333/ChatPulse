@@ -727,14 +727,123 @@ ${candidates.map(d => `- ${d.id}: ${d.emoji} ${d.name} (${d.type})`).join('\n')}
         const limit = Number(db?.city?.getInventorySlotLimit?.() || 10);
         const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? limit : 10;
         const slots = Array.isArray(inventory) ? inventory.length : 0;
+        const totalQuantity = Array.isArray(inventory)
+            ? inventory.reduce((sum, item) => sum + Math.max(0, Number(item.quantity || 0)), 0)
+            : 0;
         const lines = Array.isArray(inventory)
             ? inventory.slice(0, safeLimit).map(formatInventoryItemForPrompt).filter(Boolean)
             : [];
-        const overflowText = slots > safeLimit ? `\n- 只展示前 ${safeLimit} 种，剩余 ${slots - safeLimit} 种不展开。` : '';
-        const fullText = slots >= safeLimit
-            ? '\n- 背包已满：如果想买入新的物品种类，必须把这一轮商业街活动用于整理背包，丢掉不需要的东西；不能同一轮既整理又购买。'
+        const overflowText = slots > safeLimit ? `\n- 只展示前 ${safeLimit} 行物品，剩余 ${slots - safeLimit} 行不展开。` : '';
+        const fullText = totalQuantity > safeLimit
+            ? '\n- 背包超重：物品总数超过 10 件时，必须立刻把这一轮商业街活动用于整理背包；你只能保留 10 件物品，其他由你自己处理。'
             : '';
-        return `[当前背包]\n- 容量=${slots}/${safeLimit} 种物品；同一种物品的数量合并为一格。\n- 物品=${lines.length ? lines.join('、') : '空'}${overflowText}\n- 用户送的物品会标注“用户送的”，丢弃前要更慎重。\n- 你要控制背包数量，不要无限囤货。${fullText}`;
+        return `[当前背包]\n- 容量=${totalQuantity}/${safeLimit} 件物品；同一种物品合并显示，但数量都计入总数。\n- 物品=${lines.length ? lines.join('、') : '空'}${overflowText}\n- 用户送的物品会标注“用户送的”，处理前要更慎重。\n- 你要控制背包数量，不要无限囤货。${fullText}`;
+    }
+
+    function getInventoryQuantityTotal(inventory = []) {
+        return Array.isArray(inventory)
+            ? inventory.reduce((sum, item) => sum + Math.max(0, Number(item.quantity || 0)), 0)
+            : 0;
+    }
+
+    function formatInventoryDecisionRow(item = {}) {
+        const quantity = Math.max(0, Number(item.quantity || 0));
+        const giftedQty = Math.min(quantity, Math.max(0, Number(item.user_gifted_quantity || item.gifted_quantity || 0)));
+        const giftText = giftedQty > 0 ? `，其中用户送的x${giftedQty}` : '';
+        const calText = Number(item.cal_restore || 0) > 0 ? `，+${Number(item.cal_restore)}体力` : '';
+        return `- ${item.item_id || item.id}: ${item.emoji || ''}${item.name || item.item_id || item.id || '物品'} x${quantity}${giftText}${calText}`;
+    }
+
+    async function generateInventoryOrganizeNarrations(char, district, db, overflow = {}) {
+        if (!(char?.api_endpoint && char?.api_key && char?.model_name)) {
+            throw createCityError('整理背包缺少模型 URL/Key/模型名，无法生成角色自由行动。', 400, true);
+        }
+        const inventory = db.city.getInventory(char.id);
+        const limit = Number(overflow.limit || db.city.getInventorySlotLimit?.() || 10);
+        const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? limit : 10;
+        const totalQuantity = getInventoryQuantityTotal(inventory);
+        const targetKeepTotal = Math.min(safeLimit, totalQuantity);
+        const state = normalizeSurvivalState(char);
+        const currentLocation = char.location ? db.city.getDistrict(char.location) : null;
+        const currentLocationLabel = currentLocation ? `${currentLocation.emoji}${currentLocation.name}` : (char.location || '当前位置');
+        const districtLabel = `${district?.emoji || '🎒'}${district?.name || '商业街'}`;
+        const desiredItem = overflow.desiredItem || null;
+        const desiredLine = desiredItem
+            ? `\n本轮刚新增/准备带上的物品：${desiredItem.emoji || ''}${desiredItem.name || desiredItem.id || '物品'}。`
+            : '';
+        const antiRepeatBlock = buildRecentNarrationAntiRepeatBlock(db, char, { id: 'organize_bag', type: 'shopping' });
+        const prompt = `你是 ${char.name}，这是一轮普通商业街活动。
+
+本轮行动固定为 [ORGANIZE_BAG] 整理背包。触发原因：背包太重，当前共有 ${totalQuantity}/${safeLimit} 件物品，只能保留 ${targetKeepTotal} 件，其他东西由你自己处理。
+
+当前位置：${currentLocationLabel}
+活动地点：${districtLabel}
+体力：${char.calories ?? 2000}/4000
+金币：${Number(char.wallet || 0)}
+精力：${state.energy} 睡眠债：${state.sleep_debt} 心情：${state.mood} 压力：${state.stress} 饱腹：${state.satiety} 胃负担：${state.stomach_load}${desiredLine}
+
+当前背包：
+${inventory.map(formatInventoryDecisionRow).join('\n') || '- 空'}
+${antiRepeatBlock}
+
+要求：
+- 你自己决定保留哪些物品和数量；不要让系统替你选。
+- 用户送的物品已经标注，处理前要慎重，但最终仍由你按角色处境决定。
+- log 要像普通商业街活动一样自然描写这轮整理背包，不要套固定句式，不要照抄物品清单。
+- chat / diary 只有自然需要时才写，可以留空。
+- 为了同步背包，inventory_keep 必须列出最终保留的 item_id 和数量，总数量必须等于 ${targetKeepTotal}，只能使用当前背包里的 item_id。
+- 返回必须是合法 JSON 对象；字段包含 action、log、chat、diary、inventory_keep；action 固定为 [ORGANIZE_BAG]。不要返回 JSON 之外的任何内容。`;
+
+        const messages = [
+            { role: 'system', content: '你是角色自己的现实行动记录器。只返回合法 JSON 对象，不要输出任何额外解释、markdown、前言或后记。' },
+            { role: 'user', content: prompt }
+        ];
+        recordCityLlmDebug(db, char, 'input', 'city_inventory_organize_action', messages, {
+            model: char.model_name,
+            totalQuantity,
+            limit: safeLimit,
+            location: char.location || ''
+        });
+        let reply = '';
+        try {
+            reply = await callLLM({
+                endpoint: char.api_endpoint,
+                key: char.api_key,
+                model: char.model_name,
+                messages,
+                maxTokens: 3000,
+                temperature: 0.85,
+                debugAttempt: buildCityAttemptRecorder(db, char, 'city_inventory_organize_action', {
+                    totalQuantity,
+                    limit: safeLimit,
+                    location: char.location || ''
+                })
+            });
+        } catch (err) {
+            throw createCityError(`整理背包请求失败，请重试：${err.message}`, 502, true);
+        }
+        recordCityLlmDebug(db, char, 'output', 'city_inventory_organize_action', reply, {
+            model: char.model_name,
+            totalQuantity,
+            limit: safeLimit,
+            location: char.location || ''
+        });
+        let parsed = null;
+        try {
+            parsed = tryParseCityActionReply(reply);
+        } catch (err) {
+            throw createCityError(`整理背包返回的 JSON 无法解析，请重试：${err.message || 'parse_failed'}`, 502, true);
+        }
+        if (!parsed || String(parsed.action || '').trim().toUpperCase() !== '[ORGANIZE_BAG]') {
+            throw createCityError('整理背包返回缺少有效 action。', 502, true);
+        }
+        if (!String(parsed.log || '').trim()) {
+            throw createCityError('整理背包返回缺少可用 log。', 502, true);
+        }
+        if (!Array.isArray(parsed.inventory_keep) && !parsed.keep_items && !parsed.keep) {
+            throw createCityError('整理背包返回缺少 inventory_keep。', 502, true);
+        }
+        return parsed;
     }
 
     function pickSettledShopItemFromNarrations(shopItems = [], richNarrations = null) {
@@ -943,6 +1052,30 @@ ${styleText ? `- 可轻微参考这段既有语气，但只能参考语气，不
         const currentCals = char.calories ?? 2000;
         const districts = db.city.getEnabledDistricts();
         const inventory = db.city.getInventory(char.id);
+        const overflowState = typeof db.city.getInventoryCapacityState === 'function'
+            ? db.city.getInventoryCapacityState(char.id)
+            : null;
+        if (overflowState?.over_limit) {
+            const overflowDistrict = districts.find(d => d.id === 'street')
+                || db.city.getDistrict?.('street')
+                || district
+                || { id: 'street', name: '商业街', emoji: '🎒', type: 'shopping', cal_cost: 2 };
+            try {
+                const overflowResult = await actionService.maybeOrganizeInventoryOverflow?.(
+                    char,
+                    db,
+                    userId,
+                    currentCals,
+                    config,
+                    { district: overflowDistrict }
+                );
+                if (overflowResult?.triggered) {
+                    return { triggered: true, districtId: overflowDistrict.id, mode: 'inventory_overflow_organize' };
+                }
+            } catch (err) {
+                return { triggered: false, districtId: overflowDistrict.id, reason: err.message, canRetry: true };
+            }
+        }
         const availableDistrictItems = getAvailableDistrictItems(db, district.id);
         const districtItemsPrompt = availableDistrictItems.length > 0
             ? `\n[当前目标地点可用商品]\n${district.name} 现在真实可用的商品只有：${formatDistrictItemsForPrompt(availableDistrictItems)}\n- 如果你在 log / diary / chat 里提到具体吃了、买了、拿了什么，只能从上面这些商品里选。\n- 可以不写具体商品；但如果写了，就绝对不要编造清单外的食物或商品。\n- 便利店是购买/补给场景：在便利店买到的食物会先进入背包，不等于当场恢复体力；如果这次真正目的是“吃饭/恢复体力”，优先去餐厅或吃背包里已有食物。\n- 如果地点已锁定为便利店，就把文案写成买了/带走/准备之后吃，不要写成已经坐下吃完并恢复。`
@@ -1757,16 +1890,20 @@ ${recentSameKindBlock}
         const inventoryLimit = Number(promptDb?.city?.getInventorySlotLimit?.() || 10);
         const safeInventoryLimit = Number.isSafeInteger(inventoryLimit) && inventoryLimit > 0 ? inventoryLimit : 10;
         const inventorySlots = Array.isArray(inventory) ? inventory.length : 0;
-        const isInventoryFull = inventorySlots >= safeInventoryLimit;
+        const inventoryQuantity = Array.isArray(inventory)
+            ? inventory.reduce((sum, item) => sum + Math.max(0, Number(item.quantity || 0)), 0)
+            : 0;
+        const isInventoryOverLimit = inventoryQuantity > safeInventoryLimit;
         const inventoryBlock = buildInventoryPromptBlock(promptDb, inventory);
         const foodItems = inventory.filter(i => i.cal_restore > 0);
         const optionsBlock = getCachedCityPromptBlock(
             context.getUserDb(char.user_id || 'default'),
             char.id,
-            'city_survival_options_v1',
+            'city_survival_options_v2',
             {
                 inventory_limit: safeInventoryLimit,
                 inventory_slots: inventorySlots,
+                inventory_quantity: inventoryQuantity,
                 districts: districts.map(d => ({
                     id: d.id,
                     name: d.name,
@@ -1801,8 +1938,8 @@ ${recentSameKindBlock}
                     const foodList = foodItems.map(f => `${f.emoji}${f.name}x${f.quantity}(+${f.cal_restore})`).join(', ');
                     options += `[EAT_ITEM] 🍜 吃背包食物 | ${foodList}\n`;
                 }
-                if (isInventoryFull) {
-                    options += `[ORGANIZE_BAG] 🎒 整理背包 | 背包已满时先整理并丢掉不要的东西；这一轮不买新物品，下一轮再购物\n`;
+                if (isInventoryOverLimit) {
+                    options += `[ORGANIZE_BAG] 🎒 整理背包 | 背包太重，超过 ${safeInventoryLimit} 件；这一轮只整理背包，保留 ${safeInventoryLimit} 件，其他由角色自己处理\n`;
                 }
                 return options.trim();
             }
@@ -1920,6 +2057,7 @@ ${taskInstruction}
 - 背包里的食物 = 选择 EAT_ITEM 才是当场吃掉并恢复体力。
 - 便利店 = 购买包装食品或饮料，默认先放进背包；除非系统明确允许 EAT_ITEM，否则不要把便利店购买写成已经吃完恢复。
 - 如果当前真正目标是缓解饥饿、补体力、吃一顿，优先选择餐厅或 EAT_ITEM，而不是便利店 BUY。
+- 背包总数超过 10 件时，下一步必须是整理背包；整理时只保留 10 件，其他东西由你自己处理。
 [行动约束]${hardConstraintText}
 
 [输出要求]
@@ -1935,6 +2073,7 @@ ${taskInstruction}
 - 想花钱但钱不够时，也要把失败尝试真实写进 log
 - 不要重复 preamble 里刚做过的地点/动作
 - 不要使用高复用套话，不要把“从家离开、肚子里空空的、先把自己安顿好”这类句式当默认开头${freshPrivateChatTailBlock ? freshPrivateChatTailBlock : ''}${antiRepeatBlock ? antiRepeatBlock : ''}${privateChatAntiRepeatBlock ? privateChatAntiRepeatBlock : ''}
+- 如果选择 [ORGANIZE_BAG]，必须额外返回 inventory_keep，列出你最终保留的 item_id 和数量；总数量必须等于 ${Math.min(safeInventoryLimit, inventoryQuantity)}，其他东西由你自己处理，log 自由描写这轮整理。
 
 只返回 JSON：
   {
@@ -4353,7 +4492,8 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         getEngine,
         isCollapsedCityLog,
         regenerateActionNarrations,
-        handleQuestLifecycleAfterAction
+        handleQuestLifecycleAfterAction,
+        getActionService: () => actionService
     });
 
     // Autonomous event loop & RNG minute scheduling
@@ -4871,6 +5011,33 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             return;
         }
 
+        const overflowDistrict = districts.find(d => d.id === 'street')
+            || db.city.getDistrict?.('street')
+            || districts.find(d => d.type === 'shopping')
+            || districts[0]
+            || { id: 'street', name: '商业街', emoji: '🎒', type: 'shopping', cal_cost: 2 };
+        try {
+            const overflowResult = await actionService.maybeOrganizeInventoryOverflow?.(
+                { ...char, calories: currentCals, city_status: currentCityStatus },
+                db,
+                userId,
+                currentCals,
+                config,
+                { district: overflowDistrict }
+            );
+            if (overflowResult?.triggered) {
+                console.log(`[City] ${char.name} -> 🎒 背包超重，自动整理到 ${overflowResult.limit || 10} 件`);
+                return;
+            }
+        } catch (e) {
+            console.error(`[City] ${char.name} 整理背包生成失败: ${e.message}`);
+            logActionParseError(db, userId, char, e, {
+                district: overflowDistrict,
+                locationLabel: overflowDistrict.name || '商业街'
+            });
+            return;
+        }
+
         // Missing model config -> skip autonomous actions. Passive survival
         // ticks above still run, but city actions require generated intent/logs.
         const activeEvents = db.city.getActiveEvents();
@@ -5008,8 +5175,13 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
                     || districts.find(d => d.id === 'street')
                     || districts[0]
                     || { id: 'street', name: '商业街', emoji: '🎒', type: 'shopping', cal_cost: 2 };
+                const organizeState = typeof db.city.getInventoryCapacityState === 'function'
+                    ? db.city.getInventoryCapacityState(char.id)
+                    : null;
                 await actionService.organizeInventoryAction(char, db, userId, currentCals, config, richNarrations, {
-                    district: organizeDistrict
+                    district: organizeDistrict,
+                    requireGeneratedNarration: true,
+                    requireKeepDecision: !!organizeState?.over_limit
                 });
                 console.log(`[City] ${char.name} -> 🎒 整理背包`);
                 return;
@@ -5627,7 +5799,8 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         triggerHackerIntelReply,
         getMedicalStayMinutes,
         getCityNowMs: (config) => getCityDate(config).getTime(),
-        maybeRunCityWebSearchActivity
+        maybeRunCityWebSearchActivity,
+        generateInventoryOrganizeNarrations
     });
 
     const mayorRuntimeService = createMayorRuntimeService({

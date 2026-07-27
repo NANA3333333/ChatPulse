@@ -25,6 +25,12 @@ function getInventoryItemId(item = {}) {
     return String(item.item_id || item.id || '').trim();
 }
 
+function getInventoryQuantityTotal(inventory = []) {
+    return Array.isArray(inventory)
+        ? inventory.reduce((sum, item) => sum + Math.max(0, Number(item.quantity || 0)), 0)
+        : 0;
+}
+
 function formatInventoryItemLabel(item = {}) {
     const giftedQty = Number(item.user_gifted_quantity || item.gifted_quantity || 0);
     const giftText = giftedQty > 0 ? `，用户送的x${giftedQty}` : '';
@@ -45,16 +51,85 @@ function pickDiscardCandidate(inventory = []) {
     return rows.slice().sort((a, b) => score(a) - score(b))[0] || null;
 }
 
-function getInventoryStateForNewItem(db, charId, itemId) {
+function getInventoryLimitState(db, charId) {
     const inventory = db?.city?.getInventory?.(charId) || [];
     const limit = getInventorySlotLimit(db);
-    const hasItem = inventory.some((entry) => getInventoryItemId(entry) === String(itemId || '').trim());
+    const totalQuantity = typeof db?.city?.getInventoryItemCount === 'function'
+        ? Number(db.city.getInventoryItemCount(charId) || 0)
+        : getInventoryQuantityTotal(inventory);
     return {
         inventory,
         limit,
-        hasItem,
-        fullForNewItem: !hasItem && inventory.length >= limit
+        totalQuantity,
+        overLimit: totalQuantity > limit,
+        excessQuantity: Math.max(0, totalQuantity - limit)
     };
+}
+
+function discardInventoryOverflow(db, charId, inventory, excessQuantity) {
+    const removed = [];
+    let remaining = Math.max(0, Number(excessQuantity || 0));
+    let workingInventory = Array.isArray(inventory) ? inventory : [];
+    while (remaining > 0) {
+        const candidate = pickDiscardCandidate(workingInventory);
+        if (!candidate) break;
+        const itemId = getInventoryItemId(candidate);
+        const discardQty = Math.min(remaining, Math.max(1, Number(candidate.quantity || 1)));
+        const discarded = typeof db?.city?.discardInventoryQuantity === 'function'
+            ? db.city.discardInventoryQuantity(charId, itemId, discardQty)
+            : db.city.discardInventorySlot?.(charId, itemId);
+        if (!discarded) break;
+        removed.push(discarded);
+        remaining -= Math.max(1, Number(discarded.quantity || discardQty));
+        workingInventory = db?.city?.getInventory?.(charId) || [];
+    }
+    return removed;
+}
+
+function normalizeInventoryKeepDecision(rawDecision, inventory = [], expectedTotal = 10) {
+    let entries = rawDecision;
+    if (entries && !Array.isArray(entries) && typeof entries === 'object') {
+        entries = Object.entries(entries).map(([item_id, quantity]) => ({ item_id, quantity }));
+    }
+    if (!Array.isArray(entries)) return null;
+
+    const owned = new Map();
+    for (const item of inventory) {
+        const itemId = getInventoryItemId(item);
+        if (!itemId) continue;
+        owned.set(itemId, Math.max(0, Number(item.quantity || 0)));
+    }
+
+    const keep = new Map();
+    for (const entry of entries) {
+        const itemId = String(entry?.item_id || entry?.id || '').trim();
+        if (!itemId || !owned.has(itemId)) return null;
+        const quantity = Number(entry?.quantity ?? entry?.qty ?? entry?.count ?? 0);
+        if (!Number.isSafeInteger(quantity) || quantity < 0) return null;
+        keep.set(itemId, (keep.get(itemId) || 0) + quantity);
+        if (keep.get(itemId) > owned.get(itemId)) return null;
+    }
+
+    const total = Array.from(keep.values()).reduce((sum, quantity) => sum + quantity, 0);
+    if (total !== expectedTotal) return null;
+    return keep;
+}
+
+function discardInventoryToKeepDecision(db, charId, inventory = [], keepDecision) {
+    const removed = [];
+    for (const item of inventory) {
+        const itemId = getInventoryItemId(item);
+        if (!itemId) continue;
+        const quantity = Math.max(0, Number(item.quantity || 0));
+        const keepQty = Math.max(0, Number(keepDecision.get(itemId) || 0));
+        const discardQty = Math.max(0, quantity - keepQty);
+        if (discardQty < 1) continue;
+        const discarded = typeof db?.city?.discardInventoryQuantity === 'function'
+            ? db.city.discardInventoryQuantity(charId, itemId, discardQty)
+            : db.city.discardInventorySlot?.(charId, itemId);
+        if (discarded) removed.push(discarded);
+    }
+    return removed;
 }
 
 function createActionService(deps = {}) {
@@ -80,33 +155,39 @@ function createActionService(deps = {}) {
         triggerHackerIntelReply,
         getMedicalStayMinutes,
         getCityNowMs,
-        maybeRunCityWebSearchActivity
+        maybeRunCityWebSearchActivity,
+        generateInventoryOrganizeNarrations
     } = deps;
 
     async function organizeInventoryAction(char, db, userId, currentCals, config, richNarrations = null, options = {}) {
-        const inventory = db?.city?.getInventory?.(char.id) || [];
-        const limit = getInventorySlotLimit(db);
+        const inventoryState = getInventoryLimitState(db, char.id);
+        const inventory = inventoryState.inventory;
+        const limit = inventoryState.limit;
+        const totalQuantity = inventoryState.totalQuantity;
         const district = options.district
             || db?.city?.getDistrict?.(char.location || '')
             || { id: char.location || 'street', name: '商业街', emoji: '🎒', cal_cost: 2, type: 'shopping' };
-        const desiredItem = options.desiredItem || null;
-        const shouldDiscard = inventory.length >= limit || options.forceDiscard;
-        const candidate = shouldDiscard ? pickDiscardCandidate(inventory) : null;
-        const discarded = candidate && typeof db?.city?.discardInventorySlot === 'function'
-            ? db.city.discardInventorySlot(char.id, getInventoryItemId(candidate))
+        const targetKeepTotal = Math.min(limit, totalQuantity);
+        const keepDecision = inventoryState.overLimit
+            ? normalizeInventoryKeepDecision(richNarrations?.inventory_keep || richNarrations?.keep_items || richNarrations?.keep, inventory, targetKeepTotal)
             : null;
-        const desiredText = desiredItem ? `${desiredItem.emoji || ''}${desiredItem.name || desiredItem.id || '新物品'}` : '';
-        const discardedText = discarded ? formatInventoryItemLabel(discarded) : '';
-        const defaultLog = discarded
-            ? `${char.name} 本来想买${desiredText || '新东西'}，但背包已经满到 ${inventory.length}/${limit} 格，只好先停下来整理，把${discardedText}清了出去，给之后的补给腾出位置。`
-            : shouldDiscard
-                ? `${char.name} 翻了翻背包，发现里面已经满到 ${inventory.length}/${limit} 格，这一轮先专心整理背包，没有继续买新东西。`
-                : `${char.name} 翻了翻背包，把随身物品重新归位，确认现在还有 ${inventory.length}/${limit} 格在用，没有急着添置新东西。`;
-        const explicitLog = options.forceDefaultLog ? '' : String(richNarrations?.log || '').trim();
-        const organizeLog = explicitLog || defaultLog;
-        const organizeNarrations = options.forceDefaultLog
-            ? { log: organizeLog, chat: '', diary: '' }
-            : { ...(richNarrations || {}), log: organizeLog };
+        if (inventoryState.overLimit && !keepDecision && options.requireKeepDecision) {
+            throw new Error(`整理背包生成失败：缺少有效 inventory_keep，必须保留 ${targetKeepTotal} 件`);
+        }
+        const excessQuantity = inventoryState.excessQuantity;
+        const discardedItems = keepDecision
+            ? discardInventoryToKeepDecision(db, char.id, inventory, keepDecision)
+            : excessQuantity > 0 && !options.requireKeepDecision
+                ? discardInventoryOverflow(db, char.id, inventory, excessQuantity)
+                : [];
+        const discarded = discardedItems[0] || null;
+        const fallbackLog = buildCollapsedCityLog(char, '整理背包文案生成失败', { district });
+        const explicitLog = String(richNarrations?.log || '').trim();
+        if (!explicitLog && options.requireGeneratedNarration) {
+            throw new Error('整理背包生成失败：缺少角色自由生成的 log');
+        }
+        const organizeLog = explicitLog || fallbackLog;
+        const organizeNarrations = { ...(richNarrations || {}), log: organizeLog };
         const dCal = -Math.min(20, Math.max(1, Number(district.cal_cost || 2)));
         const newCals = Math.min(4000, Math.max(0, Number(currentCals || 0) + dCal));
         const nextState = applyStateEffectsToCharacter(char, {
@@ -135,10 +216,36 @@ function createActionService(deps = {}) {
             { ...char, ...patch },
             'city_organize_bag',
             discarded
-                ? `角色背包已满，整理背包并丢弃了 ${discarded.name || discarded.item_id || '一个物品'}。`
-                : '角色背包已满，优先整理背包而不是继续购买。'
+                ? `角色背包超过 ${limit} 件，整理背包并处理了 ${discardedItems.map(item => item.name || item.item_id || '物品').join('、')}。`
+                : '角色整理背包，确认物品数量未超过限制。'
         );
-        return { actionLogId, discarded };
+        return { actionLogId, discarded, discardedItems, totalQuantityBefore: totalQuantity, limit };
+    }
+
+    async function maybeOrganizeInventoryOverflow(char, db, userId, currentCals, config, options = {}) {
+        const state = getInventoryLimitState(db, char.id);
+        if (!state.overLimit) {
+            return { triggered: false, state };
+        }
+        const district = options.district
+            || db?.city?.getDistrict?.('street')
+            || db?.city?.getDistrict?.(char.location || '')
+            || { id: 'street', name: '商业街', emoji: '🎒', cal_cost: 2, type: 'shopping' };
+        let richNarrations = options.richNarrations || null;
+        if (!richNarrations && typeof generateInventoryOrganizeNarrations === 'function') {
+            richNarrations = await generateInventoryOrganizeNarrations(char, district, db, {
+                ...state,
+                desiredItem: options.desiredItem || null,
+                source: options.source || ''
+            });
+        }
+        const result = await organizeInventoryAction(char, db, userId, currentCals, config, richNarrations, {
+            ...options,
+            district,
+            requireGeneratedNarration: true,
+            requireKeepDecision: true
+        });
+        return { triggered: true, state, ...result };
     }
 
     async function applyDecision(district, char, db, userId, currentCals, config, activeEvents, richNarrations = null, options = {}) {
@@ -279,23 +386,13 @@ function createActionService(deps = {}) {
                     if (item) {
                         const itemCost = item.buy_price * inflation;
                         if ((char.wallet || 0) >= itemCost) {
-                            if (district.id !== 'restaurant') {
-                                const inventoryState = getInventoryStateForNewItem(db, char.id, item.id);
-                                if (inventoryState.fullForNewItem) {
-                                    await organizeInventoryAction(char, db, userId, currentCals, config, null, {
-                                        district,
-                                        desiredItem: item,
-                                        forceDefaultLog: true
-                                    });
-                                    return;
-                                }
-                            }
                             if (!richNarrations || isWeakCityNarration(richNarrations?.log, char, district)) {
                                 richNarrations = await regenerateActionNarrations(char, district, db, richNarrations || {}, {
                                     item,
                                     currentCals
                                 });
                             }
+                            let shouldOrganizeOverflow = false;
                             if (district.id === 'restaurant') {
                                 db.city.decreaseItemStock(item.id, 1);
                                 dMoney = -itemCost;
@@ -316,19 +413,8 @@ function createActionService(deps = {}) {
                                 broadcastCityEvent(userId, char.id, 'EAT', eatLog);
                                 broadcastCityToChat(userId, char, eatLog, 'EAT', richNarrations);
                             } else {
-                                try {
-                                    db.city.addToInventory(char.id, item.id, 1);
-                                } catch (e) {
-                                    if (e?.code === 'CITY_INVENTORY_FULL') {
-                                        await organizeInventoryAction(char, db, userId, currentCals, config, null, {
-                                            district,
-                                            desiredItem: item,
-                                            forceDefaultLog: true
-                                        });
-                                        return;
-                                    }
-                                    throw e;
-                                }
+                                db.city.addToInventory(char.id, item.id, 1);
+                                shouldOrganizeOverflow = getInventoryLimitState(db, char.id).overLimit;
                                 db.city.decreaseItemStock(item.id, 1);
                                 dMoney = -itemCost;
                                 dCal = -(district.cal_cost || 0);
@@ -362,6 +448,14 @@ function createActionService(deps = {}) {
                             const engine = getEngine(userId);
                             if (engine && typeof engine.broadcastWalletSync === 'function') {
                                 engine.broadcastWalletSync(wsClients, char.id);
+                            }
+
+                            if (shouldOrganizeOverflow) {
+                                await maybeOrganizeInventoryOverflow({ ...char, ...shoppingPatch }, db, userId, newCals, config, {
+                                    district,
+                                    desiredItem: item,
+                                    source: 'shopping'
+                                });
                             }
 
                             return;
@@ -482,7 +576,7 @@ function createActionService(deps = {}) {
         }
     }
 
-    return { applyDecision, organizeInventoryAction };
+    return { applyDecision, organizeInventoryAction, maybeOrganizeInventoryOverflow };
 }
 
 module.exports = { createActionService };

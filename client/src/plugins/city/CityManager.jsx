@@ -39,6 +39,9 @@ import { useLanguage } from '../../LanguageContext';
 
 const FALLBACK_AVATAR = defaultAvatarUrl('User');
 const avatarSrc = (url, apiUrl) => resolveAvatarUrl(url, apiUrl) || FALLBACK_AVATAR;
+const getInventoryQuantityTotal = (inventory = []) => Array.isArray(inventory)
+    ? inventory.reduce((sum, item) => sum + Math.max(0, Number(item.quantity || 0)), 0)
+    : 0;
 
 const EMPTY_DISTRICT = {
     id: '', name: '', emoji: '🏬', type: 'generic', description: '',
@@ -684,6 +687,7 @@ export default function CityManager({ apiUrl, onRefreshLogs, onOpenLogs }) {
     const totalActionsLastHour = economy?.actions_last_hour?.reduce((sum, item) => sum + Number(item.count || 0), 0) || 0;
     const activeDistrictType = selectedDistrictDraft?.type || 'generic';
     const selectedInventory = selectedCharacter?.inventory || [];
+    const selectedInventoryQuantity = getInventoryQuantityTotal(selectedInventory);
     const dayBuckets = lastSevenDays();
     const logVolumeTrend = dayBuckets.map((day) => recentLogs.filter((log) => dayKey(log.timestamp) === day.key).length);
     const logVolumeLabels = dayBuckets.map((day) => day.label);
@@ -1098,7 +1102,7 @@ export default function CityManager({ apiUrl, onRefreshLogs, onOpenLogs }) {
             <div className="resident-operation-layout">
                 <aside className="resident-list"><label><Search /><input value={residentSearch} onChange={(event) => setResidentSearch(event.target.value)} placeholder={tx('Search resident', '搜索角色')} /></label>{visibleCharacters.map((character) => <button key={character.id} className={selectedCharacterId === character.id ? 'active' : ''} type="button" onClick={() => setSelectedCharacterId(character.id)}><AvatarWithFrame size={36} frame={character.avatar_frame} src={avatarSrc(character.avatar, apiUrl)} fallbackSrc={FALLBACK_AVATAR} alt="" /><span><strong>{character.name}</strong><small>{character.location || 'home'}</small></span><ChevronRight /></button>)}{!visibleCharacters.length && <p className="muted">{tx('No residents match this search.', '没有符合搜索条件的角色。')}</p>}</aside>
                 <section className="supply-form">
-                    {selectedCharacter && <div className="selected-resident"><AvatarWithFrame size={54} frame={selectedCharacter.avatar_frame} src={avatarSrc(selectedCharacter.avatar, apiUrl)} fallbackSrc={FALLBACK_AVATAR} alt="" /><div><span>{tx('Current target', '当前补给对象')}</span><h2>{selectedCharacter.name}</h2><p>{tx('Coins', '金币')} ¥{formatMoney(selectedCharacter.wallet)} · {tx('Energy', '体力')} {selectedCharacter.calories} · {tx('Inventory', '背包')} {(selectedCharacter.inventory || []).length}/10</p></div></div>}
+                    {selectedCharacter && <div className="selected-resident"><AvatarWithFrame size={54} frame={selectedCharacter.avatar_frame} src={avatarSrc(selectedCharacter.avatar, apiUrl)} fallbackSrc={FALLBACK_AVATAR} alt="" /><div><span>{tx('Current target', '当前补给对象')}</span><h2>{selectedCharacter.name}</h2><p>{tx('Coins', '金币')} ¥{formatMoney(selectedCharacter.wallet)} · {tx('Energy', '体力')} {selectedCharacter.calories} · {tx('Inventory', '背包')} {selectedInventoryQuantity}/10</p></div></div>}
                     <div className="supply-tabs">{[{ id: 'gold', label: tx('Coins', '金币'), icon: Coins }, { id: 'calories', label: tx('Energy', '体力'), icon: Heart }, { id: 'item', label: tx('Item', '物品'), icon: Gift }].map(({ id, label, icon: Icon }) => <button key={id} type="button" className={supplyMode === id ? 'active' : ''} onClick={() => setSupplyMode(id)}>{React.createElement(Icon)}{label}</button>)}</div>
                     {supplyMode === 'item' ? <label className="supply-field"><span>{tx('Choose item', '选择物品')}</span><select value={supplyItemId} onChange={(event) => setSupplyItemId(event.target.value)}>{items.map((item) => <option key={item.id} value={item.id}>{item.emoji} {item.name}</option>)}</select></label> : <label className="supply-field"><span>{tx('Amount', '补给数量')}</span><input type="number" value={supplyAmount} onChange={(event) => setSupplyAmount(Number(event.target.value))} /><small>{tx('Written to character state immediately.', '执行后将立即写入角色状态与商业街日志。')}</small></label>}
                     <ToolbarButton primary onClick={submitSupply} disabled={!selectedCharacter || savingSupply}>{savingSupply ? <LoaderCircle className="spin" /> : <CheckCircle />}{tx('Confirm supply', '确认补给')}</ToolbarButton>

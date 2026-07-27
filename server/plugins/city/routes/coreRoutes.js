@@ -21,7 +21,8 @@ function registerCoreCityRoutes(app, deps) {
         getEngine,
         isCollapsedCityLog,
         regenerateActionNarrations,
-        handleQuestLifecycleAfterAction
+        handleQuestLifecycleAfterAction,
+        getActionService
     } = deps;
 
     app.get('/api/city/logs', authMiddleware, (req, res) => {
@@ -360,7 +361,37 @@ function registerCoreCityRoutes(app, deps) {
                 itemEmoji: item.emoji,
                 quantity: safeQuantity
             });
-            res.json({ success: true, inventory: req.db.city.getInventory(characterId) });
+            const actionService = typeof getActionService === 'function' ? getActionService() : null;
+            const state = typeof req.db.city.getInventoryCapacityState === 'function'
+                ? req.db.city.getInventoryCapacityState(characterId)
+                : null;
+            let organizeResult = null;
+            let organizeError = '';
+            if (state?.over_limit && typeof actionService?.maybeOrganizeInventoryOverflow === 'function') {
+                const latestChar = req.db.getCharacter(characterId) || char;
+                const organizeDistrict = req.db.city.getDistrict?.('street')
+                    || req.db.city.getDistrict?.(latestChar.location || '')
+                    || { id: 'street', name: '商业街', emoji: '🎒', type: 'shopping', cal_cost: 2 };
+                try {
+                    organizeResult = await actionService.maybeOrganizeInventoryOverflow(
+                        latestChar,
+                        req.db,
+                        req.user.id,
+                        latestChar.calories ?? 2000,
+                        req.db.city.getConfig(),
+                        { district: organizeDistrict, desiredItem: item, source: 'user_gift' }
+                    );
+                } catch (err) {
+                    organizeError = err.message || 'organize_failed';
+                    console.warn(`[City] 用户赠送后整理背包失败: ${organizeError}`);
+                }
+            }
+            res.json({
+                success: true,
+                inventory: req.db.city.getInventory(characterId),
+                organized: !!organizeResult?.triggered,
+                ...(organizeError ? { organize_error: organizeError } : {})
+            });
         } catch (e) {
             res.status(e.code === 'CITY_INVENTORY_FULL' ? 409 : 500).json({ error: e.message });
         }

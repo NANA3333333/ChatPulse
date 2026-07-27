@@ -44,6 +44,9 @@ const INITIAL_VISIBLE_ROW_LIMIT = 300;
 const ROW_LIMIT_STEP = 300;
 const normalizeSearchText = (value) => String(value || '').trim().toLowerCase();
 const isEnabledConfigValue = (value) => value === true || value === 1 || String(value || '').toLowerCase() === '1' || String(value || '').toLowerCase() === 'true';
+const getInventoryQuantityTotal = (inventory = []) => Array.isArray(inventory)
+    ? inventory.reduce((sum, item) => sum + Math.max(0, Number(item.quantity || 0)), 0)
+    : 0;
 
 const LOCATION_NAMES = {
     factory: { zh: '🏭 工厂', en: '🏭 Factory' },
@@ -671,6 +674,7 @@ function CityBrief({ currentWeather, weatherVisual, visibleAnnouncements, events
         .filter((event) => String(event.event_type || '').toLowerCase() !== 'weather')
         .slice(0, 3);
     const inventory = selected?.inventory || [];
+    const inventoryQuantity = getInventoryQuantityTotal(inventory);
     const status = selected?.raw ? getStatusDetails(selected.raw.city_status, isEn) : null;
 
     return (
@@ -743,7 +747,7 @@ function CityBrief({ currentWeather, weatherVisual, visibleAnnouncements, events
                     <div className="detail-metrics">
                         <div><span>{tx('Coins', '金币')}</span><strong>{selected.wallet.toFixed(0)}</strong></div>
                         <div><span>{tx('Energy', '精力')}</span><strong>{selected.energy}</strong></div>
-                        <div><span>{tx('Inventory', '背包')}</span><strong>{inventory.length}/10</strong></div>
+                        <div><span>{tx('Inventory', '背包')}</span><strong>{inventoryQuantity}/10</strong></div>
                     </div>
                     <div className="progress"><span style={{ width: `${selected.energy}%` }} /></div>
                     <div className="inventory-preview">
