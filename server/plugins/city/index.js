@@ -4966,7 +4966,6 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
             );
             db.city.logAction(char.id, 'STARVE', `${char.name} 因为饥饿晕倒了 😵`, -metabolismRate, 0);
             broadcastCityEvent(userId, char.id, 'STARVE', `${char.name} 饿晕了！`);
-            broadcastCityToChat(userId, char, `我快饿晕了……能帮帮我吗 😩`, 'STARVE');
             return;
         }
 
@@ -5912,16 +5911,14 @@ B=${charB.name}(${personaB}) | 背包=${invBStr} | 金币=${charB.wallet ?? 0} |
         try {
             const db = getUserDb(userId);
             ensureCityDb(db);
-            const config = db.city.getConfig();
-            const chatProb = parseInt(config.city_chat_probability) || 0;  // legacy fallback gate
             const explicitChat = sanitizeCityNarrationText(richNarrations?.chat);
             const explicitDiary = sanitizeCityNarrationText(richNarrations?.diary);
 
             // 1. Private chat message to user
-            // Prefer explicit intent from the character's structured output.
-            if (char.sys_city_notify && (explicitChat || (!richNarrations && chatProb > 0 && Math.random() * 100 < chatProb))) {
+            // Only send private chat when the character explicitly generated it.
+            if (char.sys_city_notify && explicitChat) {
                 try {
-                    const chatContent = explicitChat || (!richNarrations ? eventSummary : null);
+                    const chatContent = explicitChat;
                     if (chatContent && String(chatContent).trim() !== '') {
                         const engine = getEngine(userId);
                         const wsClients = getWsClients(userId);
