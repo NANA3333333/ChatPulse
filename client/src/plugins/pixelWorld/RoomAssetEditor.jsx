@@ -3782,7 +3782,7 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
         }, userCharacter)
       };
     });
-    setRoomBehaviorStatus('已执行房间行为：两位小人面对彼此。');
+    setBehaviorStatus('已执行房间行为：两位小人面对彼此。');
   }
 
   function approachRoomPlayer() {
@@ -3818,7 +3818,7 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
         }, userCharacter)
       };
     });
-    setRoomBehaviorStatus('已执行房间行为：角色靠近玩家，距离进入互动阈值。');
+    setBehaviorStatus('已执行房间行为：角色靠近玩家，距离进入互动阈值。');
   }
 
   function wanderRoomPlayer() {
@@ -3836,7 +3836,7 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
       stepTime: 0,
       bubble: `走到${point.label}`
     });
-    setRoomBehaviorStatus(`已执行房间行为：角色移动到${point.label}。`);
+    setBehaviorStatus(`已执行房间行为：角色移动到${point.label}。`);
   }
 
   function clearRoomPlayerBubbles() {
@@ -3846,7 +3846,7 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
         return [character.id, normalizeRoomEditorPlayerState({ ...current, bubble: '' }, character)];
       })
     ));
-    setRoomBehaviorStatus('已清空房间小人的动作气泡。');
+    setBehaviorStatus('已清空房间小人的动作气泡。');
   }
 
   function resetRoomPlayers() {
@@ -3861,7 +3861,7 @@ function RoomAssetEditor({ scene, apiUrl = '/api', userProfile = null }) {
     queuePlayersRender(nextPlayers, { immediate: true });
     setControlledPlayerIdState(commercialV2DefaultControlledPlayerId);
     setPlayerScaleState(roomEditorDefaultPlayerScale);
-    setRoomBehaviorStatus('两位小人已回到房间默认站位。');
+    setBehaviorStatus('两位小人已回到房间默认站位。');
   }
 
   function toggleRoomBehaviorFold(key) {

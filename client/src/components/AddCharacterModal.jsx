@@ -267,7 +267,7 @@ function AddCharacterModal({ isOpen, onClose, onAdd, apiUrl }) {
                             </div>
                             <div className="dressup-frame-strip">
                                 {FRAMES.map(frame => (
-                                    <img key={frame} src={getFrameSrc(selectedHair, selectedOutfit, previewAction, previewDirection, frame)} alt="" />
+                                    <img key={frame} src={getFrameSrc(selectedCharacter, selectedLook, previewAction, previewDirection, frame)} alt="" />
                                 ))}
                             </div>
                         </div>
