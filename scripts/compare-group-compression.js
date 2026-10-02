@@ -1,11 +1,11 @@
 const crypto = require('crypto');
-const { getUserDb } = require('../server/db');
-const { getMemory } = require('../server/memory');
-const { callLLM } = require('../server/llm');
-const { buildUniversalContext } = require('../server/contextBuilder');
-const { getTokenCount } = require('../server/utils/tokenizer');
-const { getAdaptiveTailWindowSize } = require('../server/utils/contextWindow');
-const { getEmotionBehaviorGuidance } = require('../server/emotion');
+const { getUserDb } = require("../server/platform/db/userDatabase.js");
+const { getMemory } = require("../server/features/memory/index.js");
+const { callLLM } = require("../server/platform/llm/client.js");
+const { buildUniversalContext } = require("../server/features/conversation-context/index.js");
+const { getTokenCount } = require("../server/platform/llm/tokenizer.js");
+const { getAdaptiveTailWindowSize } = require("../server/features/conversation-context/window.js");
+const { getEmotionBehaviorGuidance } = require("../server/features/characters/emotion.js");
 
 function parseArgs(argv) {
     const args = { user: null, group: null, character: null };

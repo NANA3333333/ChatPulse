@@ -109,7 +109,7 @@ npm --prefix client run build
 
 ```powershell
 cd client
-npm exec eslint -- src/App.jsx src/components/MemoryLibraryPanel.jsx
+npm exec eslint -- src/app src/features/memory
 ```
 
 如果重启后端，优先使用项目内 Node20，避免系统 Node 和 `better-sqlite3` ABI 不匹配：

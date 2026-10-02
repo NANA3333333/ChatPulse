@@ -12,7 +12,11 @@
     "desktop:pack": "npm run build:client && electron-builder --dir",
     "desktop:dist": "npm run build:client && electron-builder --win nsis --x64",
     "migrate:qdrant": "npm --prefix server run migrate:qdrant",
-    "cleanup:city-memories": "npm --prefix server run cleanup:city-memories"
+    "cleanup:city-memories": "npm --prefix server run cleanup:city-memories",
+    "check:architecture": "node scripts/check-architecture.cjs",
+    "docs:routes": "node scripts/check-architecture.cjs --write-routes",
+    "test:server": "npm --prefix server test",
+    "test:e2e": "node tests/e2e/run.cjs"
   },
   "dependencies": {
     "docx": "^9.6.1",

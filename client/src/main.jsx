@@ -1,8 +1,8 @@
 import { createRoot } from 'react-dom/client'
-import './index.css'
-import App from './App.jsx'
-import { LanguageProvider } from './LanguageContext.jsx'
-import { AuthProvider } from './AuthContext.jsx'
+import "./index.css"
+import App from "./app/App.jsx"
+import { LanguageProvider } from "./shared/i18n/LanguageContext.jsx"
+import { AuthProvider } from "./features/account/AuthContext.jsx"
 
 const CONFIGURED_API_URL = import.meta.env.VITE_API_URL || `${window.location.origin}/api`;
 const ASSET_PRELOAD_RECOVERY_KEY = 'chatpulse:asset-preload-recovery:v1';

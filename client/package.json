@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
+    "lint": "eslint . --max-warnings 0",
+    "preview": "vite preview",
+    "test:private-chat": "node src/features/private-chat/tests/privateReplyReroll.e2e.cjs && node src/features/private-chat/tests/privateMessages.e2e.cjs && node src/features/private-chat/tests/contextWindow.e2e.cjs"
   },
   "dependencies": {
     "lucide-react": "^0.575.0",

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Folder } from 'lucide-react';
-import { DESKTOP_APP_ICONS } from './desktopUtils';
+import { DESKTOP_APP_ICONS } from "./desktopUtils";
 
 function DesktopAppButton({
   app,
@@ -159,7 +159,7 @@ function DesktopAppButton({
   );
 }
 
-function DesktopFolderAppTile({
+export function DesktopFolderAppTile({
   app,
   lang,
   viewMode = 'icons',

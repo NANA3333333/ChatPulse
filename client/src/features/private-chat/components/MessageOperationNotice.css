@@ -1,0 +1,14 @@
+.private-message-notice {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 8px 16px;
+    color: #8f362e;
+    background: #fff3ef;
+    border-top: 1px solid #eed0c8;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.private-message-notice code { user-select: text; }
+.private-message-notice button { margin-right: 12px; cursor: pointer; }

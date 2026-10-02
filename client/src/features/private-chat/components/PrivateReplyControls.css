@@ -1,0 +1,39 @@
+.private-reply-controls-wrap {
+    margin: -10px 12px 16px 58px;
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+.private-reply-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 28px;
+}
+.private-reply-controls button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+}
+.private-reply-controls button:hover:not(:disabled) {
+    color: var(--accent-color, #ad6583);
+    background: rgba(180, 120, 150, 0.1);
+}
+.private-reply-controls button:focus-visible {
+    outline: 2px solid var(--accent-color, #ad6583);
+    outline-offset: 2px;
+}
+.private-reply-controls button:disabled { opacity: 0.35; cursor: default; }
+.private-reply-count { min-width: 32px; text-align: center; font-variant-numeric: tabular-nums; }
+.private-reply-error { color: #b44444; margin-top: 4px; overflow-wrap: anywhere; }
+.private-reply-run-id { margin-top: 4px; font-size: 10px; user-select: text; }
+.private-reply-spinner { animation: private-reply-spin 1s linear infinite; }
+@keyframes private-reply-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .private-reply-spinner { animation: none; } }

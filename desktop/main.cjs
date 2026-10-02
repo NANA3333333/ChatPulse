@@ -5,7 +5,7 @@ const http = require('http');
 const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
-const { prepareDesktopUserData } = require('./dataMigration.cjs');
+const { prepareDesktopUserData } = require("./dataMigration.cjs");
 
 const isWindows = process.platform === 'win32';
 const isDev = !app.isPackaged;

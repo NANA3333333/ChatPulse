@@ -1,5 +1,7 @@
 # ChatPulse
 
+源码按功能组织：[功能导航](docs/features/README.md) · [当前架构](docs/ARCHITECTURE.md) · [API 对应表](docs/features/api-map.md) · [实验功能](docs/features/experiments.md)
+
 ## English
 
 ChatPulse is a local-first AI social simulation desktop app.

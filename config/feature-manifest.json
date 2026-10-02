@@ -1,0 +1,6 @@
+{
+  "labs": {
+    "mcp": { "enabled": true, "description": "MCP tools, knowledge and task experiment UI" },
+    "scene-editor": { "enabled": true, "description": "Optional scene asset editing and AI diagnostics; player scenes remain available when disabled" }
+  }
+}

@@ -2,13 +2,13 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execSync } = require('child_process');
-const { getUserDb } = require('../server/db');
-const { getMemory } = require('../server/memory');
-const { callLLM } = require('../server/llm');
-const { buildUniversalContext } = require('../server/contextBuilder');
-const { getAdaptiveTailWindowSize } = require('../server/utils/contextWindow');
-const { getEmotionBehaviorGuidance } = require('../server/emotion');
-const { getTokenCount } = require('../server/utils/tokenizer');
+const { getUserDb } = require("../server/platform/db/userDatabase.js");
+const { getMemory } = require("../server/features/memory/index.js");
+const { callLLM } = require("../server/platform/llm/client.js");
+const { buildUniversalContext } = require("../server/features/conversation-context/index.js");
+const { getAdaptiveTailWindowSize } = require("../server/features/conversation-context/window.js");
+const { getEmotionBehaviorGuidance } = require("../server/features/characters/emotion.js");
+const { getTokenCount } = require("../server/platform/llm/tokenizer.js");
 
 function parseArgs(argv) {
     const args = {

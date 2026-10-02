@@ -9109,6 +9109,20 @@
   display: none !important;
 }
 
+.app-container.tab-commercial_street .desktop-home-underlay,
+.app-container.tab-commercial_street .desktop-home-underlay .desktop-home,
+.app-container.tab-pixel_cottage .desktop-home-underlay,
+.app-container.tab-pixel_cottage .desktop-home-underlay .desktop-home {
+  animation: none;
+}
+
+.app-container.tab-commercial_street .desktop-home-underlay .desktop-app,
+.app-container.tab-pixel_cottage .desktop-home-underlay .desktop-app {
+  transform: none;
+  transition: none;
+  will-change: auto;
+}
+
 .app-container:not(.tab-desktop).is-window-floating .desktop-browser-chrome {
   z-index: 160;
   overflow: hidden;

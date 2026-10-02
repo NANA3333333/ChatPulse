@@ -1,5 +1,5 @@
-const { getUserDb } = require('../server/db');
-const { getMemory } = require('../server/memory');
+const { getUserDb } = require("../server/platform/db/userDatabase.js");
+const { getMemory } = require("../server/features/memory/index.js");
 
 function matchesAny(text, patterns) {
     return patterns.some(pattern => pattern.test(text));

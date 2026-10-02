@@ -1,10 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 
-const authDb = require('../server/authDb');
-const { getUserDb } = require('../server/db');
-const { getMemory } = require('../server/memory');
-const qdrant = require('../server/qdrant');
+const authDb = require("../server/features/account/authRepository.js");
+const { getUserDb } = require("../server/platform/db/userDatabase.js");
+const { getMemory } = require("../server/features/memory/index.js");
+const qdrant = require("../server/platform/vectors/qdrant.js");
 
 const CITY_MEMORY_LOCATIONS = new Set([
     'park', 'restaurant', 'home', 'factory', 'convenience_store', 'school', 'street',

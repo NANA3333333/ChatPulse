@@ -233,7 +233,7 @@ scripts/
 - Restored city ticking, city actions, social collisions, private proactive chat, and group proactive chat step by step after isolating the server starvation issue.
 - Added a background task queue panel in Settings with real queue stats, 24-hour task history, and grouped/collapsible display by character, group, or city system.
 - Improved city log truncation handling: suspiciously cut-off street logs are hidden from characters and shown to users with a muted collapsible UI.
-- Updated hospital recovery to settle every 5 minutes during a medical stay instead of only applying an instant one-shot heal.
+- Updated hospital recovery to apply the stabilization boost immediately on admission, while the medical stay now only keeps the observation window.
 - Expanded private-chat-to-city routing guidance so location, food, gifts, and real-life state questions are more likely to load city context.
 - Fixed the context stats panel so `last_conversation_routed_to_city` correctly reads `city_detail` from the latest snapshot.
 - Cleaned up several frontend issues: contact list layout, login/reset-local-state stability, queue panel readability, and host/API consistency between `127.0.0.1:5173` and `127.0.0.1:8000`.

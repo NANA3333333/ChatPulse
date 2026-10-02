@@ -7,7 +7,8 @@
     "start": "node index.js",
     "migrate:qdrant": "node ../scripts/migrate-memories-to-qdrant.js",
     "cleanup:city-memories": "node ../scripts/cleanup-city-memories.js",
-    "test": "node --test"
+    "test": "node --test",
+    "test:private-chat": "node --test features/private-chat/tests"
   },
   "keywords": [],
   "author": "",

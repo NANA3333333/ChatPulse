@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import AvatarWithFrame from '../components/AvatarWithFrame';
-import { defaultAvatarUrl } from '../utils/avatar';
+import AvatarWithFrame from "../shared/media/AvatarWithFrame.jsx";
+import { defaultAvatarUrl } from "../shared/media/avatar.js";
 import {
   Accessibility,
+  ArrowLeft,
   Battery,
   BatteryCharging,
   Bell,
@@ -60,8 +61,8 @@ import {
   getCurrentDesktopWeatherEvent,
   getDesktopLunarInfo,
   getDesktopWeatherVisual,
-} from './desktopUtils';
-import DesktopAppButton from './DesktopAppButton';
+} from "./desktopUtils";
+import DesktopAppButton from "./DesktopAppButton";
 
 const API_URL = import.meta.env.VITE_API_URL || `${window.location.origin}/api`;
 function DesktopTaskbar({
@@ -583,7 +584,10 @@ function DesktopTaskbar({
   const exitingWidgetNews = widgetNewsMotion.previous;
 
   const unreadNotificationCount = Number(notificationBadgeCount) || 0;
-  const todayDate = useMemo(() => new Date(), [dateTime.date]);
+  const todayDate = useMemo(() => {
+    const [year, month, day] = dateTime.date.split('/').map(Number);
+    return new Date(year, month - 1, day);
+  }, [dateTime.date]);
   const selectedLunarInfo = useMemo(() => (
     getDesktopLunarInfo(selectedCalendarDate, lang)
   ), [lang, selectedCalendarDate]);
