@@ -3642,3 +3642,118 @@
     animation-duration: 0.01ms !important;
   }
 }
+
+/* The event list remains the primary reading surface. */
+.city-log-panel .log-page {
+  grid-template-rows: 72px minmax(0, 1fr);
+}
+
+.city-log-panel .resident-tab {
+  height: 52px;
+  flex-basis: 170px;
+  grid-template-columns: 38px minmax(0, 1fr) 30px;
+}
+
+.city-log-panel .resident-tab-all {
+  flex-basis: 178px;
+}
+
+.city-log-panel .resident-tab .avatar-md {
+  width: 36px;
+  height: 36px;
+}
+
+.city-log-panel .resident-tab .energy-ring {
+  width: 29px;
+  height: 29px;
+}
+
+.city-log-panel .resident-tab-copy {
+  gap: 1px;
+}
+
+.city-log-panel .log-workspace {
+  grid-template-columns: 88px minmax(0, 1fr);
+}
+
+.city-log-panel .category-rail {
+  gap: 4px;
+  padding: 10px 6px;
+}
+
+.city-log-panel .category-rail button {
+  min-height: 59px;
+}
+
+.city-log-panel .workspace-scroll {
+  grid-template-columns: minmax(0, 1fr) 270px;
+}
+
+.city-log-panel .city-brief > section {
+  padding: 14px;
+}
+
+@media (min-width: 761px) and (max-width: 1120px) {
+  .city-log-panel .city-brief {
+    display: block;
+  }
+
+  .city-log-panel .workspace-scroll {
+    grid-template-columns: minmax(0, 1fr) 230px;
+  }
+}
+
+.city-log-panel .empty-state button {
+  min-height: 34px;
+  margin-top: 12px;
+  padding: 0 13px;
+  border: 1px solid #315d9f;
+  border-radius: 5px;
+  color: #ffffff;
+  background: #315d9f;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.city-log-panel .empty-state button:hover {
+  background: #244b84;
+}
+
+@media (min-width: 761px) {
+  .city-log-panel .app-shell {
+    grid-template-rows: 77px minmax(0, 1fr);
+  }
+
+  .city-log-panel .topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: 34px 36px;
+    gap: 2px 12px;
+    padding: 2px 12px;
+    background: #ffffff;
+  }
+
+  .city-log-panel .page-tabs {
+    gap: 8px;
+  }
+
+  .city-log-panel .top-meta {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: flex-start;
+    gap: 12px;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  .city-log-panel .top-meta > span {
+    display: flex;
+    flex: 0 0 auto;
+  }
+
+  .city-log-panel .global-search {
+    display: grid;
+    width: 200px;
+    flex: 0 0 200px;
+    margin-left: auto;
+  }
+}

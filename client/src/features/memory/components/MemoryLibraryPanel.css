@@ -1525,3 +1525,119 @@
     height: 24px;
   }
 }
+
+/* Keep the map/search workspace visible before the status summary. */
+.memory-core-loop-page {
+  gap: 8px;
+}
+
+.memory-core-loop-page .memory-core-header {
+  box-shadow: none;
+}
+
+.memory-core-loop-page .memory-healthbar {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0;
+  overflow-x: auto;
+  border: 1px solid var(--mem-line);
+  border-radius: 8px;
+  background: var(--mem-panel);
+}
+
+.memory-core-loop-page .memory-health-item {
+  flex: 1 0 148px;
+  min-height: 58px;
+  padding: 8px 10px;
+  border: 0;
+  border-right: 1px solid var(--mem-line);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.memory-core-loop-page .memory-health-item:last-child {
+  border-right: 0;
+}
+
+.memory-core-loop-page .memory-health-item > span {
+  width: 30px;
+  height: 30px;
+  flex-basis: 30px;
+}
+
+.memory-core-loop-page .memory-health-item p {
+  margin-top: 1px;
+}
+
+@container (min-width: 960px) {
+  .memory-map-screen {
+    grid-template-columns: minmax(190px, 230px) minmax(0, 1fr) minmax(250px, 300px);
+    gap: 10px;
+  }
+}
+
+/* A document workspace: compact command bar, persistent collection list and readable canvas. */
+.memory-core-loop-page {
+  --mem-ink: #1b2533;
+  --mem-muted: #687686;
+  --mem-soft: #f4f6f8;
+  --mem-panel: #ffffff;
+  --mem-line: #d9e0e6;
+  --mem-blue: #356eaa;
+  --mem-blue-soft: #eaf2fa;
+  --mem-blue-strong: #245984;
+  --mem-shadow: 0 2px 8px rgba(27, 37, 51, 0.05);
+}
+
+.memory-core-loop-page .memory-core-header,
+.memory-core-loop-page .memory-map-sidebar,
+.memory-core-loop-page .memory-map-main,
+.memory-core-loop-page .memory-inspector {
+  border-radius: 6px;
+  box-shadow: var(--mem-shadow);
+}
+
+.memory-core-loop-page .memory-core-tabs {
+  background: #f1f4f7;
+  border-color: transparent;
+}
+
+.memory-core-loop-page .memory-core-tabs button.is-active {
+  box-shadow: 0 1px 3px rgba(27, 37, 51, 0.12);
+}
+
+.memory-core-loop-page .memory-health-item button {
+  flex: 0 0 auto;
+  min-width: 44px;
+  white-space: nowrap;
+}
+
+@container (min-width: 760px) {
+  .memory-core-loop-page .memory-core-header {
+    grid-template-columns: minmax(165px, 1fr) auto auto;
+    min-height: 62px;
+    padding: 9px 12px;
+  }
+
+  .memory-core-loop-page .memory-core-actions {
+    justify-content: flex-end;
+  }
+
+  .memory-core-loop-page .memory-core-tabs button {
+    flex: 0 0 auto;
+    padding-inline: 8px;
+    white-space: nowrap;
+  }
+}
+
+@container (min-width: 900px) and (max-width: 1180px) {
+  .memory-core-loop-page .memory-map-screen:has(.memory-inspector) {
+    grid-template-columns: minmax(190px, 0.8fr) minmax(0, 1.6fr) minmax(220px, 1fr);
+  }
+
+  .memory-core-loop-page .memory-map-screen:has(.memory-inspector) .memory-inspector {
+    grid-column: auto;
+    position: sticky;
+    max-height: calc(100vh - 120px);
+  }
+}

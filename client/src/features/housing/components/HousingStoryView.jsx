@@ -68,7 +68,7 @@ export function HousingStoryView({
                                 {homelessCount} {text.homeless}
                             </small>
                         </div>
-                        {recommendableCharacters.slice(0, 5).map((item, index) => (
+                        {recommendableCharacters.map((item, index) => (
                             <button
                                 type="button"
                                 key={item.id}
@@ -106,7 +106,7 @@ export function HousingStoryView({
                                 {availableHousingTiers.length} {isEn ? text.homeUnit : '个可用'}
                             </small>
                         </div>
-                        {availableHousingTiers.slice(0, 5).map((item, index) => (
+                        {availableHousingTiers.map((item, index) => (
                             <button
                                 type="button"
                                 key={item.id}

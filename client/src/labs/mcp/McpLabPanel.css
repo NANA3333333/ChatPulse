@@ -1155,3 +1155,94 @@
     animation: none !important;
   }
 }
+
+/* The task rail is the one navigation surface for the desktop workbench. */
+@media (min-width: 900px) {
+  .mcp-lab-redesign .mcp-lab-topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-height: 62px;
+  }
+
+  .mcp-lab-redesign .mcp-lab-toolbar {
+    display: none;
+  }
+
+  .mcp-lab-redesign .mcp-lab-frame {
+    grid-template-columns: 154px minmax(0, 1fr) minmax(270px, 31%);
+  }
+
+  .mcp-lab-redesign .mcp-lab-frame.is-inspector-closed {
+    grid-template-columns: 154px minmax(0, 1fr);
+  }
+
+  .mcp-lab-redesign .mcp-lab-rail-button {
+    display: flex;
+    justify-content: flex-start;
+    gap: 10px;
+    height: 46px;
+    padding: 0 10px;
+    text-align: left;
+  }
+
+  .mcp-lab-redesign .mcp-lab-rail-copy {
+    display: block;
+    min-width: 0;
+  }
+
+  .mcp-lab-redesign .mcp-lab-rail-count {
+    position: static;
+    margin-left: auto;
+  }
+}
+
+/* Research console: one navigation rail, one task surface, one result inspector. */
+.mcp-lab-panel.mcp-lab-redesign {
+  --mcp-lab-bg: #eef2f5;
+  --mcp-lab-surface: #ffffff;
+  --mcp-lab-ink: #1c2b39;
+  --mcp-lab-muted: #607184;
+  --mcp-lab-line: #d7e0e8;
+  --mcp-lab-blue: #286697;
+  --mcp-lab-teal: #2e726a;
+  --mcp-lab-shadow: 0 2px 8px rgba(30, 50, 70, 0.05);
+  background: #eef2f5;
+}
+
+.mcp-lab-redesign .mcp-lab-topbar {
+  border-bottom-color: var(--mcp-lab-line);
+  background: #ffffff;
+  backdrop-filter: none;
+}
+
+.mcp-lab-redesign .mcp-lab-rail,
+.mcp-lab-redesign .mcp-lab-workspace,
+.mcp-lab-redesign .mcp-lab-inspector,
+.mcp-lab-redesign .mcp-lab-surface {
+  border-radius: 5px;
+  box-shadow: none;
+}
+
+.mcp-lab-redesign .mcp-lab-rail-button.is-active,
+.mcp-lab-redesign .mcp-lab-inspector-tabs button.is-active {
+  border-color: #bdd4e5;
+  color: #245b86;
+  background: #eaf3f9;
+  box-shadow: inset 3px 0 #286697;
+}
+
+@media (min-width: 900px) and (max-width: 1200px) {
+  .app-container.tab-mcp_lab .mcp-lab-panel.mcp-lab-redesign .mcp-lab-frame {
+    grid-template-columns: 154px minmax(0, 1fr) 255px;
+  }
+
+  .app-container.tab-mcp_lab .mcp-lab-panel.mcp-lab-redesign .mcp-lab-frame.is-inspector-closed {
+    grid-template-columns: 154px minmax(0, 1fr);
+  }
+
+  .app-container.tab-mcp_lab .mcp-lab-panel.mcp-lab-redesign .mcp-lab-inspector {
+    position: static;
+    width: auto;
+    inset: auto;
+    z-index: auto;
+  }
+}

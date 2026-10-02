@@ -772,7 +772,7 @@ function CityBrief({ currentWeather, weatherVisual, visibleAnnouncements, events
     );
 }
 
-function LogPage({ rows, totalRows, canLoadMore, onLoadMore, categories, category, setCategory, selectedResident, setSelectedResident, residents, apiUrl, tx, isEn, currentWeather, weatherVisual, visibleAnnouncements, events, onRefresh, loading, retryQuestReview, rerollCityLog, retryingQuestReviewId, rerollingLogId, activityCount }) {
+function LogPage({ rows, totalRows, canLoadMore, onLoadMore, categories, category, setCategory, selectedResident, setSelectedResident, searchValue, clearSearch, residents, apiUrl, tx, isEn, currentWeather, weatherVisual, visibleAnnouncements, events, onRefresh, loading, retryQuestReview, rerollCityLog, retryingQuestReviewId, rerollingLogId, activityCount }) {
     const [expandedRow, setExpandedRow] = useState(null);
     const [expandedHiddenLogs, setExpandedHiddenLogs] = useState({});
     const todayTag = formatDateTag(Date.now());
@@ -808,7 +808,12 @@ function LogPage({ rows, totalRows, canLoadMore, onLoadMore, categories, categor
                                 <div className="empty-state">
                                     <Archive />
                                     <strong>{tx('No records found', '没有找到记录')}</strong>
-                                    <span>{tx('Try another resident or category.', '换个居民或分类试试。')}</span>
+                                    <span>{selectedResident !== 'all' || category !== 'all' || searchValue ? tx('Try clearing the current filters.', '可以清除筛选条件再试。') : tx('New city activity will appear here.', '新的城市动态会显示在这里。')}</span>
+                                    {selectedResident !== 'all' || category !== 'all' || searchValue ? (
+                                        <button type="button" onClick={() => { setSelectedResident('all'); setCategory('all'); clearSearch(); }}>
+                                            {tx('Clear filters', '清除筛选')}
+                                        </button>
+                                    ) : null}
                                 </div>
                             ) : (
                                 <>
@@ -1267,6 +1272,8 @@ export default function CityLog({ apiUrl }) {
                         setCategory={setCategory}
                         selectedResident={selectedResident}
                         setSelectedResident={setSelectedResident}
+                        searchValue={globalSearch}
+                        clearSearch={() => setGlobalSearch('')}
                         residents={residents}
                         apiUrl={apiUrl}
                         tx={tx}

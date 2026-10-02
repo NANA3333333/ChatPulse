@@ -2395,3 +2395,118 @@
     transform: none;
   }
 }
+
+/* Browsing homes needs more room than choosing the resident. */
+@media (min-width: 681px) {
+  #housing-core-loop-redesign .housing-play-screen {
+    padding: 18px clamp(16px, 2vw, 28px);
+  }
+
+  #housing-core-loop-redesign .housing-story-intro {
+    text-align: left;
+  }
+
+  #housing-core-loop-redesign .housing-story-intro p {
+    margin-left: 0;
+  }
+
+  #housing-core-loop-redesign .housing-story-casting {
+    grid-template-columns: minmax(220px, 0.7fr) 24px minmax(0, 1.3fr);
+    margin-top: 14px;
+  }
+
+  #housing-core-loop-redesign .housing-launch-action {
+    justify-content: flex-end;
+  }
+}
+
+/* Listing-first composition inspired by real property search results. */
+#housing-core-loop-redesign.housing-panel {
+  --h-blue: #e3edf7;
+  --h-blue-soft: #f2f6fa;
+  --h-pink: #e8eef4;
+  --h-pink-soft: #f6f8fa;
+  --h-card: #ffffff;
+  --h-card-strong: #ffffff;
+  --h-muted: #637386;
+  --h-ink: #1c2a39;
+  --h-border: #d9e1e9;
+  --h-shadow: 0 2px 8px rgba(24, 43, 64, 0.05);
+}
+
+#housing-core-loop-redesign .housing-play-shell {
+  background: #f4f7fa;
+}
+
+#housing-core-loop-redesign .housing-play-header {
+  background: #ffffff;
+}
+
+#housing-core-loop-redesign .housing-play-tabs button.is-active,
+#housing-core-loop-redesign .btn-primary {
+  border-color: #1c67ac;
+  background: #1c67ac;
+  color: #ffffff;
+  box-shadow: none;
+}
+
+#housing-core-loop-redesign .housing-play-tabs button.is-active svg,
+#housing-core-loop-redesign .btn-primary svg {
+  color: inherit;
+}
+
+#housing-core-loop-redesign .housing-story-intro h2 {
+  font-size: clamp(23px, 2.1vw, 29px);
+}
+
+#housing-core-loop-redesign .housing-story-intro p {
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+#housing-core-loop-redesign .housing-choice.is-selected {
+  background: #edf5fd;
+  box-shadow: inset 3px 0 #1c67ac;
+}
+
+@media (min-width: 681px) {
+  #housing-core-loop-redesign .housing-story-casting {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  #housing-core-loop-redesign .housing-casting-arrow {
+    display: none;
+  }
+
+  #housing-core-loop-redesign .housing-casting-column {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: start;
+    gap: 7px 12px;
+    padding: 9px 14px;
+  }
+
+  #housing-core-loop-redesign .housing-casting-title,
+  #housing-core-loop-redesign .housing-empty-card {
+    grid-column: 1 / -1;
+  }
+
+  #housing-core-loop-redesign .housing-casting-column .housing-choice {
+    min-height: 52px;
+    padding: 6px 9px;
+    border: 1px solid var(--h-border);
+    border-radius: 5px;
+    background: #ffffff;
+  }
+
+  #housing-core-loop-redesign .housing-casting-column .housing-choice.is-selected {
+    border-color: #83b1da;
+    background: #edf5fd;
+  }
+
+  #housing-core-loop-redesign .housing-launch-action {
+    margin-top: 8px;
+  }
+}
