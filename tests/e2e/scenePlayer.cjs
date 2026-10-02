@@ -66,17 +66,34 @@ async function verifyScenePlayer(page, baseUrl, token, name, { labsEnabled }) {
     // Control the role while approaching the stationary player, so this input test
     // does not depend on catching an independently wandering actor.
     await selector.selectOption(choices[0]);
+    const moreControls = toolbar.locator('.scene-player-toolbar__more > summary');
+    await moreControls.click();
     await toolbar.getByRole('combobox', { name: '选择场景角色', exact: true }).selectOption('e2e-character');
     const bind = toolbar.getByRole('button', { name: '绑定', exact: true });
     if (await bind.count()) await bind.click();
+    await moreControls.click();
     // Walk toward the other visible actor using the rendered positions, then
     // exercise the local greeting branch without contacting an AI provider.
-    const stage = await approachScenePeer(page, scene, name);
-    // Floating buttons follow moving actors. Keyboard activation targets the actual
-    // button without a coordinate race between Playwright's pointer down and up.
-    await stage.locator('.pixel-world-interaction-entry').press('Enter');
+    let stage;
+    let dialogOpened = false;
+    let lastInteractionError;
+    // The other actor can walk away between entering interaction range and pressing
+    // the floating button. Re-approach if that happens during the test.
+    for (let attempt = 0; attempt < 3 && !dialogOpened; attempt++) {
+        stage = await approachScenePeer(page, scene, name);
+        try {
+            await stage.locator('.pixel-world-interaction-entry').press('Enter', { timeout: 2000 });
+            const action = stage.locator('.pixel-world-interaction-menu-primary button').first();
+            await action.waitFor({ timeout: 2500 });
+            await action.press('Enter', { timeout: 2000 });
+            await stage.locator('.pixel-world-behavior-dialog').first().waitFor({ timeout: 8000 });
+            dialogOpened = true;
+        } catch (error) {
+            lastInteractionError = error;
+        }
+    }
     try {
-        await stage.locator('.pixel-world-interaction-menu-primary button').first().waitFor({ timeout: 5000 });
+        if (!dialogOpened) throw lastInteractionError || new Error('Scene interaction dialog did not open');
     } catch (error) {
         console.error('Scene interaction diagnostic:', await scene.evaluate(node => ({
             controls: [...node.querySelectorAll('select')].map(select => ({ name: select.getAttribute('aria-label'), value: select.value })),
@@ -87,8 +104,6 @@ async function verifyScenePlayer(page, baseUrl, token, name, { labsEnabled }) {
         })));
         throw error;
     }
-    await stage.locator('.pixel-world-interaction-menu-primary button').first().press('Enter');
-    await stage.locator('.pixel-world-behavior-dialog').first().waitFor({ timeout: 12000 });
     for (let step = 0; step < 8; step++) {
         // A wait/turn step can leave the dialog absent briefly before showing choices.
         const next = stage.getByRole('button', { name: '下一句', exact: true });
@@ -135,11 +150,13 @@ async function verifyScenePlayer(page, baseUrl, token, name, { labsEnabled }) {
             body: JSON.stringify({ error: 'E2E generation unavailable' }),
         });
     });
+    await moreControls.click();
     await toolbar.getByRole('button', { name: '生成行为树', exact: true }).click();
     await toolbar.getByRole('alert').filter({ hasText: 'E2E generation unavailable' }).waitFor();
     assert.equal(generationRequests, 1);
     assert.equal(await toolbar.getByRole('button', { name: '生成行为树', exact: true }).isEnabled(), true);
     await page.unroute(endpoint);
+    await moreControls.click();
     console.log(
         `PASS scene player: ${name} controls, movement, locked assets, greeting, dialog failure/retry and generation failure${labsEnabled ? '' : '; frontend/backend tools disabled'}`,
     );

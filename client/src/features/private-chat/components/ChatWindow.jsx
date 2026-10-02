@@ -160,6 +160,7 @@ function ChatWindow({
 }) {
     const { t, lang } = useLanguage();
     const [messages, setMessages] = useState([]);
+    const [loadedCharacterId, setLoadedCharacterId] = useState('');
     const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
     const [isRecommendModalOpen, setIsRecommendModalOpen] = useState(false);
     const [hasMore, setHasMore] = useState(false);
@@ -312,6 +313,7 @@ function ChatWindow({
             .then(data => {
                 if (contactRef.current?.id !== characterId) return;
                 setMessages(normalizeMessages(data));
+                setLoadedCharacterId(characterId);
                 setIsSearchContextWindow(false);
                 setHasNewer(false);
                 // If we got a full page, there are probably more older messages
@@ -744,6 +746,12 @@ function ChatWindow({
             )}
 
             <div className="chat-history" onScroll={handleConversationScroll}>
+                {!displayMessages.length && !hasMore && !hasNewer && !jumpMessageId && loadedCharacterId === contact?.id && (
+                    <div className="private-chat-empty-conversation">
+                        <strong>{lang === 'en' ? `Start a conversation with ${contact.name}` : `和${contact.name}开始聊天`}</strong>
+                        <p>{lang === 'en' ? 'Write a message below to begin.' : '在下方输入消息，开启你们的对话。'}</p>
+                    </div>
+                )}
                 {hasMore && (
                     <div style={{ textAlign: 'center', padding: '10px' }}>
                         <button
