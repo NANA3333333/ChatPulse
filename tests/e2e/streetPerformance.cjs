@@ -56,7 +56,6 @@ async function measureWalk(page, key) {
 
 async function verifyStreetPerformance(page) {
     const scene = page.locator('.right-column .pixel-world-editor');
-    await scene.locator('.scene-player-toolbar__more > summary').click();
     const toggle = scene.getByRole('button', { name: '视差实验', exact: true });
     await scene.locator('.active-loop .pixel-world-player.controlled').first().waitFor();
     await page.waitForFunction(() => [...document.querySelectorAll('.right-column .pixel-world-editor-canvas-wrap img')].every((img) => img.complete));

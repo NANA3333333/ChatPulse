@@ -103,20 +103,20 @@ const getDefaultBrowserWindowGeometry = (sequence = 0) => {
   const taskbarHeight = DESKTOP_TASKBAR_HEIGHT;
   const stackIndex = Math.max(0, sequence - 1);
   const width = Math.min(
-    Math.max(420, viewportWidth - 40),
-    1360,
-    Math.max(900, Math.round(viewportWidth * 0.86))
+    Math.max(420, viewportWidth - 48),
+    1280,
+    Math.max(900, Math.round(viewportWidth * 0.72))
   );
   const height = Math.min(
     Math.max(320, viewportHeight - taskbarHeight - 24),
-    900,
-    Math.max(560, viewportHeight - taskbarHeight - 58)
+    780,
+    Math.max(560, viewportHeight - taskbarHeight - 118)
   );
   const maxX = Math.max(18, viewportWidth - width - 22);
   const maxY = Math.max(18, viewportHeight - height - taskbarHeight - 18);
   return {
     x: Math.min(maxX, Math.max(18, Math.round((viewportWidth - width) / 2) + (stackIndex % 4) * 32)),
-    y: Math.min(maxY, 26 + (stackIndex % 3) * 24),
+    y: Math.min(maxY, 54 + (stackIndex % 3) * 28),
     width,
     height,
   };

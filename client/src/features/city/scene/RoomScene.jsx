@@ -202,17 +202,6 @@ function RoomScene({ editorTools = null, scene, apiUrl = '/api', userProfile = n
         }),
         [playerScale],
     );
-    useEffect(() => {
-        if (editorEnabled) return;
-        const wrap = canvasWrapRef.current;
-        const player = players[controlledPlayerId];
-        if (!wrap || !player) return;
-        const playerCenterY = (player.y - (playerDimensions.height - playerDimensions.footOffset) / 2) * zoom;
-        wrap.scrollTop = Math.max(0, Math.min(
-            wrap.scrollHeight - wrap.clientHeight,
-            playerCenterY - wrap.clientHeight / 2,
-        ));
-    }, [controlledPlayerId, editorEnabled, playerDimensions, players, zoom]);
     const getPlayerVisualDimensions = useCallback(
         (targetPlayer) => {
             const character = getCommercialV2PlayerCharacter(targetPlayer);

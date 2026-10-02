@@ -789,32 +789,6 @@ body {
   background-size: 24px 24px;
 }
 
-.private-chat-empty-conversation {
-  width: min(320px, 100%);
-  box-sizing: border-box;
-  margin: clamp(48px, 11vh, 110px) auto 0;
-  padding: 22px 24px;
-  border: 1px solid rgba(103, 84, 100, 0.12);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.72);
-  color: var(--private-chat-ink-strong, #27364d);
-  text-align: center;
-  box-shadow: 0 12px 28px rgba(86, 60, 66, 0.05);
-}
-
-.private-chat-empty-conversation strong {
-  display: block;
-  font-size: 17px;
-  line-height: 1.45;
-}
-
-.private-chat-empty-conversation p {
-  margin: 8px 0 0;
-  color: var(--private-chat-ink-soft, #596579);
-  font-size: 14px;
-  line-height: 1.5;
-}
-
 .conversation-search-panel {
   flex: 0 0 auto;
   position: relative;
@@ -1325,46 +1299,46 @@ body {
 
 @media (min-width: 900px) {
   .app-container.has-chat-skin {
-    --private-chat-pink: #c4366b;
+    --private-chat-pink: #ff4f82;
     --private-chat-pink-soft: rgba(255, 111, 151, 0.28);
     --private-chat-panel: rgba(255, 252, 254, 0.94);
-    --private-chat-ink-strong: #27364d;
-    --private-chat-ink: #70415a;
-    --private-chat-ink-soft: #596579;
-    --private-chat-ink-cool: #2d638d;
-    --private-chat-ink-mint: #266e72;
+    --private-chat-ink-strong: #72B8F0;
+    --private-chat-ink: #F0A3C4;
+    --private-chat-ink-soft: #F4B6CF;
+    --private-chat-ink-cool: #72B8F0;
+    --private-chat-ink-mint: #9CCFF4;
     --private-chat-drawer-width: clamp(380px, 24vw, 430px);
     --chat-peer-drawer-width: var(--private-chat-drawer-width);
     --accent-color: var(--private-chat-pink);
     --text-primary: var(--private-chat-ink-strong);
     --text-secondary: var(--private-chat-ink-soft);
-    --text-muted: #657188;
+    --text-muted: #9CCFF4;
     --text-heading: var(--private-chat-ink-strong);
     --text-cool: var(--private-chat-ink-cool);
     --text-warm: var(--private-chat-ink);
-    --bubble-user-text: #27364d;
+    --bubble-user-text: #67ADE8;
     --bubble-ai-text: var(--private-chat-ink);
   }
 
   .app-container.has-private-chat {
-    --private-chat-pink: #c4366b;
+    --private-chat-pink: #ff4f82;
     --private-chat-pink-soft: rgba(255, 111, 151, 0.28);
     --private-chat-panel: rgba(255, 252, 254, 0.94);
     --private-foreground-lift: clamp(14px, calc(8.14vw - 61.5px), 116px);
-    --private-chat-ink-strong: #27364d;
-    --private-chat-ink: #70415a;
-    --private-chat-ink-soft: #596579;
-    --private-chat-ink-cool: #2d638d;
-    --private-chat-ink-mint: #266e72;
+    --private-chat-ink-strong: #72B8F0;
+    --private-chat-ink: #F0A3C4;
+    --private-chat-ink-soft: #F4B6CF;
+    --private-chat-ink-cool: #72B8F0;
+    --private-chat-ink-mint: #9CCFF4;
     --private-chat-drawer-width: clamp(380px, 24vw, 430px);
     --accent-color: var(--private-chat-pink);
     --text-primary: var(--private-chat-ink-strong);
     --text-secondary: var(--private-chat-ink-soft);
-    --text-muted: #657188;
+    --text-muted: #9CCFF4;
     --text-heading: var(--private-chat-ink-strong);
     --text-cool: var(--private-chat-ink-cool);
     --text-warm: var(--private-chat-ink);
-    --bubble-user-text: #27364d;
+    --bubble-user-text: #67ADE8;
     --bubble-ai-text: var(--private-chat-ink);
     position: relative;
     isolation: isolate;
@@ -7736,26 +7710,26 @@ body {
 /* Pearl companion private chat refresh */
 @media (min-width: 900px) {
   .app-container.has-private-chat {
-    --private-chat-pink: #c4366b;
+    --private-chat-pink: #ef5f83;
     --private-chat-pink-soft: rgba(239, 95, 131, 0.15);
     --private-chat-blue: #67ade8;
-    --private-chat-blue-strong: #2d638d;
+    --private-chat-blue-strong: #4d94da;
     --private-chat-blue-soft: rgba(103, 173, 232, 0.18);
     --private-chat-panel: rgba(255, 252, 249, 0.62);
-    --private-chat-ink-strong: #27364d;
-    --private-chat-ink: #70415a;
-    --private-chat-ink-soft: #596579;
+    --private-chat-ink-strong: var(--private-chat-blue-strong);
+    --private-chat-ink: #d45a78;
+    --private-chat-ink-soft: #88a9cf;
     --private-chat-ink-cool: var(--private-chat-blue-strong);
-    --private-chat-ink-mint: #266e72;
+    --private-chat-ink-mint: #93c2ee;
     --private-chat-drawer-width: clamp(380px, 24vw, 430px);
     --chat-peer-drawer-width: var(--private-chat-drawer-width);
     --accent-color: var(--private-chat-pink);
     --text-primary: var(--private-chat-ink-strong);
     --text-secondary: var(--private-chat-ink-soft);
     --text-heading: var(--private-chat-ink-strong);
-    --text-muted: #657188;
-    --bubble-user-text: var(--private-chat-ink-strong);
-    --bubble-ai-text: var(--private-chat-ink);
+    --text-muted: #9ab7d7;
+    --bubble-user-text: var(--private-chat-blue-strong);
+    --bubble-ai-text: #d45a78;
     gap: 0;
     padding: 0;
     background:
@@ -8591,10 +8565,6 @@ body {
     right: -8px;
     bottom: 50px;
     width: clamp(250px, 18vw, 350px);
-  }
-
-  .app-container.has-private-chat:not(.is-window-wide) .private-chat-scene-decor__right {
-    opacity: 0.2;
   }
 }
 
