@@ -1,5 +1,6 @@
 import { useLanguage } from '../../../shared/i18n/LanguageContext.jsx';
 import { useState, useCallback, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { getTtsProviderConfig } from '../ttsProviders.js';
 import { normalizeAvatarFrameId, AVATAR_FRAME_OPTIONS } from '../../../shared/media/avatarFrames.js';
 import AvatarWithFrame from '../../../shared/media/AvatarWithFrame.jsx';
@@ -18,6 +19,8 @@ import {
     Plus,
     Heart,
     MessageSquare,
+    PanelRightOpen,
+    X,
 } from 'lucide-react';
 import { LOCAL_OLLAMA_MODEL_PRESET, withLocalModelOption } from '../../characters/localModelPreset.js';
 import { ProfileSettings } from './ProfileSettings.jsx';
@@ -75,6 +78,16 @@ function SettingsPanel({
 
     const [characterMessageStatsById, setCharacterMessageStatsById] = useState({});
     const [saveError, setSaveError] = useState('');
+    const [contextOpen, setContextOpen] = useState(false);
+
+    useEffect(() => {
+        if (!contextOpen) return undefined;
+        const closeOnEscape = (event) => {
+            if (event.key === 'Escape') setContextOpen(false);
+        };
+        window.addEventListener('keydown', closeOnEscape);
+        return () => window.removeEventListener('keydown', closeOnEscape);
+    }, [contextOpen]);
 
     // Model list fetch state (main API + memory API)
 
@@ -696,6 +709,16 @@ function SettingsPanel({
                             <Save size={15} />
                             {lang === 'en' ? 'Save' : '保存'}
                         </button>
+                        <button
+                            type="button"
+                            className="settings-context-trigger"
+                            aria-expanded={contextOpen}
+                            aria-controls="settings-preview-drawer"
+                            onClick={() => setContextOpen(true)}
+                        >
+                            <PanelRightOpen size={15} />
+                            {lang === 'en' ? 'Preview & diagnostics' : '预览与诊断'}
+                        </button>
                     </div>
                 </header>
 
@@ -1046,24 +1069,50 @@ function SettingsPanel({
                         />
                     </main>
 
-                    <SettingsContext
-                        activePreviewContact={activePreviewContact}
-                        lang={lang}
-                        apiUrl={apiUrl}
-                        activeReadiness={activeReadiness}
-                        activePreviewDescription={activePreviewDescription}
-                        activePreviewTtsProviderLabel={activePreviewTtsProviderLabel}
-                        controlHasContextLimitChange={controlHasContextLimitChange}
-                        controlHasModelChange={controlHasModelChange}
-                        controlHasVoiceChange={controlHasVoiceChange}
-                        loadServiceDiagnostics={loadServiceDiagnostics}
-                        serviceDiagnosticsLoading={serviceDiagnosticsLoading}
-                        serviceDiagnosticsError={serviceDiagnosticsError}
-                        serviceDiagnostics={serviceDiagnostics}
-                        setActiveSettingsScreen={setActiveSettingsScreen}
-                        openCharacterEditor={openCharacterEditor}
-                    />
                 </div>
+                {contextOpen &&
+                    createPortal(
+                    <div className="settings-context-overlay">
+                        <button
+                            type="button"
+                            className="settings-context-backdrop"
+                            aria-label={lang === 'en' ? 'Close preview' : '关闭预览'}
+                            onClick={() => setContextOpen(false)}
+                        />
+                        <div className="settings-context-drawer" id="settings-preview-drawer" role="dialog" aria-modal="true" aria-label={lang === 'en' ? 'Preview and diagnostics' : '预览与诊断'}>
+                            <div className="settings-context-drawer-head">
+                                <strong>{lang === 'en' ? 'Preview & diagnostics' : '预览与诊断'}</strong>
+                                <button type="button" onClick={() => setContextOpen(false)} aria-label={lang === 'en' ? 'Close preview' : '关闭预览'}>
+                                    <X size={17} />
+                                </button>
+                            </div>
+                            <SettingsContext
+                                activePreviewContact={activePreviewContact}
+                                lang={lang}
+                                apiUrl={apiUrl}
+                                activeReadiness={activeReadiness}
+                                activePreviewDescription={activePreviewDescription}
+                                activePreviewTtsProviderLabel={activePreviewTtsProviderLabel}
+                                controlHasContextLimitChange={controlHasContextLimitChange}
+                                controlHasModelChange={controlHasModelChange}
+                                controlHasVoiceChange={controlHasVoiceChange}
+                                loadServiceDiagnostics={loadServiceDiagnostics}
+                                serviceDiagnosticsLoading={serviceDiagnosticsLoading}
+                                serviceDiagnosticsError={serviceDiagnosticsError}
+                                serviceDiagnostics={serviceDiagnostics}
+                                setActiveSettingsScreen={(screen) => {
+                                    setActiveSettingsScreen(screen);
+                                    setContextOpen(false);
+                                }}
+                                openCharacterEditor={(...args) => {
+                                    openCharacterEditor(...args);
+                                    setContextOpen(false);
+                                }}
+                            />
+                        </div>
+                    </div>,
+                    document.body,
+                )}
             </div>
 
             {wipeModalOpen && (

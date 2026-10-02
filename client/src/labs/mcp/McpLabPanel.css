@@ -1246,3 +1246,67 @@
     z-index: auto;
   }
 }
+
+/* Console layout: execution above, task trail and context in a bottom panel. */
+@media (min-width: 900px) {
+  .app-container.tab-mcp_lab .mcp-lab-panel.mcp-lab-redesign .mcp-lab-frame {
+    grid-template-columns: 154px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(155px, 29%);
+  }
+
+  .app-container.tab-mcp_lab .mcp-lab-panel.mcp-lab-redesign .mcp-lab-frame.is-inspector-closed {
+    grid-template-columns: 154px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .mcp-lab-redesign .mcp-lab-rail {
+    grid-column: 1;
+    grid-row: 1 / -1;
+  }
+
+  .mcp-lab-redesign .mcp-lab-workspace {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .app-container.tab-mcp_lab .mcp-lab-panel.mcp-lab-redesign .mcp-lab-inspector {
+    position: static;
+    inset: auto;
+    width: auto;
+    grid-column: 2;
+    grid-row: 2;
+    grid-template-columns: 152px minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .mcp-lab-redesign .mcp-lab-inspector-head {
+    grid-column: 1 / -1;
+    padding: 8px 12px;
+  }
+
+  .mcp-lab-redesign .mcp-lab-inspector-tabs {
+    grid-column: 1;
+    grid-row: 2;
+    grid-template-columns: 1fr;
+    align-content: start;
+    gap: 5px;
+    margin: 0;
+    padding: 8px;
+    border-right: 1px solid var(--mcp-lab-line);
+  }
+
+  .mcp-lab-redesign .mcp-lab-inspector-scroll,
+  .mcp-lab-redesign .mcp-lab-inspector > :last-child:not(.mcp-lab-inspector-tabs) {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .mcp-lab-redesign .mcp-lab-inspector-scroll {
+    grid-template-columns: minmax(180px, 1fr) minmax(0, 1.6fr);
+    align-content: start;
+  }
+
+  .mcp-lab-redesign .mcp-lab-provider-list.is-inspector {
+    grid-column: 1 / -1;
+  }
+}

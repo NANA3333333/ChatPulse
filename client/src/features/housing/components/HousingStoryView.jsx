@@ -3,7 +3,6 @@ import {
     UserRound,
     Check,
     Circle,
-    HeartHandshake,
     Building2,
     RotateCw,
     Play,
@@ -60,8 +59,8 @@ export function HousingStoryView({
                     </p>
                 </div>
 
-                <div className="housing-story-casting">
-                    <div className="housing-casting-column">
+                <div className="housing-market-layout">
+                    <aside className="housing-casting-column housing-market-sidebar">
                         <div className="housing-casting-title">
                             <span>{isEn ? 'Choose Role' : '选择角色'}</span>
                             <small>
@@ -95,11 +94,30 @@ export function HousingStoryView({
                         {recommendableCharacters.length === 0 ? (
                             <div className="housing-empty-card">{text.noHomelessCharacters}</div>
                         ) : null}
-                    </div>
-                    <div className="housing-casting-arrow">
-                        <HeartHandshake size={26} />
-                    </div>
-                    <div className="housing-casting-column">
+                        <div className="housing-launch-action">
+                            <div>
+                                <span>{isEn ? 'This story' : '本次故事'}</span>
+                                <strong>{pairLabel}</strong>
+                            </div>
+                            <button
+                                type="button"
+                                className="btn btn-primary"
+                                disabled={housingChainBusy || !selectedRecommendationCharacter || !selectedRecommendationHome}
+                                onClick={() => recommendHomeToCharacter().catch((error) => alert(error.message))}
+                            >
+                                {housingChainBusy ? <RotateCw size={16} className="is-spinning" /> : <Play size={16} />}
+                                {housingChainBusy ? text.chainRunning : isEn ? 'Start Rental Story' : '开始租房故事'}
+                            </button>
+                        </div>
+                        {housingChainNotice ? (
+                            <div
+                                className={`housing-chain-notice ${housingChainNotice.startsWith(text.chainFailed) ? 'is-error' : ''}`}
+                            >
+                                {housingChainNotice}
+                            </div>
+                        ) : null}
+                    </aside>
+                    <div className="housing-casting-column housing-market-results">
                         <div className="housing-casting-title">
                             <span>{isEn ? 'Choose Listing' : '选择房源'}</span>
                             <small>
@@ -138,29 +156,6 @@ export function HousingStoryView({
                         ) : null}
                     </div>
                 </div>
-
-                <div className="housing-launch-action">
-                    <div>
-                        <span>{isEn ? 'This story' : '本次故事'}</span>
-                        <strong>{pairLabel}</strong>
-                    </div>
-                    <button
-                        type="button"
-                        className="btn btn-primary"
-                        disabled={housingChainBusy || !selectedRecommendationCharacter || !selectedRecommendationHome}
-                        onClick={() => recommendHomeToCharacter().catch((error) => alert(error.message))}
-                    >
-                        {housingChainBusy ? <RotateCw size={16} className="is-spinning" /> : <Play size={16} />}
-                        {housingChainBusy ? text.chainRunning : isEn ? 'Start Rental Story' : '开始租房故事'}
-                    </button>
-                </div>
-                {housingChainNotice ? (
-                    <div
-                        className={`housing-chain-notice ${housingChainNotice.startsWith(text.chainFailed) ? 'is-error' : ''}`}
-                    >
-                        {housingChainNotice}
-                    </div>
-                ) : null}
             </section>
 
             <section

@@ -2510,3 +2510,124 @@
     margin-top: 8px;
   }
 }
+
+/* Property search: a persistent renter brief beside a scannable results list. */
+#housing-core-loop-redesign .housing-story-launcher {
+  max-width: 1320px;
+}
+
+#housing-core-loop-redesign .housing-story-intro {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--h-border);
+}
+
+#housing-core-loop-redesign .housing-market-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  align-items: start;
+  gap: 18px;
+  margin-top: 16px;
+}
+
+#housing-core-loop-redesign .housing-market-sidebar {
+  position: sticky;
+  top: 12px;
+  display: block;
+  padding: 15px;
+  background: #eef3f7;
+}
+
+#housing-core-loop-redesign .housing-market-sidebar .housing-choice {
+  min-height: 60px;
+  padding: 9px 6px;
+  border-radius: 0;
+  border-bottom: 1px solid var(--h-border);
+}
+
+#housing-core-loop-redesign .housing-market-sidebar .housing-choice.is-selected {
+  border: 1px solid #8fb8da;
+  border-radius: 5px;
+  background: #ffffff;
+}
+
+#housing-core-loop-redesign .housing-market-sidebar .housing-launch-action {
+  display: grid;
+  justify-content: stretch;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--h-border);
+}
+
+#housing-core-loop-redesign .housing-market-sidebar .housing-launch-action > div {
+  text-align: left;
+}
+
+#housing-core-loop-redesign .housing-market-sidebar .housing-launch-action button {
+  width: 100%;
+  justify-content: center;
+}
+
+#housing-core-loop-redesign .housing-market-sidebar .housing-chain-notice {
+  margin-top: 10px;
+}
+
+#housing-core-loop-redesign .housing-market-results {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  padding: 0 16px;
+}
+
+#housing-core-loop-redesign .housing-market-results .housing-casting-title,
+#housing-core-loop-redesign .housing-market-results .housing-empty-card {
+  grid-column: auto;
+}
+
+#housing-core-loop-redesign .housing-market-results .housing-casting-title {
+  padding: 14px 0 10px;
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--h-border);
+}
+
+#housing-core-loop-redesign .housing-market-results .housing-choice {
+  min-height: 76px;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 6px;
+  border: 0;
+  border-bottom: 1px solid var(--h-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+#housing-core-loop-redesign .housing-market-results .housing-choice:hover {
+  background: #f5f9fc;
+}
+
+#housing-core-loop-redesign .housing-market-results .housing-choice.is-selected {
+  border-color: #84b3d9;
+  background: #edf5fd;
+  box-shadow: inset 4px 0 #1c67ac;
+}
+
+#housing-core-loop-redesign .housing-market-results .housing-choice-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 4px;
+}
+
+#housing-core-loop-redesign .housing-market-results .housing-choice strong {
+  font-size: 15px;
+}
+
+@media (max-width: 760px) {
+  #housing-core-loop-redesign .housing-market-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #housing-core-loop-redesign .housing-market-sidebar {
+    position: static;
+  }
+}
