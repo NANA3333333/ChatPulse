@@ -5,7 +5,6 @@ import { useBehaviorSession } from './behavior/useBehaviorSession.js';
 import { createStreetNavigation } from './movement/createStreetNavigation.js';
 import { useBehaviorTreeSync } from './useBehaviorTreeSync.js';
 import { ScenePlayerToolbar } from './components/ScenePlayerToolbar.jsx';
-import { useSceneFitZoom } from './useSceneFitZoom.js';
 
 import { useLanguage } from '../../../shared/i18n/LanguageContext.jsx';
 import { useCallback, useRef, useState, useMemo, useEffect } from 'react';
@@ -138,7 +137,7 @@ function CommercialStreetScene({ editorTools = null, apiUrl = '/api', userProfil
     const segmentCountRef = useRef(initialLayout.segmentCount);
     const [resetBackup, setResetBackup] = useState(() => readStoredCommercialResetBackup());
     const [selectedId, setSelectedId] = useState('');
-    const [zoom, setZoom] = useState(Math.min(commercialV2DefaultZoom, 0.5));
+    const [zoom, setZoom] = useState(commercialV2DefaultZoom);
     const [parallaxEnabled, setParallaxEnabled] = useState(true);
     const [visibleLoopCopies, setVisibleLoopCopies] = useState({ before: true, after: true });
     const visibleLoopCopiesRef = useRef({ before: true, after: true });
@@ -213,7 +212,6 @@ function CommercialStreetScene({ editorTools = null, apiUrl = '/api', userProfil
         `版本 ${behaviorTreeState.version} · patch ${behaviorTreeState.patch_history?.length || 0} · AI 日常 ${mountedGeneratedBehavior.base_count} · 互动 ${mountedGeneratedBehavior.interaction_count}`,
     );
     const stageSize = useMemo(() => getCommercialV2StageSize(segmentCount, items), [items, segmentCount]);
-    useSceneFitZoom(canvasWrapRef, stageSize.height, Math.min(commercialV2DefaultZoom, 0.5), setZoom);
     const assetById = useMemo(() => new Map(commercialV2AssetCatalog.map((asset) => [asset.id, asset])), []);
     const walkableRects = useMemo(
         () =>

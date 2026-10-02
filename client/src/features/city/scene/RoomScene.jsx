@@ -5,7 +5,6 @@ import { useBehaviorSession } from './behavior/useBehaviorSession.js';
 import { createRoomNavigation } from './movement/createRoomNavigation.js';
 import { useBehaviorTreeSync } from './useBehaviorTreeSync.js';
 import { ScenePlayerToolbar } from './components/ScenePlayerToolbar.jsx';
-import { useSceneFitZoom } from './useSceneFitZoom.js';
 
 import { useLanguage } from '../../../shared/i18n/LanguageContext.jsx';
 import { useCallback, useRef, useState, useMemo, useEffect } from 'react';
@@ -125,7 +124,7 @@ function RoomScene({ editorTools = null, scene, apiUrl = '/api', userProfile = n
 
     const [resetBackup, setResetBackup] = useState(() => readStoredRoomEditorResetBackup());
     const [selectedId, setSelectedId] = useState(initialLayout.selectedId || '');
-    const [zoom, setZoom] = useState(Math.min(roomEditorDefaultZoom, 0.39));
+    const [zoom, setZoom] = useState(roomEditorDefaultZoom);
     const [viewMode, setViewMode] = useState(true);
     const [groupEditMode, setGroupEditMode] = useState(false);
     const [showCollisionLines, setShowCollisionLines] = useState(false);
@@ -184,7 +183,6 @@ function RoomScene({ editorTools = null, scene, apiUrl = '/api', userProfile = n
     );
     const [notice, setNotice] = useState('房间画布已接入小人和行为树面板；WASD/方向键可以移动当前小人。');
     const stageSize = roomEditorStageSize;
-    useSceneFitZoom(canvasWrapRef, stageSize.height, Math.min(roomEditorDefaultZoom, 0.39), setZoom);
     const assetById = useMemo(() => new Map(roomEditorAssetCatalog.map((asset) => [asset.id, asset])), []);
     const rolePlayer =
         players[commercialV2RoleActorId] ||
